@@ -1,0 +1,9 @@
+project:
+  name: stock-manager
+  description: ''
+  type: ''
+  locale: '{{LOCALE}}'
+  created_at: '2026-01-21T22:04:56.140882Z'
+  initialized: 'true'
+github:
+  profile_name: ''

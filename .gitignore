@@ -1,0 +1,135 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.idea/
+.vscode/
+.DS_Store
+.dist/
+build/
+*.egg-info/
+
+ehthumbs.db
+*.swp
+.mypy_cache/
+env/
+.uv_cache/
+htmlcov/
+*.temp
+.LSOverride
+*.sw?
+*.pem
+.moai-backups/
+.claude/skills/*/*/*secret*
+out/
+# IDE & Editors
+*.pyd
+.aws/config
+*.swo
+dist/
+*.sqlite3
+*.egg
+# Windows
+*.tmp
+*-api-key.*
+secret-*.*
+# Virtual Environments
+.turbo/
+.netlify/
+.vercel/
+# ============================================
+*.tsbuildinfo
+*.sublime-project
+.claude/skills/*/secrets/
+.claude/skills/*/*/*token*
+*.log
+logs/
+.env.*
+# Purpose: Essential patterns for user projects
+# Private keys (specific patterns to avoid false positives)
+*.backup/
+# Mac
+*.bak
+*.db
+.claude/settings.local.json
+# ===========================================
+# FIXED: Issue #237 - Replaced overly broad *key* and *secret* patterns
+.firebase/
+# Logs & Temporary Files
+[Dd]esktop.ini
+.VolumeIcon.icns
+# Cloud provider credentials
+# Environment files
+# Skill-specific credentials
+*_key.*
+Thumbs.db
+# Updated: 2026-01-10
+.fseventsd
+*.backup
+*-secret-key.*
+.claude/skills/*/.env*
+.directory
+.nuxt/
+.coverage
+*.dbm
+coverage.json
+.aws/credentials
+# Version: 0.33.0
+.claude/skills/*/*/*key*
+*.secret.*
+*.sln
+*.njsproj
+.AppleDouble
+*.suo
+.Spotlight-V100
+*.sublime-workspace
+# Claude Code Configuration
+# Python Cache & Bytecode
+*-backup/
+.claude/local/
+# Deployment & CI/CD
+# Build Artifacts & Distribution
+.cursor/
+*_backup_*/
+*.rdb
+# Backups
+.pytest_cache/
+.uv-cache/
+# OS Files
+.claude/settings.local.*.json
+.tscache/
+*.sqlite
+*_secret.*
+*-key.*
+venv/
+# Test Coverage
+# Build Tools & Frameworks
+.env/
+.ruff_cache/
+.#*
+# Linux
+private-key*
+# Secrets and Credentials (CRITICAL)
+api-key-*
+*-secret.*
+*.jks
+# MoAI-ADK Package Distribution .gitignore
+*.pyo
+!.env.example
+*~
+*.key.*
+.claude/.env.local*
+.DocumentRevisions-V100
+.TemporaryItems
+node_modules/
+*_secret=*
+.next/
+.Trashes
+# Credential patterns in environment files
+secret-key-*
+# Certificate files
+*_token=*
+# Node.js (for docs/Nextra)
+dist-ssr/
+*.p12
+*.pfx
