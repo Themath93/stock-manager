@@ -10,7 +10,7 @@ from typing import Callable, Optional
 
 import websocket
 
-from ...port.broker_port import ConnectionError, FillEvent, OrderSide, QuoteEvent
+from ..port.broker_port import ConnectionError, FillEvent, OrderSide, QuoteEvent
 from .kis_config import KISConfig
 
 logger = logging.getLogger(__name__)
@@ -181,10 +181,12 @@ class KISWebSocketClient:
             logger.error(f"Max reconnection attempts ({self._max_retries}) reached")
             raise ConnectionError("Failed to reconnect after maximum attempts")
 
-        delay = self._base_delay * (2 ** self._reconnect_attempts)
+        delay = self._base_delay * (2**self._reconnect_attempts)
         self._reconnect_attempts += 1
 
-        logger.info(f"Reconnecting in {delay}s (attempt {self._reconnect_attempts}/{self._max_retries})...")
+        logger.info(
+            f"Reconnecting in {delay}s (attempt {self._reconnect_attempts}/{self._max_retries})..."
+        )
         time.sleep(delay)
 
         try:

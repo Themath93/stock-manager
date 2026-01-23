@@ -10,13 +10,13 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from ...domain.order import (
+from ..domain.order import (
     Order,
     Fill,
     OrderRequest,
     OrderStatus,
 )
-from ...adapters.broker.port import (
+from ..adapters.broker.port import (
     BrokerPort,
     FillEvent as BrokerFillEvent,
     OrderSide,
@@ -530,7 +530,7 @@ class OrderService:
     def _to_broker_order_request(self, order: Order):
         """Order를 BrokerPort.OrderRequest로 변환"""
         # BrokerPort에서 OrderSide/OrderType import
-        from ...adapters.broker.port import OrderSide, OrderType
+        from ..adapters.broker.port import OrderSide, OrderType
 
         return OrderRequest(
             account_id="0000000000",  # TODO: 실제 계좌 ID

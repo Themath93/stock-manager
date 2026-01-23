@@ -6,7 +6,7 @@ Port/Adapter 패턴의 구현체로 BrokerPort 인터페이스를 구현합니�
 import logging
 from typing import Callable, List
 
-from ...port.broker_port import (
+from ..port.broker_port import (
     APIError,
     AuthenticationToken,
     BrokerPort,

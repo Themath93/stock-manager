@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Callable, List
 
-from ...port.broker_port import (
+from ..port.broker_port import (
     APIError,
     AuthenticationToken,
     BrokerPort,

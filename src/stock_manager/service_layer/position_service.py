@@ -9,7 +9,7 @@ from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime
 
-from ...domain.order import Fill, Position
+from ..domain.order import Fill, Position
 
 logger = logging.getLogger(__name__)
 
