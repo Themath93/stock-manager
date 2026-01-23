@@ -123,6 +123,12 @@
 - `entrypoints/` : CLI/worker/scheduler
 - `utils/` : 공통 유틸리티(로그, 시간, 검증)
 
+### 6.3 알림(Slack) 유틸 규칙
+
+- Slack 알림 구현 기준은 `ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md`를 따른다.
+- 채널은 **ID만 사용**하며 채널명 조회/변환은 금지한다.
+- Slack 호출 실패는 예외 대신 결과 타입으로 반환하여 거래 흐름을 중단하지 않는다.
+
 ---
 
 ## 7. 데이터 모델 (PostgreSQL)

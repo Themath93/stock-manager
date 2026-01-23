@@ -9,9 +9,11 @@ import pytest
 import httpx
 
 from src.stock_manager.adapters.broker.kis import KISConfig, KISRestClient, Mode
+from src.stock_manager.adapters.broker.kis.kis_rest_client import TokenManager
 from src.stock_manager.adapters.broker.port import (
     APIError,
     AuthenticationError,
+    AuthenticationToken,
     OrderRequest,
     OrderSide,
     OrderType,
@@ -28,10 +30,12 @@ class TestTokenManager:
             kis_app_secret="test_secret",
         )
         client = Mock(spec=httpx.Client)
-        token_manager = KISRestClient.TokenManager(config, client)
+        token_manager = TokenManager(config, client)
 
         # 토큰 초기화 (만료 1시간 후)
-        token_manager._token = KISRestClient.TokenManager._token.__class__(
+        from src.stock_manager.adapters.broker.port import AuthenticationToken
+
+        token_manager._token = AuthenticationToken(
             access_token="cached_token",
             token_type="Bearer",
             expires_in=3600,
@@ -43,7 +47,7 @@ class TestTokenManager:
         assert token.access_token == "cached_token"
         assert not client.post.called
 
-    @patch('time.sleep')
+    @patch("time.sleep")
     def test_get_token_refreshes_when_expiring_soon(self, mock_sleep):
         """토큰이 5분 내 만료이면 갱신"""
         config = KISConfig(
@@ -60,10 +64,10 @@ class TestTokenManager:
                 "expires_in": 86400,
             },
         )
-        token_manager = KISRestClient.TokenManager(config, client)
+        token_manager = TokenManager(config, client)
 
         # 토큰 초기화 (만료 4분 후)
-        token_manager._token = KISRestClient.TokenManager._token.__class__(
+        token_manager._token = AuthenticationToken(
             access_token="old_token",
             token_type="Bearer",
             expires_in=3600,
@@ -91,14 +95,14 @@ class TestTokenManager:
                 "expires_in": 86400,
             },
         )
-        token_manager = KISRestClient.TokenManager(config, client)
+        token_manager = TokenManager(config, client)
 
-        # 토큰 초기화
-        token_manager._token = KISRestClient.TokenManager._token.__class__(
+        # 토큰 초기화 (만료 4분 후)
+        token_manager._token = AuthenticationToken(
             access_token="old_token",
             token_type="Bearer",
             expires_in=3600,
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=datetime.now() + timedelta(minutes=4),
         )
 
         # 강제 갱신
@@ -120,10 +124,10 @@ class TestTokenManager:
             status_code=401,
             text="Unauthorized",
         )
-        token_manager = KISRestClient.TokenManager(config, client)
+        token_manager = TokenManager(config, client)
 
         # 토큰 초기화 (만료 4분 후)
-        token_manager._token = KISRestClient.TokenManager._token.__class__(
+        token_manager._token = AuthenticationToken(
             access_token="old_token",
             token_type="Bearer",
             expires_in=3600,
@@ -141,10 +145,12 @@ class TestTokenManager:
             kis_app_secret="test_secret",
         )
         client = Mock(spec=httpx.Client)
-        token_manager = KISRestClient.TokenManager(config, client)
+        token_manager = TokenManager(config, client)
 
-        # 토큰 초기화 (만료 10분 후)
-        token_manager._token = KISRestClient.TokenManager._token.__class__(
+        # 토큰 초기화 (만료 1시간 후)
+        from src.stock_manager.adapters.broker.port import AuthenticationToken
+
+        token_manager._token = AuthenticationToken(
             access_token="valid_token",
             token_type="Bearer",
             expires_in=3600,
@@ -161,11 +167,21 @@ class TestTokenManager:
             kis_app_secret="test_secret",
         )
         client = Mock(spec=httpx.Client)
-        token_manager = KISRestClient.TokenManager(config, client)
+        token_manager = TokenManager(config, client)
 
         # 토큰 초기화 (만료 4분 후)
-        token_manager._token = KISRestClient.TokenManager._token.__class__(
+        token_manager._token = AuthenticationToken(
             access_token="expiring_token",
+            token_type="Bearer",
+            expires_in=3600,
+            expires_at=datetime.now() + timedelta(minutes=4),
+        )
+        client = Mock(spec=httpx.Client)
+        token_manager = TokenManager(config, client)
+
+        # 토큰 초기화 (만료 4분 후)
+        token_manager._token = AuthenticationToken(
+            access_token="old_token",
             token_type="Bearer",
             expires_in=3600,
             expires_at=datetime.now() + timedelta(minutes=4),
@@ -181,7 +197,7 @@ class TestTokenManager:
             kis_app_secret="test_secret",
         )
         client = Mock(spec=httpx.Client)
-        token_manager = KISRestClient.TokenManager(config, client)
+        token_manager = TokenManager(config, client)
 
         token_manager._token = None
 
@@ -207,7 +223,7 @@ class TestKISRestClient:
 
     def test_client_initialization(self, config):
         """클라이언트 초기화 확인"""
-        with patch('httpx.Client'):
+        with patch("httpx.Client"):
             client = KISRestClient(config)
             assert client.config == config
             assert client.client is not None
@@ -216,7 +232,7 @@ class TestKISRestClient:
     def test_get_headers_includes_token(self, client):
         """헤더에 토큰 포함 확인"""
         # Mock 토큰
-        client.token_manager._token = KISRestClient.TokenManager._token.__class__(
+        client.token_manager._token = AuthenticationToken(
             access_token="test_token",
             token_type="Bearer",
             expires_in=3600,
@@ -238,7 +254,7 @@ class TestKISRestClient:
         assert headers["appkey"] == "test_key"
         assert headers["appsecret"] == "test_secret"
 
-    @patch('httpx.Client.request')
+    @patch("httpx.Client.request")
     def test_make_request_success(self, mock_request, client):
         """성공적인 API 요청"""
         # Mock response
@@ -252,11 +268,11 @@ class TestKISRestClient:
         assert response == {"result": "success"}
         assert mock_request.called
 
-    @patch('httpx.Client.request')
+    @patch("httpx.Client.request")
     def test_make_request_401_refreshes_token(self, mock_request, client):
         """401 오류 시 토큰 갱신 후 재시도"""
         # Mock 토큰 갱신
-        with patch.object(client.token_manager, 'force_refresh'):
+        with patch.object(client.token_manager, "force_refresh"):
             # 첫 호출: 401, 두 번째 호출: 200
             mock_request.side_effect = [
                 Mock(status_code=401, text="Unauthorized"),
@@ -269,8 +285,8 @@ class TestKISRestClient:
             assert mock_request.call_count == 2
             assert client.token_manager.force_refresh.called
 
-    @patch('time.sleep')
-    @patch('httpx.Client.request')
+    @patch("time.sleep")
+    @patch("httpx.Client.request")
     def test_make_request_rate_limit_retry(self, mock_request, mock_sleep, client):
         """Rate Limit 시 재시도"""
         # 429 응답 후 200 응답

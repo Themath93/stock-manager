@@ -28,10 +28,10 @@ cp .env.example .env
   - `slack.py`: Slack 알림 전송 유틸
 
 ## 다음 단계
-- 브로커 API 구현체 추가
+- 리스크 룰 확정 (SPEC-BACKEND-INFRA-003)
 - 전략 로직 구현
-- 리스크 룰 확정
 - 워커 아키텍처 구현 (SPEC-BACKEND-WORKER-004)
+- 테스트 커버리지 100% 달성
 
 ## 구현된 기능
 
@@ -47,3 +47,23 @@ cp .env.example .env
 - 주문/체결/리스크 이벤트 알림
 - 에러 로그 알림
 - 시스템 상태 모니터링
+- 메시지 전송/수정/스레드 댓글 기능 (ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md 참조)
+
+## AI 개발자 가이드
+
+### ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md
+Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
+
+## 테스트 커버리지
+
+현재 상태: 64% (43/67 tests passing)
+
+- 도메인 모델 테스트: Order, Fill, OrderStatus, OrderRequest (10 tests)
+- 서비스 레이어 테스트: OrderService (in progress)
+- 어댑터 테스트: MockBroker, KISBroker, KISConfig, KISRestClient (33 tests)
+- 유틸리티 테스트: Slack 알림 (7 tests)
+
+테스트 실행:
+```bash
+pytest tests/
+```

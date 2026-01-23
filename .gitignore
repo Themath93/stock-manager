@@ -133,3 +133,4 @@ secret-key-*
 dist-ssr/
 *.p12
 *.pfx
+.claude/plans/

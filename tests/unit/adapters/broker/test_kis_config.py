@@ -53,7 +53,7 @@ class TestKISConfig:
         )
 
         assert "custom.rest.com" in config.get_rest_base_url()
-        assert "custom.ws.com" == config.get_ws_url()
+        assert "ws://custom.ws.com" == config.get_ws_url()
 
     def test_missing_app_key_raises_error(self):
         """app_key 누락 시 ValidationError"""
