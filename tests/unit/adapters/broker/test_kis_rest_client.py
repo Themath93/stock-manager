@@ -219,7 +219,17 @@ class TestKISRestClient:
     @pytest.fixture
     def client(self, config):
         """테스트용 HTTP 클라이언트"""
-        return KISRestClient(config)
+        # Don't mock httpx, let it initialize normally
+        # but set up token to avoid token refresh during tests
+        client_instance = KISRestClient(config)
+        # Set token to avoid refresh
+        client_instance.token_manager._token = AuthenticationToken(
+            access_token="test_token",
+            token_type="Bearer",
+            expires_in=3600,
+            expires_at=datetime.now() + timedelta(hours=1),
+        )
+        return client_instance
 
     def test_client_initialization(self, config):
         """클라이언트 초기화 확인"""
@@ -254,9 +264,8 @@ class TestKISRestClient:
         assert headers["appkey"] == "test_key"
         assert headers["appsecret"] == "test_secret"
 
-    @patch("httpx.Client.post")
     @patch("httpx.Client.request")
-    def test_make_request_success(self, mock_request, mock_post, client):
+    def test_make_request_success(self, mock_request, client):
         """성공적인 API 요청"""
         # Mock response
         mock_response = Mock()
@@ -269,11 +278,11 @@ class TestKISRestClient:
         assert response == {"result": "success"}
         assert mock_request.called
 
-    @patch("httpx.Client.post")
     @patch("httpx.Client.request")
-    def test_make_request_401_refreshes_token(self, mock_request, mock_post, client):
+    def test_make_request_401_refreshes_token(self, mock_request, client):
         """401 오류 시 토큰 갱신 후 재시도"""
         # Mock 토큰 갱신
+        mock_post = Mock()
         mock_post.return_value = Mock(
             json=lambda: {
                 "access_token": "new_token",
@@ -281,6 +290,9 @@ class TestKISRestClient:
                 "expires_in": 86400,
             },
         )
+
+        # Mock client.post method
+        client.client.post = mock_post
 
         with patch.object(client.token_manager, "force_refresh"):
             # 첫 호출: 401, 두 번째 호출: 200
@@ -301,9 +313,8 @@ class TestKISRestClient:
             assert client.token_manager.force_refresh.called
 
     @patch("time.sleep")
-    @patch("httpx.Client.post")
     @patch("httpx.Client.request")
-    def test_make_request_rate_limit_retry(self, mock_request, mock_post, mock_sleep, client):
+    def test_make_request_rate_limit_retry(self, mock_request, mock_sleep, client):
         """Rate Limit 시 재시도"""
         # 429 응답 후 200 응답
         mock_response_429 = Mock()
