@@ -23,7 +23,10 @@ class TestMockBrokerAdapter:
     @pytest.fixture
     def broker(self):
         """테스트용 MockBrokerAdapter"""
-        return MockBrokerAdapter()
+        broker = MockBrokerAdapter()
+        # 인증 자동 실행 (대부분 테스트에서 필요)
+        broker.authenticate()
+        return broker
 
     def test_authenticate_returns_token(self, broker):
         """인증 성공 토큰 확인"""
@@ -54,6 +57,7 @@ class TestMockBrokerAdapter:
 
     def test_place_order_raises_error_when_not_authenticated(self, broker):
         """인증되지 않을 때 주문 에러"""
+        # 인증 상태 초기화 (authenticate() 후)
         broker._authenticated = False
 
         order = OrderRequest(

@@ -28,23 +28,15 @@ class TestSlackClient:
             client=mock_web_client,
         )
 
-    def test_init_default_params(self, mock_web_client):
+    def test_init_default_params(self, slack_client):
         """기본 파라미터로 초기화"""
-        client = SlackClient(token="test-token", client=mock_web_client)
+        assert slack_client.token == "fake_test_token_not_real"
+        assert slack_client.default_channel == "C1234567890"
+        assert slack_client.timeout == 5.0
 
-        assert client.token == "test-token"
-        assert client.default_channel is None
-        assert client.timeout == 5.0
-
-    def test_init_with_default_channel(self, mock_web_client):
+    def test_init_with_default_channel(self, slack_client):
         """기본 채널로 초기화"""
-        client = SlackClient(
-            token="test-token",
-            default_channel="C1234567890",
-            client=mock_web_client,
-        )
-
-        assert client.default_channel == "C1234567890"
+        assert slack_client.default_channel == "C1234567890"
 
     def test_post_message_success(self, slack_client, mock_web_client):
         """메시지 전송 성공"""

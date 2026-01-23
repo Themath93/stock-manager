@@ -11,6 +11,7 @@ from src.stock_manager.service_layer.order_service import (
     OrderService,
     OrderStatus,
     OrderError,
+    OrderStatusError,
     IdempotencyConflictError,
     RiskViolationError,
     RiskService,
@@ -24,9 +25,165 @@ class TestRiskService:
     @pytest.fixture
     def db_connection(self):
         """테스트용 DB 연결"""
+        from contextlib import contextmanager
+
         db = Mock()
-        db.cursor.return_value.__enter__ = Mock()
-        db.cursor.return_value.__exit__ = Mock()
+
+        # Create a proper context manager mock
+        cursor_mock = Mock()
+
+        # Set up comprehensive mock responses for all test scenarios
+        cursor_mock.fetchone = Mock(
+            side_effect=[
+                # test_create_order_success - order_id row
+                [
+                    1,
+                    None,
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "NEW",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                # test_send_order_success - get_order_from_db
+                [
+                    1,
+                    None,
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "NEW",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                # test_send_order_invalid_status
+                [
+                    1,
+                    None,
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "FILLED",
+                    "100",
+                    "50000",
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                # test_cancel_order_success
+                [
+                    1,
+                    "BROKER001",
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "SENT",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                # test_get_order
+                [
+                    1,
+                    "BROKER001",
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "NEW",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                # test_invalid_status_transition
+                [
+                    1,
+                    "BROKER001",
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "FILLED",
+                    "100",
+                    "50000",
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+            ]
+        )
+
+        cursor_mock.fetchall = Mock(
+            return_value=[
+                [
+                    1,
+                    "BROKER001",
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "SENT",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                [
+                    2,
+                    "BROKER002",
+                    "unique_key_002",
+                    "000660",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "PARTIAL",
+                    "50",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+            ]
+        )
+
+        cursor_mock.execute = Mock()
+
+        @contextmanager
+        def mock_cursor():
+            yield cursor_mock
+
+        db.cursor = Mock(side_effect=mock_cursor)
         db.commit = Mock()
         return db
 
@@ -73,9 +230,95 @@ class TestOrderService:
     @pytest.fixture
     def db_connection(self):
         """테스트용 DB 연결"""
+        from contextlib import contextmanager
+
         db = Mock()
-        db.cursor.return_value.__enter__ = Mock()
-        db.cursor.return_value.__exit__ = Mock()
+
+        # Create a proper context manager mock
+        cursor_mock = Mock()
+
+        # Set up fetchone and fetchall to return actual data, not Mock objects
+        cursor_mock.fetchone = Mock(
+            side_effect=[
+                [
+                    1,
+                    None,
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "NEW",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                [
+                    1,
+                    "BROKER001",
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "SENT",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+            ]
+        )
+
+        cursor_mock.fetchall = Mock(
+            return_value=[
+                [
+                    1,
+                    "BROKER001",
+                    "unique_key_001",
+                    "005930",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "SENT",
+                    "0",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+                [
+                    2,
+                    "BROKER002",
+                    "unique_key_002",
+                    "000660",
+                    "BUY",
+                    "MARKET",
+                    "100",
+                    None,
+                    "PARTIAL",
+                    "50",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                    datetime.now(),
+                ],
+            ]
+        )
+
+        cursor_mock.execute = Mock()
+
+        @contextmanager
+        def mock_cursor():
+            yield cursor_mock
+
+        db.cursor = Mock(side_effect=mock_cursor)
         db.commit = Mock()
         return db
 
@@ -96,8 +339,23 @@ class TestOrderService:
         )
 
         # Mock: DB에 주문 생성
-        order_service.db.cursor.return_value.__enter__.execute.return_value = None
-        order_service.db.cursor.return_value.__enter__.fetchone.return_value = (1,)  # order_id
+        order_service.db.cursor.execute.return_value = None
+        order_service.db.cursor.fetchone.return_value = [
+            1,
+            None,
+            "unique_key_001",
+            "005930",
+            "BUY",
+            "MARKET",
+            "100",
+            None,
+            "NEW",
+            "0",
+            None,
+            datetime.now(),
+            datetime.now(),
+            datetime.now(),
+        ]
 
         order = order_service.create_order(request)
 
@@ -152,7 +410,22 @@ class TestOrderService:
 
         # Mock: DB에 주문 생성
         order_service.db.cursor.return_value.__enter__.execute.return_value = None
-        order_service.db.cursor.return_value.__enter__.fetchone.return_value = (1,)
+        order_service.db.cursor.return_value.__enter__.fetchone.return_value = [
+            1,
+            "BROKER001",
+            "unique_key_001",
+            "005930",
+            "BUY",
+            "MARKET",
+            "100",
+            None,
+            "NEW",
+            "0",
+            None,
+            datetime.now(),
+            datetime.now(),
+            datetime.now(),
+        ]
 
         # Mock: 리스크 검증 실패
         order_service.risk_service.validate_order = Mock(return_value=False)
@@ -239,10 +512,19 @@ class TestOrderService:
 
         # Mock: 체결 기록 생성
         order_service.db.cursor.return_value.__enter__.execute.return_value = None
-        order_service.db.cursor.return_value.__enter__.fetchone.return_value = (1,)  # fill_id
-        order_service.db.cursor.return_value.__enter__.fetchone.return_value = (
-            50,
-        )  # cumulative qty
+        order_service.db.cursor.return_value.__enter__.fetchone.return_value = [
+            1,
+            1,
+            "BROKER001",
+            "005930",
+            "BUY",
+            "50",
+            "50000",
+            datetime.now(),
+            datetime.now(),
+            datetime.now(),
+        ]
+        order_service.db.cursor.return_value.__enter__.fetchone.side_effect = [[1], [50]]
 
         fill = order_service.process_fill(fill_event)
 
@@ -281,10 +563,19 @@ class TestOrderService:
 
         # Mock: 체결 기록 생성
         order_service.db.cursor.return_value.__enter__.execute.return_value = None
-        order_service.db.cursor.return_value.__enter__.fetchone.return_value = (1,)  # fill_id
-        order_service.db.cursor.return_value.__enter__.fetchone.return_value = (
-            100,
-        )  # cumulative qty
+        order_service.db.cursor.return_value.__enter__.fetchone.return_value = [
+            1,
+            1,
+            "BROKER001",
+            "005930",
+            "BUY",
+            "50",
+            "50000",
+            datetime.now(),
+            datetime.now(),
+            datetime.now(),
+        ]
+        order_service.db.cursor.return_value.__enter__.fetchone.side_effect = [[1], [100]]
 
         fill = order_service.process_fill(fill_event)
 
@@ -376,7 +667,7 @@ class TestOrderService:
             updated_at=datetime.now(),
         )
         order_service.db.cursor.return_value.__enter__.fetchall.return_value = [
-            (
+            [
                 1,
                 "BROKER001",
                 "unique_key_001",
@@ -390,8 +681,9 @@ class TestOrderService:
                 None,
                 datetime.now(),
                 datetime.now(),
-            ),
-            (
+                datetime.now(),
+            ],
+            [
                 2,
                 "BROKER002",
                 "unique_key_002",
@@ -405,7 +697,8 @@ class TestOrderService:
                 None,
                 datetime.now(),
                 datetime.now(),
-            ),
+                datetime.now(),
+            ],
         ]
 
         orders = order_service.get_pending_orders()

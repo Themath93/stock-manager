@@ -254,30 +254,45 @@ class TestKISRestClient:
         assert headers["appkey"] == "test_key"
         assert headers["appsecret"] == "test_secret"
 
+    @patch("httpx.Client.post")
     @patch("httpx.Client.request")
-    def test_make_request_success(self, mock_request, client):
+    def test_make_request_success(self, mock_request, mock_post, client):
         """성공적인 API 요청"""
         # Mock response
-        mock_request.return_value = Mock(
-            status_code=200,
-            json=lambda: {"result": "success"},
-        )
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json = lambda: {"result": "success"}
+        mock_request.return_value = mock_response
 
         response = client._make_request("GET", "/test")
 
         assert response == {"result": "success"}
         assert mock_request.called
 
+    @patch("httpx.Client.post")
     @patch("httpx.Client.request")
-    def test_make_request_401_refreshes_token(self, mock_request, client):
+    def test_make_request_401_refreshes_token(self, mock_request, mock_post, client):
         """401 오류 시 토큰 갱신 후 재시도"""
         # Mock 토큰 갱신
+        mock_post.return_value = Mock(
+            json=lambda: {
+                "access_token": "new_token",
+                "token_type": "Bearer",
+                "expires_in": 86400,
+            },
+        )
+
         with patch.object(client.token_manager, "force_refresh"):
             # 첫 호출: 401, 두 번째 호출: 200
-            mock_request.side_effect = [
-                Mock(status_code=401, text="Unauthorized"),
-                Mock(status_code=200, json=lambda: {"result": "success"}),
-            ]
+            mock_response_401 = Mock()
+            mock_response_401.status_code = 401
+            mock_response_401.text = "Unauthorized"
+
+            mock_response_200 = Mock()
+            mock_response_200.status_code = 200
+            mock_response_200.json = lambda: {"result": "success"}
+
+            mock_request.side_effect = [mock_response_401, mock_response_200]
 
             response = client._make_request("GET", "/test")
 
@@ -286,14 +301,19 @@ class TestKISRestClient:
             assert client.token_manager.force_refresh.called
 
     @patch("time.sleep")
+    @patch("httpx.Client.post")
     @patch("httpx.Client.request")
-    def test_make_request_rate_limit_retry(self, mock_request, mock_sleep, client):
+    def test_make_request_rate_limit_retry(self, mock_request, mock_post, mock_sleep, client):
         """Rate Limit 시 재시도"""
         # 429 응답 후 200 응답
-        mock_request.side_effect = [
-            Mock(status_code=429),
-            Mock(status_code=200, json=lambda: {"result": "success"}),
-        ]
+        mock_response_429 = Mock()
+        mock_response_429.status_code = 429
+
+        mock_response_200 = Mock()
+        mock_response_200.status_code = 200
+        mock_response_200.json = lambda: {"result": "success"}
+
+        mock_request.side_effect = [mock_response_429, mock_response_200]
 
         response = client._make_request("GET", "/test", max_retries=2)
 
