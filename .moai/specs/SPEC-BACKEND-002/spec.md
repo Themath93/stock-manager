@@ -1,7 +1,7 @@
 ---
 id: SPEC-BACKEND-002
 version: "1.0.0"
-status: "draft"
+status: "completed"
 created: "2026-01-23"
 updated: "2026-01-23"
 author: "Alfred"
@@ -13,6 +13,7 @@ priority: "HIGH"
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0.0 | 2026-01-23 | Alfred | 초기 문서 작성 |
+| 1.0.0 | 2026-01-23 | Alfred | 구현 완료 - OrderService, PositionService, idempotency, fill processing |
 
 ---
 
