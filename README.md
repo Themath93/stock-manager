@@ -14,6 +14,7 @@ cp .env.example .env
 
 ## 구조
 - `src/stock_manager/config/`: 환경/설정 로딩
+  - `app_config.py`: 통합 앱 설정 (AppConfig - KIS, Slack, 공통 설정)
 - `src/stock_manager/domain/`: 순수 도메인(전략/리스크/모델)
   - `worker.py`: 워커 도메인 모델 (WorkerStatus, StockLock, WorkerProcess, Candidate, DailySummary)
 - `src/stock_manager/service_layer/`: 유스케이스(장 시작/복구/주문 실행)
@@ -34,14 +35,14 @@ cp .env.example .env
 - `src/stock_manager/entrypoints/`: CLI/worker/scheduler
 - `src/stock_manager/utils/`: 공통 유틸
   - `slack.py`: Slack 알림 전송 유틸
+- `scripts/`: 유틸리티 스크립트
+  - `kis_slack_check.py`: KIS API 및 Slack 알림 연동 테스트 스크립트
 
 ## 다음 단계
 - 리스크 룰 확정 (SPEC-BACKEND-INFRA-003)
 - 전략 로직 구현 (구체화 필요)
-- 워커 아키텍처 구현 완료 ✅ (SPEC-BACKEND-WORKER-004)
 - 테스트 커버리지 개선 (현재 82%)
-- PostgreSQL DB 스키마 적용 (worker_schema.sql)
-- 데이터베이스 포트 구현 (PostgreSQL/SQLite)
+- 리팩토링 및 코드 정리
 
 ## 구현된 기능
 
@@ -53,7 +54,7 @@ cp .env.example .env
 - 포지션 계산 및 업데이트
 - 브로커/DB 상태 동기화
 
-### SPEC-BACKEND-WORKER-004: 워커 아키텍처
+### SPEC-BACKEND-WORKER-004: 워커 아키텍처 (완료)
 - **분산 락 서비스 (LockService)**
   - PostgreSQL row-level locks 기반 원자적 락 획득
   - TTL(Time-To-Live) 지원 및 갱신 (renew)
@@ -94,22 +95,131 @@ cp .env.example .env
 - 시스템 상태 모니터링
 - 메시지 전송/수정/스레드 댓글 기능 (ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md 참조)
 
+### 통합 설정 관리 (AppConfig)
+- `src/stock_manager/config/app_config.py`에서 통합 설정 관리
+- KIS 설정: 모드(LIVE/PAPER), API 키, REST/WebSocket URL
+- Slack 설정: Bot Token, Channel ID
+- 공통 설정: 로그 레벨, 계좌 ID
+- 운영 모드에 따른 URL 자동 선택 헬퍼 메서드 제공
+
+## 개발 환경 설정
+
+### 로컬 PostgreSQL 환경 (docker-compose)
+프로젝트 루트의 `docker-compose.yml`을 사용하여 로컬 개발용 PostgreSQL 데이터베이스를 실행할 수 있습니다.
+
+```bash
+# PostgreSQL 컨테이너 시작
+docker-compose up -d postgres
+
+# 컨테이너 상태 확인
+docker-compose ps
+
+# 로그 확인
+docker-compose logs postgres
+
+# 컨테이너 중지
+docker-compose down
+
+# 볼륨 포함하여 완전 삭제
+docker-compose down -v
+```
+
+**설정:**
+- 이미지: postgres:15-alpine
+- 포트: 5432
+- 데이터베이스: stock_manager
+- 사용자: postgres / postgres
+- Health check 포함
+
+**환경 변수 (.env):**
+```bash
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=stock_manager
+DB_USER=postgres
+DB_PASSWORD=postgres
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/stock_manager
+```
+
+## 유틸리티 스크립트
+
+### KIS Slack Check 스크립트
+`scripts/kis_slack_check.py`는 KIS API 연결과 Slack 알림 전송을 테스트하는 유틸리티입니다.
+
+```bash
+# 실행 방법
+python scripts/kis_slack_check.py
+
+# 환경 변수 요구사항:
+# - ACCOUNT_ID: 계좌 ID
+# - SLACK_BOT_TOKEN: Slack Bot Token
+# - SLACK_CHANNEL_ID: Slack Channel ID
+# - KIS_APP_KEY 또는 KIS_KIS_APP_KEY: KIS 앱키
+# - KIS_APP_SECRET 또는 KIS_KIS_APP_SECRET: KIS 앱시크릿키
+```
+
+**기능:**
+- KIS API 인증 및 현금 잔고 조회
+- Slack 알림 전송 테스트
+- 계좌 정보 마스킹 처리
+
+## 테스트
+
+### 테스트 커버리지
+
+현재 상태: 82% (91/116 tests passing, 8 failed, 17 skipped)
+
+- 도메인 모델 테스트: Order, Fill, OrderStatus, OrderRequest (10 tests)
+- 도메인 모델 테스트: Worker 도메인 (WorkerStatus, StockLock, WorkerProcess, Candidate, PositionSnapshot, DailySummary) (21 tests)
+- 서비스 레이어 테스트: OrderService, LockService, WorkerLifecycleService 등
+- 어댑터 테스트: MockBroker, KISBroker, KISConfig, KISRestClient, PostgreSQL (57 tests)
+- 유틸리티 테스트: Slack 알림 (7 tests)
+
+### 단위 테스트 실행
+
+```bash
+# 전체 테스트 실행
+pytest tests/
+
+# 단위 테스트만 실행
+pytest tests/unit/
+
+# 특정 모듈 테스트
+pytest tests/unit/domain/test_order.py -v
+
+# 커버리지 리포트
+pytest --cov=src/stock_manager --cov-report=html tests/
+```
+
+### 통합 테스트 실행
+
+통합 테스트는 PostgreSQL 데이터베이스가 필요합니다. docker-compose로 데이터베이스를 먼저 실행하세요.
+
+```bash
+# 1. PostgreSQL 컨테이너 시작
+docker-compose up -d postgres
+
+# 2. 통합 테스트 실행 (대기 시간 후)
+pytest tests/integration/ -v
+
+# 3. 또는 pytest 마크로 통합 테스트만 실행
+pytest -m integration -v
+```
+
+**참고:** 통합 테스트는 데이터베이스가 실행 중이지 않으면 자동으로 건너뜁니다(skip).
+
 ## AI 개발자 가이드
 
 ### ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md
 Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 
-## 테스트 커버리지
+## 프로젝트 진행 상태
 
-현재 상태: 82% (76/88 tests passing)
+### 완료된 SPEC
+- SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
+- SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)
 
-- 도메인 모델 테스트: Order, Fill, OrderStatus, OrderRequest (10 tests)
-- 도메인 모델 테스트: Worker 도메인 (WorkerStatus, StockLock, WorkerProcess, Candidate, PositionSnapshot, DailySummary) (21 tests)
-- 서비스 레이어 테스트: OrderService (in progress)
-- 어댑터 테스트: MockBroker, KISBroker, KISConfig, KISRestClient (33 tests)
-- 유틸리티 테스트: Slack 알림 (7 tests)
-
-테스트 실행:
-```bash
-pytest tests/
-```
+### 진행 중인 작업
+- 리팩토링 및 코드 정리
+- 테스트 커버리지 개선 (현재 82%, 목표 90%)
+- 문서 업데이트 및 동기화
