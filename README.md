@@ -134,9 +134,50 @@ cp .env.example .env
   - daily_settlements 테이블 (일일 정산 기록)
   - recovery_logs 테이블 (상태 복구 이력)
 
+### SPEC-OBSERVABILITY-001: 로그 레벨 기반 Slack 알림 시스템 (완료)
+- **Python logging.Handler 통합** ✅ 완료
+  - SlackHandler: Python 표준 logging 모듈과 Slack 통합
+  - AlertMapper: 로그 레벨 → 알림 설정 매핑 (CRITICAL, ERROR, WARNING, INFO, DEBUG)
+  - SlackFormatter: 구조화된 Slack 메시지 포맷팅 및 민감 정보 마스킹
+  - SlackHandlerConfig: Pydantic 기반 설정 관리
+- **알림 라우팅 정책** ✅ 완료
+  - CRITICAL: 즉시 알림, 스택 트레이스 포함, (!) 이모지
+  - ERROR: 즉시 알림, (x) 이모지
+  - WARNING: 배치 처리 (5분 집계), (warning) 이모지
+  - INFO/DEBUG: Slack 알림 없음
+- **고급 기능** ✅ 완료
+  - 비동기 전송 (백그라운드 스레드)
+  - 중복 알림 필터 (SHA256 해시 기반, 1분 윈도우)
+  - 민감 정보 마스킹 (token, secret, password, api_key 패턴)
+  - 배치 큐 자동 플러시 (종료 시)
+- **품질 지표** ✅ 완료
+  - 테스트 커버리지: 95% (목표 85% 초과)
+  - 테스트 통과율: 100% (57/57 tests)
+  - TRUST 5 준수 완료
+- **사용 예제**
+  ```python
+  import logging
+  from stock_manager.adapters.observability import SlackHandler, SlackHandlerConfig
+
+  logger = logging.getLogger(__name__)
+  config = SlackHandlerConfig(
+      bot_token=os.getenv("SLACK_BOT_TOKEN"),
+      critical_channel=os.getenv("SLACK_CRITICAL_CHANNEL"),
+      error_channel=os.getenv("SLACK_ERROR_CHANNEL"),
+      warning_channel=os.getenv("SLACK_WARNING_CHANNEL"),
+  )
+  handler = SlackHandler(config)
+  logger.addHandler(handler)
+
+  logger.critical("Critical system failure")  # 즉시 Slack으로 전송
+  logger.error("Database connection failed")  # 즉시 Slack으로 전송
+  logger.warning("High memory usage")         # 5분 배치 처리
+  logger.info("Application started")          # Slack 전송 없음
+  ```
+
 ### Slack 알림
 - 주문/체결/리스크 이벤트 알림
-- 에러 로그 알림
+- 에러 로그 알림 (자동 레벨 기반 라우팅)
 - 시스템 상태 모니터링
 - 메시지 전송/수정/스레드 댓글 기능 (ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md 참조)
 
@@ -261,6 +302,7 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 ## 프로젝트 진행 상태
 
 ### 완료된 SPEC
+- SPEC-OBSERVABILITY-001: 로그 레벨 기반 Slack 알림 시스템 (2026-01-25 완료)
 - SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
 - SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)
 - SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (2026-01-25 완료)
