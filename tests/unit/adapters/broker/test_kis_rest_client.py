@@ -8,9 +8,9 @@ from unittest.mock import Mock, patch
 import pytest
 import httpx
 
-from src.stock_manager.adapters.broker.kis import KISConfig, KISRestClient, Mode
-from src.stock_manager.adapters.broker.kis.kis_rest_client import TokenManager
-from src.stock_manager.adapters.broker.port import (
+from stock_manager.adapters.broker.kis import KISConfig, KISRestClient, Mode
+from stock_manager.adapters.broker.kis.kis_rest_client import TokenManager
+from stock_manager.adapters.broker.port import (
     APIError,
     AuthenticationError,
     AuthenticationToken,
@@ -33,7 +33,7 @@ class TestTokenManager:
         token_manager = TokenManager(config, client)
 
         # 토큰 초기화 (만료 1시간 후)
-        from src.stock_manager.adapters.broker.port import AuthenticationToken
+        from stock_manager.adapters.broker.port import AuthenticationToken
 
         token_manager._token = AuthenticationToken(
             access_token="cached_token",
@@ -148,7 +148,7 @@ class TestTokenManager:
         token_manager = TokenManager(config, client)
 
         # 토큰 초기화 (만료 1시간 후)
-        from src.stock_manager.adapters.broker.port import AuthenticationToken
+        from stock_manager.adapters.broker.port import AuthenticationToken
 
         token_manager._token = AuthenticationToken(
             access_token="valid_token",

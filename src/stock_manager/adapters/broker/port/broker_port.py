@@ -15,12 +15,14 @@ from typing import Callable, List, Optional
 
 class OrderSide(Enum):
     """주문 방향"""
+
     BUY = "BUY"
     SELL = "SELL"
 
 
 class OrderType(Enum):
     """주문 유형"""
+
     MARKET = "MARKET"
     LIMIT = "LIMIT"
 
@@ -28,6 +30,7 @@ class OrderType(Enum):
 @dataclass
 class AuthenticationToken:
     """인증 토큰"""
+
     access_token: str
     token_type: str
     expires_in: int  # seconds
@@ -37,6 +40,7 @@ class AuthenticationToken:
 @dataclass
 class OrderRequest:
     """주문 요청"""
+
     account_id: str
     symbol: str
     side: OrderSide
@@ -49,6 +53,7 @@ class OrderRequest:
 @dataclass
 class Order:
     """주문"""
+
     broker_order_id: str
     account_id: str
     symbol: str
@@ -63,6 +68,7 @@ class Order:
 @dataclass
 class FillEvent:
     """체결 이벤트"""
+
     broker_order_id: str
     symbol: str
     side: OrderSide
@@ -74,6 +80,7 @@ class FillEvent:
 @dataclass
 class QuoteEvent:
     """호가 이벤트"""
+
     symbol: str
     bid_price: Decimal
     ask_price: Decimal
@@ -162,6 +169,35 @@ class BrokerPort(ABC):
         pass
 
     @abstractmethod
+    def get_stock_balance(self, account_id: str) -> list[dict]:
+        """주식잔고 조회
+
+        Args:
+            account_id: 계좌 ID
+
+        Returns:
+            list[dict]: 종목별 잔고 정보
+                [
+                    {
+                        "pdno": "005930",           # 종목코드
+                        "prdt_name": "삼성전자",      # 종목명
+                        "hldg_qty": "1657",          # 보유수량
+                        "pchs_avg_pric": "135440.25", # 매입평균가격
+                        "pchs_amt": "224424497",     # 매입금액
+                        "prpr": "0",                # 현재가
+                        "evlu_amt": "0",             # 평가금액
+                        "evlu_pfls_amt": "0",       # 평가손익금액
+                        "evlu_pfls_rt": "0.00",     # 평가손익율
+                    },
+                    ...
+                ]
+
+        Raises:
+            APIError: 조회 실패 시
+        """
+        pass
+
+    @abstractmethod
     def subscribe_quotes(self, symbols: List[str], callback: Callable[[QuoteEvent], None]):
         """호가 구독
 
@@ -204,24 +240,29 @@ class BrokerPort(ABC):
 # Custom Exceptions
 class BrokerError(Exception):
     """브로커 에러 기본 클래스"""
+
     pass
 
 
 class AuthenticationError(BrokerError):
     """인증 에러"""
+
     pass
 
 
 class ConnectionError(BrokerError):
     """연결 에러"""
+
     pass
 
 
 class APIError(BrokerError):
     """API 에러"""
+
     pass
 
 
 class RateLimitError(BrokerError):
     """Rate Limit 에러"""
+
     pass

@@ -33,6 +33,7 @@ class KISBrokerAdapter(BrokerPort):
         self._approval_key: str | None = None
         self._initialized = False
 
+    # TAG-002: SPEC-BACKEND-API-001 ED-002 WebSocket 초기화
     def _initialize_websocket(self) -> None:
         """WebSocket 초기화"""
         if self.ws_client is None:
@@ -43,14 +44,26 @@ class KISBrokerAdapter(BrokerPort):
             self._initialized = True
             logger.info("WebSocket initialized successfully")
 
+    # TAG-001: SPEC-BACKEND-API-001 NEW-001 WebSocket approval_key 발급
     def _get_approval_key_from_rest(self) -> str:
         """REST API에서 approval_key 발급
 
-        TODO: 실제 KIS OpenAPI approval_key 발급 API 호출 필요
+        KIS OpenAPI /oauth2/Approval 엔드포인트를 호출하여
+        WebSocket 연결에 필요한 approval_key를 발급받습니다.
+
+        Returns:
+            str: 발급된 approval_key
+
+        Raises:
+            AuthenticationError: 발급 실패 시
         """
-        # 현재는 임시 값 반환
-        logger.warning("Using temporary approval_key (TODO: implement real API call)")
-        return "temp_approval_key"
+        try:
+            approval_key = self.rest_client.get_approval_key()
+            logger.info(f"Approval key received: {approval_key[:8]}...")
+            return approval_key
+        except AuthenticationError as e:
+            logger.error(f"Failed to get approval key: {e}")
+            raise
 
     def authenticate(self) -> AuthenticationToken:
         """인증 토큰 발급"""
@@ -88,6 +101,14 @@ class KISBrokerAdapter(BrokerPort):
         logger.info(f"Cash balance: {cash}")
         return cash
 
+    def get_stock_balance(self, account_id: str) -> list[dict]:
+        """주식잔고 조회"""
+        logger.info(f"Fetching stock balance for account: {account_id}")
+        balance = self.rest_client.get_stock_balance(account_id)
+        logger.info(f"Stock balance found: {len(balance)} positions")
+        return balance
+
+    # TAG-003: SPEC-BACKEND-API-001 ED-003 호가 구독
     def subscribe_quotes(
         self,
         symbols: List[str],
@@ -104,6 +125,7 @@ class KISBrokerAdapter(BrokerPort):
             self.ws_client.subscribe_quotes(symbols, callback)
             logger.info(f"Quote subscription successful for {len(symbols)} symbols")
 
+    # TAG-004: SPEC-BACKEND-API-001 ED-003 체결 구독
     def subscribe_executions(self, callback: Callable[[FillEvent], None]):
         """체결 구독"""
         logger.info("Subscribing to executions")

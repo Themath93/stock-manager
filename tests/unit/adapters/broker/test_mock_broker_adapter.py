@@ -4,8 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from src.stock_manager.adapters.broker.mock import MockBrokerAdapter
-from src.stock_manager.adapters.broker.port import (
+from stock_manager.adapters.broker.mock import MockBrokerAdapter
+from stock_manager.adapters.broker.port import (
     APIError,
     AuthenticationError,
     AuthenticationToken,

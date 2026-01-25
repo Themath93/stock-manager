@@ -48,9 +48,10 @@ class TokenManager:
         """토큰 갱신 필요 여부 확인 (만료 5분 전)"""
         if self._token is None:
             return True
-        five_minutes_ago = datetime.now() + timedelta(minutes=5)
-        return self._token.expires_at < five_minutes_ago
+        five_minutes_from_now = datetime.now() + timedelta(minutes=5)
+        return self._token.expires_at < five_minutes_from_now
 
+    # TAG-014: SPEC-BACKEND-API-001 WT-001, NEW-002 토큰 자동 갱신
     def _refresh_token(self) -> None:
         """토큰 갱신"""
         if self._token_lock:
@@ -148,10 +149,12 @@ class KISRestClient:
 
                 # Rate Limit 처리
                 if response.status_code == 429:
-                    delay = base_delay * (2**retry_count)
-                    logger.warning(f"Rate limit exceeded, retrying in {delay}s...")
-                    time.sleep(delay)
-                    retry_count += 1
+                    if retry_count < max_retries - 1:
+                        delay = base_delay * (2**retry_count)
+                        logger.warning(f"Rate limit exceeded, retrying in {delay}s...")
+                        time.sleep(delay)
+                        retry_count += 1
+                        continue
                     raise RateLimitError("Rate limit exceeded")
 
                 if response.status_code >= 400:
@@ -180,10 +183,12 @@ class KISRestClient:
 
         raise APIError(f"Max retries exceeded for request to {url}")
 
+    # TAG-010: SPEC-BACKEND-API-001 ED-001 REST 인증 토큰 발급
     def get_access_token(self) -> AuthenticationToken:
         """접근 토큰 발급"""
         return self.token_manager.get_token()
 
+    # TAG-011: SPEC-BACKEND-API-001 OP-001 해시키 발급
     def get_hashkey(self, request_body: dict) -> str:
         """해시키 발급
 
@@ -205,6 +210,35 @@ class KISRestClient:
             logger.warning(f"Hashkey generation failed, continuing without hashkey: {e}")
             return ""
 
+    # TAG-001: SPEC-BACKEND-API-001 NEW-001 WebSocket approval_key 발급
+    def get_approval_key(self) -> str:
+        """WebSocket approval_key 발급
+
+        KIS OpenAPI /oauth2/Approval 엔드포인트를 호출하여
+        WebSocket 연결에 필요한 approval_key를 발급받습니다.
+
+        Returns:
+            str: approval_key
+
+        Raises:
+            AuthenticationError: 발급 실패 시
+        """
+        try:
+            response = self._make_request(
+                "POST",
+                self.config.get_approval_url(),
+                include_token=False,  # 토큰 없이 appkey/appsecret만 사용
+            )
+            approval_key = response.get("approval_key")
+            if not approval_key:
+                raise AuthenticationError("approval_key not found in response")
+            logger.info("Approval key generated successfully")
+            return approval_key
+        except Exception as e:
+            logger.error(f"Approval key generation failed: {e}")
+            raise AuthenticationError(f"Approval key generation failed: {e}")
+
+    # TAG-012: SPEC-BACKEND-API-001 주문 전송
     def place_order(self, order: OrderRequest) -> str:
         """주문 전송
 
@@ -248,6 +282,7 @@ class KISRestClient:
         # 주문 ID 반환
         return response["output"]["ODNO"]
 
+    # TAG-013: SPEC-BACKEND-API-001 주문 취소
     def cancel_order(self, broker_order_id: str, account_id: str) -> bool:
         """주문 취소
 
@@ -318,27 +353,74 @@ class KISRestClient:
     def get_cash(self, account_id: str) -> Decimal:
         """예수금 조회
 
+        투자계좌자산현황조회 API를 사용하여 예수금을 조회합니다.
+        INQR_DVSN: 02 (예수금 전용)
+
         Args:
             account_id: 계좌 ID
 
         Returns:
             Decimal: 예수금
+
+        Raises:
+            APIError: 조회 실패 시
+        """
+        params = {
+            "CANO": account_id[:8],
+            "ACNT_PRDT_CD": account_id[8:],
+            "INQR_DVSN": "02",  # 02: 예수금
+        }
+
+        response = self._make_request(
+            "GET",
+            "/uapi/domestic-stock/v1/trading/inquire-account-balance",
+            params=params,
+        )
+
+        return Decimal(response["output"][0]["dnca_tot_amt"])
+
+    def get_stock_balance(self, account_id: str) -> list[dict]:
+        """주식잔고 조회
+
+        주식잔고조회 API를 사용하여 계좌의 보유 종목 잔고를 조회합니다.
+
+        Args:
+            account_id: 계좌 ID
+
+        Returns:
+            list[dict]: 종목별 잔고 정보
+                [
+                    {
+                        "pdno": "005930",           # 종목코드
+                        "prdt_name": "삼성전자",      # 종목명
+                        "hldg_qty": "1657",          # 보유수량
+                        "pchs_avg_pric": "135440.25", # 매입평균가격
+                        "pchs_amt": "224424497",     # 매입금액
+                        "prpr": "0",                # 현재가
+                        "evlu_amt": "0",             # 평가금액
+                        "evlu_pfls_amt": "0",       # 평가손익금액
+                        "evlu_pfls_rt": "0.00",     # 평가손익율
+                    },
+                    ...
+                ]
+
+        Raises:
+            APIError: 조회 실패 시
         """
         params = {
             "CANO": account_id[:8],
             "ACNT_PRDT_CD": account_id[8:],
             "AFHR_FLPR_YN": "N",
-            "OAST_YN": "N",
             "INQR_DVSN": "01",
         }
 
         response = self._make_request(
             "GET",
-            "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+            "/uapi/domestic-stock/v1/trading/inquire-balance",
             params=params,
         )
 
-        return Decimal(response["output"][0]["order_psbl_cash"])
+        return response.get("output1", [])
 
     def close(self) -> None:
         """클라이언트 종료"""

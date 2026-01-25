@@ -6,48 +6,37 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from stock_manager.config.app_config import AppConfig
 
 class Mode(str, Enum):
     """운영 모드"""
+
     LIVE = "LIVE"
     PAPER = "PAPER"
 
 
-class KISConfig(BaseSettings):
+class KISConfig(AppConfig):
     """한국투자증권 OpenAPI 설정"""
 
-    # 환경 모드
-    mode: Mode = Field(default=Mode.PAPER, description="운영 모드 (LIVE/PAPER)")
+    # Note: All fields are inherited from AppConfig
+    # - kis_mode (from AppConfig.kis_mode)
+    # - kis_app_key, kis_app_secret (from AppConfig)
+    # - URL fields, timeout, retries (from AppConfig)
 
-    # API 키
-    kis_app_key: str = Field(..., description="KIS 앱키")
-    kis_app_secret: str = Field(..., description="KIS 앱시크릿키")
+    @property
+    def mode(self) -> Mode:
+        """운영 모드 (AppConfig.kis_mode 별칭)"""
+        return self.kis_mode
 
-    # REST API URL
-    kis_rest_base_url: str = Field(
-        default="https://openapivts.koreainvestment.com:29443",
-        description="REST API 기본 URL (기본: 모의투자)",
-    )
-    kis_token_url: str = Field(
-        default="https://openapivts.koreainvestment.com:29443/oauth2/tokenP",
-        description="토큰 발급 URL (기본: 모의투자)",
-    )
-    kis_hashkey_url: str = Field(
-        default="https://openapivts.koreainvestment.com:29443/uapi/hashkey",
-        description="해시키 발급 URL (기본: 모의투자)",
-    )
+    @property
+    def request_timeout(self) -> int:
+        """요청 타임아웃 (AppConfig.kis_request_timeout 별칭)"""
+        return self.kis_request_timeout
 
-    # WebSocket URL
-    kis_ws_url: str = Field(
-        default="ws://ops.koreainvestment.com:31000",
-        description="WebSocket URL (기본: 모의투자)",
-    )
-
-    # 요청 타임아웃
-    request_timeout: int = Field(default=30, description="API 요청 타임아웃 (초)")
-
-    # 최대 재시도 횟수
-    max_retries: int = Field(default=3, description="최대 재시도 횟수")
+    @property
+    def max_retries(self) -> int:
+        """최대 재시도 횟수 (AppConfig.kis_max_retries 별칭)"""
+        return self.kis_max_retries
 
     class Config:
         env_prefix = "KIS_"
@@ -56,24 +45,34 @@ class KISConfig(BaseSettings):
 
     def get_rest_base_url(self) -> str:
         """운영 모드에 따른 REST 기본 URL 반환"""
-        if self.mode == Mode.LIVE:
+        if self.kis_mode == Mode.LIVE:
             return "https://openapi.koreainvestment.com:9443"
-        return self.kis_rest_base_url
+        return self.get_kis_rest_base_url()
 
     def get_token_url(self) -> str:
         """운영 모드에 따른 토큰 URL 반환"""
-        if self.mode == Mode.LIVE:
+        if self.kis_mode == Mode.LIVE:
             return "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
-        return self.kis_token_url
+        return self.get_kis_token_url()
 
     def get_hashkey_url(self) -> str:
         """운영 모드에 따른 해시키 URL 반환"""
-        if self.mode == Mode.LIVE:
+        if self.kis_mode == Mode.LIVE:
             return "https://openapi.koreainvestment.com:9443/uapi/hashkey"
-        return self.kis_hashkey_url
+        return self.get_kis_hashkey_url()
 
     def get_ws_url(self) -> str:
         """운영 모드에 따른 WebSocket URL 반환"""
-        if self.mode == Mode.LIVE:
+        if self.kis_mode == Mode.LIVE:
             return "ws://ops.koreainvestment.com:21000"
-        return self.kis_ws_url
+        return self.get_kis_ws_url()
+
+    def get_approval_url(self) -> str:
+        """운영 모드에 따른 approval_key 발급 URL 반환
+        
+        TAG-001: SPEC-BACKEND-API-001 NEW-001 WebSocket approval_key 발급
+        """
+        if self.kis_mode == Mode.LIVE:
+            return "https://openapi.koreainvestment.com:9443/oauth2/Approval"
+        # 모의투자 URL
+        return "https://openapivts.koreainvestment.com:29443/oauth2/Approval"
