@@ -89,6 +89,26 @@ cp .env.example .env
   - 백그라운드 하트비트 태스크
   - 모든 서비스 통합 (Lock, Lifecycle, Poller, Strategy, Order, Summary)
 
+### SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (완료)
+- **장 시작/종료 서비스 (MarketLifecycleService)**
+  - 장 시작 프로세스 (설정 로드, 인증, 계좌 확인, 전략 파라미터 로드)
+  - 장 종료 프로세스 (미체결 주문 취소 확인, 포지션 스냅샷 생성, 일일 정산 계산)
+  - 시스템 상태 관리 (OFFLINE → INITIALIZING → READY → TRADING → CLOSING → CLOSED)
+  - 거래 중지 모드 (STOPPED 상태 지원)
+- **상태 복구 서비스 (StateRecoveryService)**
+  - DB/브로커 상태 비교 및 동기화
+  - 미체결 주문 복구 (DB 조회 → 브로커 조회 → 상태 동기화)
+  - 포지션 재계산 (체결 기반 포지션 일치 확인)
+  - 복구 실패 시 거래 중지 처리
+- **정산 서비스 (SettlementService)**
+  - 포지션 스냅샷 생성 (모든 포지션 현재 상태 저장)
+  - 일일 정산 계산 (실현 손익, 평가 손익, 총 손익)
+  - DailySettlementEvent 발행
+- **데이터베이스 스키마**
+  - market_states 테이블 (시스템 상태 추적)
+  - daily_settlements 테이블 (일일 정산 기록)
+  - recovery_logs 테이블 (상태 복구 이력)
+
 ### Slack 알림
 - 주문/체결/리스크 이벤트 알림
 - 에러 로그 알림
@@ -218,6 +238,7 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 ### 완료된 SPEC
 - SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
 - SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)
+- SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (2026-01-25 완료)
 
 ### 진행 중인 작업
 - 리팩토링 및 코드 정리

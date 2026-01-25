@@ -1,9 +1,9 @@
 ---
 id: SPEC-BACKEND-INFRA-003
-version: "1.0.0"
-status: "draft"
+version: "1.1.0"
+status: "completed"
 created: "2026-01-23"
-updated: "2026-01-23"
+updated: "2026-01-25"
 author: "Alfred"
 priority: "HIGH"
 ---
@@ -13,6 +13,7 @@ priority: "HIGH"
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0.0 | 2026-01-23 | Alfred | 초기 문서 작성 |
+| 1.1.0 | 2026-01-25 | Alfred | 구현 완료 및 상태 업데이트 |
 
 ---
 
