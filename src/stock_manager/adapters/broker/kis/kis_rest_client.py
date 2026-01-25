@@ -1,6 +1,7 @@
 """KIS OpenAPI REST Client"""
 
 import logging
+import threading
 import time
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -27,13 +28,16 @@ logger = logging.getLogger(__name__)
 
 
 class TokenManager:
-    """인증 토큰 관리자"""
+    """인증 토큰 관리자
+
+    스레드 안전한 토큰 관리를 위해 threading.Lock을 사용합니다.
+    """
 
     def __init__(self, config: KISConfig, client: httpx.Client):
         self.config = config
         self.client = client
         self._token: Optional[AuthenticationToken] = None
-        self._token_lock = False
+        self._token_lock = threading.Lock()
 
     def get_token(self) -> AuthenticationToken:
         """현재 유효한 토큰 반환
@@ -52,14 +56,20 @@ class TokenManager:
         return self._token.expires_at < five_minutes_from_now
 
     # TAG-014: SPEC-BACKEND-API-001 WT-001, NEW-002 토큰 자동 갱신
+    # TAG-001: SPEC-BACKEND-API-001 Task-003 토큰 갱신 로직 스레드 안전성 개선
     def _refresh_token(self) -> None:
-        """토큰 갱신"""
-        if self._token_lock:
-            # 이미 갱신 중인 경우 대기
-            time.sleep(0.1)
+        """토큰 갱신 (스레드 안전)
+
+        threading.Lock을 사용하여 동시성 제어를 수행합니다.
+        이미 갱신 중인 경우 락 획득을 시도하고, 다른 스레드가 갱신 중이면 대기합니다.
+        """
+        # 락 획득 시도 (이미 다른 스레드가 갱신 중이면 대기)
+        acquired = self._token_lock.acquire(blocking=True, timeout=5)
+        if not acquired:
+            # 타임아웃 발생 시 갱신 중단
+            logger.warning("Token refresh lock acquisition timeout")
             return
 
-        self._token_lock = True
         try:
             response = self.client.post(
                 self.config.get_token_url(),
@@ -85,7 +95,8 @@ class TokenManager:
                     f"Token refresh failed: {response.status_code} - {response.text}"
                 )
         finally:
-            self._token_lock = False
+            # 락 해제
+            self._token_lock.release()
 
     def force_refresh(self) -> None:
         """토큰 강제 갱신"""
@@ -125,8 +136,21 @@ class KISRestClient:
         params: Optional[dict] = None,
         json_data: Optional[dict] = None,
         max_retries: int = 3,
+        include_token: bool = True,
     ) -> dict:
-        """API 요청 (재시도 로직 포함)"""
+        """API 요청 (재시도 로직 포함)
+
+        Args:
+            method: HTTP 메서드
+            url: 요청 URL
+            params: 쿼리 파라미터
+            json_data: 요청 본문
+            max_retries: 최대 재시도 횟수
+            include_token: 토큰 포함 여부 (기본값: True)
+
+        Returns:
+            dict: 응답 JSON
+        """
         retry_count = 0
         base_delay = 1
 
@@ -135,7 +159,7 @@ class KISRestClient:
                 response = self.client.request(
                     method,
                     url,
-                    headers=self._get_headers(),
+                    headers=self._get_headers(include_token=include_token),
                     params=params,
                     json=json_data,
                 )
