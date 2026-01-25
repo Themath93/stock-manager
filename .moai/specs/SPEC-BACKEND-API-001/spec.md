@@ -1,9 +1,9 @@
 ---
 id: SPEC-BACKEND-API-001
-version: "1.0.0"
-status: "draft"
+version: "1.1.0"
+status: "in_progress"
 created: "2026-01-23"
-updated: "2026-01-23"
+updated: "2026-01-25"
 author: "Alfred"
 priority: "HIGH"
 ---
@@ -12,6 +12,7 @@ priority: "HIGH"
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 1.1.0 | 2026-01-25 | Alfred | 구현 현황 업데이트, approval_key 발급 요구사항 추가, 토큰 자동 갱신 요구사항 추가 |
 | 1.0.0 | 2026-01-23 | Alfred | 초기 문서 작성 |
 
 ---
@@ -354,15 +355,82 @@ class BrokerPort(ABC):
         pass
 ```
 
-## 5. 구현 우선순위
+### NEW-001: WebSocket approval_key 발급
+**설명:** WebSocket 연결을 위한 approval_key 발급 기능
 
-| Phase | 기능 | 우선순위 |
-|-------|------|----------|
-| 1 | REST 인증 (access_token) | HIGH |
-| 1 | REST 주문 전송 | HIGH |
-| 2 | WebSocket 연결 (approval_key) | HIGH |
-| 2 | 호가 구독 | MEDIUM |
-| 3 | 체결 이벤트 수신 | HIGH |
-| 4 | 해시키 생성 | LOW |
-| 4 | 토큰 자동 갱신 | MEDIUM |
-| 5 | 재연결 로직 | MEDIUM |
+**When:** WebSocket 연결 초기화 시
+
+**Then:**
+1. KIS OpenAPI `/oauth2/Approval` 엔드포인트 호출
+2. approval_key 응답 수신 및 저장
+3. WebSocket 헤더에 approval_key 포함하여 연결
+
+**검증:**
+- approval_key가 정상적으로 발급되어 WebSocket 연결에 사용됨
+- 발급 실패 시 AuthenticationError 발생 및 재시도 로직 동작
+
+**구현 상태: PENDING (TODO 존재)**
+
+---
+
+### NEW-002: 토큰 자동 갱신
+**설명:** access_token 만료 5분 전 자동 갱신 기능
+
+**When:** access_token 만료까지 5분 이하인 경우
+
+**Then:**
+1. `get_access_token()` 재호출하여 새 토큰 발급
+2. 새 토큰으로 기존 토큰 교체
+3. 기존 토큰 안전하게 폐기
+4. 갱신 이벤트 로깅
+
+**검증:**
+- 만료 5분 전 자동 갱신 동작
+- 갱신 후 모든 API 호출이 새 토큰 사용
+- 갱신 실패 시 AuthenticationError 발생
+
+**구현 상태: PENDING**
+
+---
+
+## 5. 구현 현황
+
+### 5.1 완료된 구현 항목
+
+| 항목 | 파일 | 상태 | 비고 |
+|------|------|------|------|
+| BrokerPort 인터페이스 | `port/broker_port.py` | ✅ 완료 | 추상 인터페이스 정의 |
+| KIS 설정 모듈 | `kis/kis_config.py` | ✅ 완료 | LIVE/PAPER 모드 지원 |
+| REST 클라이언트 | `kis/kis_rest_client.py` | ✅ 완료 | 토큰 관리, 재시도 로직 포함 |
+| WebSocket 클라이언트 | `kis/kis_websocket_client.py` | ✅ 완료 | 호가/체결 구독, 재연결 포함 |
+| Mock 어댑터 | `mock/mock_broker_adapter.py` | ✅ 완료 | 테스트용 더블 구현 |
+
+### 5.2 부분 완료 항목
+
+| 항목 | 파일 | 상태 | 비고 |
+|------|------|------|------|
+| KISBrokerAdapter | `kis/kis_broker_adapter.py` | ⚠️ 부분 완료 | approval_key 발급 TODO 존재 |
+| 토큰 자동 갱신 | `kis/kis_rest_client.py` | ⚠️ 부분 완료 | 만료 체크 로직만 구현 |
+
+### 5.3 미구현 항목
+
+| 항목 | 요구사항 ID | 우선순위 | 예상 작업량 |
+|------|-------------|----------|-------------|
+| approval_key 발급 | NEW-001 | HIGH | 4시간 |
+| 토큰 자동 갱신 완료 | NEW-002 | HIGH | 6시간 |
+| 해시키 생성 | OP-001 | LOW | 2시간 |
+
+---
+
+## 6. 구현 우선순위 (업데이트)
+
+| Phase | 기능 | 우선순위 | 구현 상태 |
+|-------|------|----------|-----------|
+| 1 | REST 인증 (access_token) | HIGH | ✅ 완료 |
+| 1 | REST 주문 전송 | HIGH | ✅ 완료 |
+| 2 | WebSocket 연결 (approval_key) | HIGH | ⚠️ TODO |
+| 2 | 호가 구독 | MEDIUM | ✅ 완료 |
+| 3 | 체결 이벤트 수신 | HIGH | ✅ 완료 |
+| 4 | 토큰 자동 갱신 | HIGH | ⚠️ 부분 완료 |
+| 5 | 재연결 로직 | MEDIUM | ✅ 완료 |
+| 6 | 해시키 생성 | LOW | PENDING |

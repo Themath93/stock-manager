@@ -2,7 +2,13 @@
 
 ## 1. 개요
 
-본 문서는 SPEC-BACKEND-API-001의 구현 완료를 위한 수용 기준을 정의합니다. Given/When/Then 테스트 시나리오, 엣지 케이스, 성공 기준, 품질 게이트를 포함합니다.
+본 문서는 SPEC-BACKEND-API-001의 구현 완료를 위한 수용 기준을 정의합니다. Given/When/Then 테스트 시나리오, 엣지 케이스, 성공 기준, 품질 게이트을 포함합니다.
+
+## 1.1 업데이트 내역 (v1.1.0)
+
+- **2026-01-25:** approval_key 발급 테스트 시나리오 추가 (NEW-001)
+- **2026-01-25:** 토큰 자동 갱신 테스트 시나리오 추가 (NEW-002)
+- **2026-01-25:** 구현 현황에 따른 기존 시나리오 상태 업데이트
 
 ---
 
@@ -125,6 +131,121 @@
 - 3회 실패 시 AuthenticationError 발생
 - events 테이블에 "WARN" 레벨 토큰 갱신 이벤트 기록됨
 
+**구현 상태:** PENDING (NEW-002)
+
+---
+
+### 시나리오 7: WebSocket approval_key 발급 성공 (NEW-001)
+
+**Given:**
+- 유효한 access_token이 존재함
+- KIS OpenAPI 서버가 정상 작동 중
+
+**When:**
+- 사용자가 `broker.get_approval_key()` 호출
+
+**Then:**
+- `/oauth2/Approval` 엔드포인트로 POST 요청 전송
+- approval_key가 성공적으로 반환됨
+- approval_key가 안전하게 저장됨
+- events 테이블에 "INFO" 레벨 발급 성공 이벤트 기록됨
+- WebSocket 연결 시 approval_key가 헤더에 포함됨
+
+**검증:**
+```python
+# Given
+broker = KISBrokerAdapter(config)
+await broker.authenticate()  # access_token 발급
+
+# When
+approval_key = await broker.get_approval_key()
+
+# Then
+assert approval_key is not None
+assert len(approval_key) > 0
+assert broker.approval_key == approval_key
+```
+
+**구현 상태:** PENDING (NEW-001)
+
+---
+
+### 시나리오 8: approval_key 발급 실패 시 재시도 (NEW-001)
+
+**Given:**
+- 유효한 access_token이 존재함
+- KIS OpenAPI 서버가 일시적 오류 상태
+
+**When:**
+- 사용자가 `broker.get_approval_key()` 호출
+- 서버가 500 Internal Server Error 또는 타임아웃 반환
+
+**Then:**
+- 지수 백오프로 최대 3회 재시도 (1s, 2s, 4s)
+- 3회 실패 후 AuthenticationError 발생
+- events 테이블에 "ERROR" 레벨 발급 실패 이벤트 기록됨
+- WebSocket 연결 시도 차단
+
+**구현 상태:** PENDING (NEW-001)
+
+---
+
+### 시나리오 9: 토큰 만료 5분 전 자동 갱신 (NEW-002)
+
+**Given:**
+- 인증 토큰이 23시간 56분 전 발급됨 (만료까지 4분)
+- 시스템이 정상 작동 중
+
+**When:**
+- 사용자가 API 호출 (예: `broker.place_order(order)`)
+- 내부적으로 `refresh_token_if_needed()` 체크 실행
+
+**Then:**
+- 토큰 만료까지 5분 미만임이 감지됨
+- 자동으로 `get_access_token()` 재호출
+- 새 access_token이 발급됨
+- 기존 토큰이 안전하게 폐기됨
+- 새 토큰으로 API 호출이 완료됨
+- events 테이블에 "INFO" 레벨 토큰 갱신 이벤트 기록됨
+
+**검증:**
+```python
+# Given
+old_token = broker.auth_token.access_token
+old_expires_at = broker.auth_token.expires_at
+# 만료까지 4분 남은 상태로 설정
+
+# When
+await broker.place_order(order)  # 내부적으로 갱신 체크
+
+# Then
+assert broker.auth_token.access_token != old_token
+assert broker.auth_token.expires_at > old_expires_at
+```
+
+**구현 상태:** PENDING (NEW-002)
+
+---
+
+### 시나리오 10: 토큰 갱신 중 API 호출 대기 (NEW-002)
+
+**Given:**
+- 토큰 만료까지 5분 미만임
+- 여러 API 호출이 동시에 시도됨
+
+**When:**
+- 스레드 A가 `broker.place_order(order1)` 호출
+- 스레드 B가 `broker.place_order(order2)` 호출
+- 두 호출 모두 토큰 갱신 필요함을 감지
+
+**Then:**
+- 첫 번째 호출만 토큰 갱신 실행
+- 두 번째 호출은 갱신 완료까지 대기
+- 두 호출 모두 새 토큰으로 성공
+- 중복 갱신 요청 방지됨 (락 또는 세마포어 사용)
+
+**구현 상태:** PENDING (NEW-002)
+
 ---
 
 ## 3. 엣지 케이스 테스트
@@ -220,30 +341,35 @@
 
 ---
 
-## 4. 성공 기준
+## 4. 성공 기준 (업데이트: v1.1.0)
 
 ### 4.1 기능적 성공 기준
 
-- [ ] REST API 인증 성공 (모의/실전 환경)
-- [ ] REST API 주문 전송 성공 (매수/매도, 지정가/시장가)
-- [ ] REST API 주문 취소 성공
-- [ ] REST API 주문 조회 성공
-- [ ] REST API 예수금 조회 성공
-- [ ] WebSocket 연결 성공
-- [ ] WebSocket 호가 구독 및 수신 성공
-- [ ] WebSocket 체결 이벤트 구독 및 수신 성공
-- [ ] 토큰 자동 갱신 기능 동작
-- [ ] WebSocket 재연결 기능 동작
-- [ ] 401 에러 시 토큰 갱신 후 재시도 기능 동작
+| 항목 | 상태 | 비고 |
+|------|------|------|
+| REST API 인증 성공 (모의/실전 환경) | ✅ 완료 | access_token 발급 구현됨 |
+| REST API 주문 전송 성공 (매수/매도, 지정가/시장가) | ⚠️ 부분 완료 | 기본 구현 완료, 통합 테스트 필요 |
+| REST API 주문 취소 성공 | ⏳ 예정 | KISBrokerAdapter 완성 후 |
+| REST API 주문 조회 성공 | ⏳ 예정 | KISBrokerAdapter 완성 후 |
+| REST API 예수금 조회 성공 | ⏳ 예정 | KISBrokerAdapter 완성 후 |
+| WebSocket 연결 성공 | ✅ 완료 | 연결/종료 메서드 구현됨 |
+| WebSocket 호가 구독 및 수신 성공 | ✅ 완료 | subscribe_quotes 구현됨 |
+| WebSocket 체결 이벤트 구독 및 수신 성공 | ✅ 완료 | subscribe_executions 구현됨 |
+| **approval_key 발급 기능 (NEW-001)** | ⏳ 예정 | `/oauth2/Approval` 엔드포인트 호출 필요 |
+| **토큰 자동 갱신 기능 (NEW-002)** | ⚠️ 부분 완료 | 만료 체크만 구현, 자동 갱신 로직 필요 |
+| WebSocket 재연결 기능 동작 | ✅ 완료 | 지수 백오프 재연결 구현됨 |
+| 401 에러 시 토큰 갱신 후 재시도 기능 동작 | ⏳ 예정 | NEW-002 완료 후 |
 
 ### 4.2 비기능적 성공 기준
 
-- [ ] KISBrokerAdapter가 BrokerPort 인터페이스를 완전히 구현
-- [ ] MockBrokerAdapter로 테스트 가능
-- [ ] 모든 외부 API 호출이 try-except로 감싸짐
-- [ ] 모든 오류가 events 테이블에 로깅됨
-- [ ] 민감 정보(appkey, appsecret, token)가 로그에서 마스킹됨
-- [ ] 환경별 URL(LIVE/PAPER) 자동 전환 기능 동작
+| 항목 | 상태 | 비고 |
+|------|------|------|
+| KISBrokerAdapter가 BrokerPort 인터페이스를 완전히 구현 | ⚠️ 진행 중 | 주요 메서드 구현됨, 일부 TODO 존재 |
+| MockBrokerAdapter로 테스트 가능 | ✅ 완료 | 테스트 더블 구현됨 |
+| 모든 외부 API 호출이 try-except로 감싸짐 | ✅ 완료 | 예외 처리 포함됨 |
+| 모든 오류가 events 테이블에 로깅됨 | ✅ 완료 | 로깅 구현됨 |
+| 민감 정보(appkey, appsecret, token)가 로그에서 마스킹됨 | ✅ 완료 | 마스킹 처리됨 |
+| 환경별 URL(LIVE/PAPER) 자동 전환 기능 동작 | ✅ 완료 | KISConfig에서 MODE 기반 전환 |
 
 ---
 

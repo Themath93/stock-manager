@@ -41,10 +41,35 @@ cp .env.example .env
 ## 다음 단계
 - 리스크 룰 확정 (SPEC-BACKEND-INFRA-003)
 - 전략 로직 구현 (구체화 필요)
-- 테스트 커버리지 개선 (현재 82%)
+- 테스트 커버리지 개선 (현재 52%, 목표 80%)
 - 리팩토링 및 코드 정리
 
 ## 구현된 기능
+
+### SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (진행 중)
+- **BrokerPort 인터페이스** ✅ 완료
+  - 추상 인터페이스 정의 (port/broker_port.py)
+- **KIS 설정 모듈** ✅ 완료
+  - LIVE/PAPER 모드 지원
+  - 환경 변수 로딩 (KIS_APP_KEY, KIS_APP_SECRET, MODE)
+  - REST_URL, WS_URL 자동 전환
+- **REST 클라이언트** ⚠️ 부분 완료
+  - access_token 발급 (/oauth2/tokenP)
+  - 주문 전송, 조회 기본 기능
+  - 토큰 만료 체크 로직
+  - TODO: approval_key 발급, 토큰 자동 갱신 완료
+- **WebSocket 클라이언트** ✅ 완료
+  - 연결/종료 메서드
+  - 호가 구독 (subscribe_quotes)
+  - 체결 이벤트 구독 (subscribe_executions)
+  - 지수 백오프 재연결 로직
+- **MockBrokerAdapter** ✅ 완료
+  - 테스트용 더블 구현
+- **남은 작업** ⏳
+  - approval_key 발급 (/oauth2/Approval)
+  - 토큰 자동 갱신 완료
+  - KISBrokerAdapter 완성
+  - 해시키 생성 (선택)
 
 ### SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
 - 주문 생성 (idempotency key 중복 검사 포함)
@@ -187,7 +212,7 @@ python scripts/kis_slack_check.py
 
 ### 테스트 커버리지
 
-현재 상태: 82% (91/116 tests passing, 8 failed, 17 skipped)
+현재 상태: 52% (91/116 tests passing, 8 failed, 17 skipped)
 
 - 도메인 모델 테스트: Order, Fill, OrderStatus, OrderRequest (10 tests)
 - 도메인 모델 테스트: Worker 도메인 (WorkerStatus, StockLock, WorkerProcess, Candidate, PositionSnapshot, DailySummary) (21 tests)
@@ -241,6 +266,12 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 - SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (2026-01-25 완료)
 
 ### 진행 중인 작업
+- SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (70% 완료)
+  - 완료: BrokerPort 인터페이스, KIS 설정, REST/WebSocket 클라이언트 기본 기능
+  - 진행 중: KISBrokerAdapter 완성, 토큰 자동 갱신
+  - 예정: approval_key 발급, 해시키 생성, 통합 테스트
+
+### 다음 단계
 - 리팩토링 및 코드 정리
-- 테스트 커버리지 개선 (현재 82%, 목표 90%)
+- 테스트 커버리지 개선 (현재 52%, 목표 80%)
 - 문서 업데이트 및 동기화

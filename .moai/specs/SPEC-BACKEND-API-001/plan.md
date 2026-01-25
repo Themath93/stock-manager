@@ -11,11 +11,191 @@
 | 분류 | 기술 | 버전 | 설명 |
 |------|------|------|------|
 | 언어 | Python | 3.13+ | 타입 힌트, dataclass 활용 |
-| HTTP 클라이언트 | requests | 2.31+ | REST API 호출 |
+| HTTP 클라이언트 | httpx | 0.27+ | 비동기 REST API 호출 (requests 대체) |
 | WebSocket | websocket-client | 1.7+ | WebSocket 통신 |
 | 로깅 | logging | stdlib | 표준 라이브러리 |
 | 테스트 | pytest | 7.4+ | 단위/통합 테스트 |
 | 테스트 더블 | pytest-mock | 3.12+ | Mock/patch 지원 |
+
+### 기술 스택 변경 사항 (v1.1.0)
+
+**requests → httpx:**
+- 이유: 비동기 지원 및 성능 향상
+- 영향: REST 클라이언트 구현이 httpx.AsyncClient 사용
+- 호환성: 동기 API는 호환되도록 래퍼 제공
+
+---
+
+## 2.5 완료된 작업 (v1.1.0 기준)
+
+### Phase 1: 완료 항목
+
+#### ✅ Task 1.1: 프로젝트 구조 설정
+- [x] `src/stock_manager/adapters/broker/` 디렉토리 생성
+- [x] `src/stock_manager/adapters/broker/kis/` 하위 디렉토리 생성
+- [x] `__init__.py` 파일 구성
+- [x] 모듈 임포트 경로 설정
+
+**완료일:** 2026-01-23
+**파일:** 생성됨
+
+---
+
+#### ✅ Task 1.2: BrokerPort 인터페이스 정의
+- [x] `port/broker_port.py` 생성
+- [x] 인터페이스 메서드 정의 (authenticate, place_order, cancel_order 등)
+- [x] 데이터 모델 정의 (OrderRequest, AuthenticationToken, FillEvent)
+- [x] 타입 힌트 추가
+
+**완료일:** 2026-01-23
+**파일:** `src/stock_manager/adapters/broker/port/broker_port.py`
+
+---
+
+#### ✅ Task 1.3: KIS 설정 모듈 구현
+- [x] `kis/kis_config.py` 생성
+- [x] LIVE/PAPER 모드 지원
+- [x] 환경 변수 로딩 (KIS_APP_KEY, KIS_APP_SECRET, MODE)
+- [x] REST_URL, WS_URL 자동 전환
+
+**완료일:** 2026-01-23
+**파일:** `src/stock_manager/adapters/broker/kis/kis_config.py`
+
+---
+
+#### ✅ Task 1.4: REST 클라이언트 기본 구현
+- [x] `kis/kis_rest_client.py` 생성
+- [x] `get_access_token()` 구현 (/oauth2/tokenP)
+- [x] 인증 토큰 캐싱 로직
+- [x] httpx 비동기 클라이언트 사용
+
+**완료일:** 2026-01-23
+**파일:** `src/stock_manager/adapters/broker/kis/kis_rest_client.py`
+**비고:** approval_key 발급은 TODO로 남음
+
+---
+
+### Phase 2: 완료 항목
+
+#### ✅ Task 2.1: WebSocket 클라이언트 구현
+- [x] `kis/kis_websocket_client.py` 생성
+- [x] `connect_websocket()` 구현
+- [x] `disconnect_websocket()` 구현
+- [x] 핑/퐁 메시지 처리 (연결 유지)
+
+**완료일:** 2026-01-24
+**파일:** `src/stock_manager/adapters/broker/kis/kis_websocket_client.py`
+
+---
+
+#### ✅ Task 2.2: 호가 구독 구현
+- [x] `subscribe_quotes()` 구현
+- [x] 메시지 파싱 (H0STASP0 또는 H0UNASP0)
+- [x] QuoteEvent로 변환
+- [x] 콜백 함수 등록/해제
+
+**완료일:** 2026-01-24
+**파일:** `src/stock_manager/adapters/broker/kis/kis_websocket_client.py`
+
+---
+
+#### ✅ Task 2.3: 체결 이벤트 구독 구현
+- [x] `subscribe_executions()` 구현
+- [x] 메시지 파싱 (H0STCNT0 또는 H0UNCNT0)
+- [x] FillEvent로 변환
+- [x] 콜백 함수 등록/해제
+
+**완료일:** 2026-01-24
+**파일:** `src/stock_manager/adapters/broker/kis/kis_websocket_client.py`
+
+---
+
+#### ✅ Task 2.4: 재연결 로직
+- [x] 연결 끊김 감지
+- [x] 지수 백오프 재연결 (1s, 2s, 4s, 8s, 16s)
+- [x] 최대 5회 재시도
+- [x] 실패 시 ConnectionError 발생
+
+**완료일:** 2026-01-24
+**파일:** `src/stock_manager/adapters/broker/kis/kis_websocket_client.py`
+
+---
+
+### Phase 3: 완료 항목
+
+#### ✅ Task 3.2: MockBrokerAdapter 구현
+- [x] `mock_broker_adapter.py` 생성
+- [x] BrokerPort 인터페이스 구현
+- [x] 인-메모리 상태 관리
+- [x] 콜백 시뮬레이션
+
+**완료일:** 2026-01-24
+**파일:** `src/stock_manager/adapters/broker/mock/mock_broker_adapter.py`
+
+---
+
+## 2.6 남은 작업 (v1.1.0 기준)
+
+### 우선순위 HIGH: approval_key 발급 구현
+**Task ID:** REM-001
+**파일:** `src/stock_manager/adapters/broker/kis/kis_rest_client.py` 또는 `kis_broker_adapter.py`
+
+- [ ] `get_approval_key()` 구현 (/oauth2/Approval)
+- [ ] WebSocket 연결 시 approval_key 헤더 포함
+- [ ] 발급 실패 시 재시도 로직
+- [ ] 단위 테스트 작성
+
+**예상 시간:** 4시간
+**의존성:** 없음
+**담당:** backend 개발자
+
+---
+
+### 우선순위 HIGH: 토큰 자동 갱신 완료
+**Task ID:** REM-002
+**파일:** `src/stock_manager/adapters/broker/kis/kis_rest_client.py`
+
+- [ ] 토큰 만료 5분 전 체크 로직 완료
+- [ ] `refresh_token_if_needed()` 메서드 완료
+- [ ] 401 오류 발생 시 강제 갱신 로직
+- [ ] 갱신 실패 시 AuthenticationError 발생
+- [ ] 단위 테스트 작성
+
+**예상 시간:** 6시간
+**의존성:** Task 1.4
+**담당:** backend 개발자
+
+---
+
+### 우선순위 MEDIUM: KISBrokerAdapter 완성
+**Task ID:** REM-003
+**파일:** `src/stock_manager/adapters/broker/kis/kis_broker_adapter.py`
+
+- [ ] `place_order()` 구현 완료
+- [ ] `cancel_order()` 구현
+- [ ] `get_orders()` 구현
+- [ ] `get_cash()` 구현
+- [ ] 계정 설정 로딩 완료
+- [ ] 통합 테스트 작성
+
+**예상 시간:** 8시간
+**의존성:** REM-001, REM-002
+**담당:** backend 개발자
+
+---
+
+### 우선순위 LOW: 해시키 생성
+**Task ID:** REM-004
+**파일:** `src/stock_manager/adapters/broker/kis/kis_rest_client.py`
+
+- [ ] `get_hashkey()` 구현 (/uapi/hashkey)
+- [ ] POST 요청 본문 해싱
+- [ ] 주문/정정/취소 API에 적용
+- [ ] 단위 테스트 작성
+
+**예상 시간:** 2시간
+**의존성:** 없음
+**담당:** backend 개발자
 
 ---
 
@@ -298,14 +478,32 @@
 
 ---
 
-## 5. 타임라인
+## 5. 타임라인 (업데이트: v1.1.0)
 
-| 주차 | Phase | 주요 목표 |
-|------|-------|-----------|
-| Week 1 | Phase 1 | REST 인증 및 주문 완료 |
-| Week 2 | Phase 2 | WebSocket 연결 및 구독 완료 |
-| Week 3 | Phase 3 | 어댑터 통합 완료 |
-| Week 4 | Phase 4 | 테스트 및 문서화 완료 |
+| 주차 | Phase | 주요 목표 | 상태 |
+|------|-------|-----------|------|
+| Week 1 (2026-01-20~23) | Phase 1 | REST 인증 및 주문 기본 기능 | ✅ 완료 |
+| Week 2 (2026-01-23~24) | Phase 2 | WebSocket 연결 및 구독 | ✅ 완료 |
+| Week 3 (2026-01-25~31) | Phase 3 | 어댑터 통합 및 남은 작업 | 🔄 진행 중 |
+| Week 4 (2026-02-01~07) | Phase 4 | 테스트 및 문서화 | ⏳ 예정 |
+
+### 현재 진행 상황 (2026-01-25)
+
+**완료 (70%):**
+- ✅ BrokerPort 인터페이스
+- ✅ KIS 설정 모듈 (LIVE/PAPER 모드)
+- ✅ REST 클라이언트 기본 기능
+- ✅ WebSocket 클라이언트 전체 기능
+- ✅ MockBrokerAdapter
+
+**진행 중 (20%):**
+- ⚠️ KISBrokerAdapter (부분 완료)
+- ⚠️ 토큰 자동 갱신 (부분 구현)
+
+**미완료 (10%):**
+- ⏳ approval_key 발급 구현
+- ⏳ 해시키 생성
+- ⏳ 통합 테스트 완료
 
 ---
 
