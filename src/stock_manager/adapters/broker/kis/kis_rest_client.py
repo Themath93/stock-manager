@@ -1,10 +1,12 @@
 """KIS OpenAPI REST Client"""
 
+import json
 import logging
 import threading
 import time
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -13,9 +15,7 @@ from ..port.broker_port import (
     APIError,
     AuthenticationError,
     AuthenticationToken,
-    BrokerError,
     ConnectionError,
-    FillEvent,
     Order,
     OrderRequest,
     OrderSide,
@@ -107,6 +107,9 @@ class TokenManager:
 class KISRestClient:
     """한국투자증권 OpenAPI REST 클라이언트"""
 
+    # TR_ID mapping file path (relative to project root)
+    _TR_ID_MAPPING_FILE = Path(__file__).parent.parent.parent.parent.parent / "docs" / "kis-openapi" / "_data" / "tr_id_mapping.json"
+
     def __init__(self, config: KISConfig):
         self.config = config
         self.client = httpx.Client(
@@ -114,9 +117,80 @@ class KISRestClient:
             timeout=self.config.request_timeout,
         )
         self.token_manager = TokenManager(config, self.client)
+        self._tr_id_mapping: Optional[dict] = None
+        self._tr_id_lock = threading.Lock()
 
-    def _get_headers(self, include_token: bool = True) -> dict:
-        """요청 헤더 생성"""
+    def _load_tr_id_mapping(self) -> dict:
+        """Load TR_ID mapping from JSON file.
+
+        Returns:
+            dict: TR_ID mapping dictionary
+
+        Raises:
+            FileNotFoundError: If mapping file not found
+            json.JSONDecodeError: If mapping file is invalid
+        """
+        with self._tr_id_lock:
+            if self._tr_id_mapping is not None:
+                return self._tr_id_mapping
+
+            if not self._TR_ID_MAPPING_FILE.exists():
+                logger.warning(f"TR_ID mapping file not found: {self._TR_ID_MAPPING_FILE}")
+                self._tr_id_mapping = {}
+                return self._tr_id_mapping
+
+            try:
+                with open(self._TR_ID_MAPPING_FILE, "r", encoding="utf-8") as f:
+                    self._tr_id_mapping = json.load(f)
+                logger.info(f"Loaded TR_ID mapping: {len(self._tr_id_mapping)} APIs")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse TR_ID mapping file: {e}")
+                self._tr_id_mapping = {}
+            except Exception as e:
+                logger.error(f"Failed to load TR_ID mapping file: {e}")
+                self._tr_id_mapping = {}
+
+            return self._tr_id_mapping
+
+    def get_tr_id(self, api_id: str, is_paper_trading: bool = False) -> Optional[str]:
+        """Get TR_ID for given API ID.
+
+        Args:
+            api_id: API identifier (e.g., "인증-001", "국내주식-008")
+            is_paper_trading: If True, return paper trading TR_ID; otherwise real trading TR_ID
+
+        Returns:
+            Optional[str]: TR_ID or None if not found
+
+        Raises:
+            ValueError: If API ID is not found in mapping
+        """
+        mapping = self._load_tr_id_mapping()
+
+        if api_id not in mapping:
+            raise ValueError(f"API ID '{api_id}' not found in TR_ID mapping")
+
+        api_info = mapping[api_id]
+
+        if is_paper_trading:
+            tr_id = api_info.get("paper_tr_id", "")
+            if tr_id == "모의투자 미지원":
+                logger.warning(f"API '{api_id}' ({api_info.get('name')}) not supported in paper trading")
+                return None
+            return tr_id or None
+        else:
+            return api_info.get("real_tr_id") or None
+
+    def _get_headers(self, tr_id: Optional[str] = None, include_token: bool = True) -> dict:
+        """요청 헤더 생성
+
+        Args:
+            tr_id: TR_ID for KIS OpenAPI (optional)
+            include_token: Whether to include authorization token
+
+        Returns:
+            dict: HTTP headers
+        """
         headers = {
             "Content-Type": "application/json; charset=utf-8",
             "appkey": self.config.kis_app_key,
@@ -126,6 +200,9 @@ class KISRestClient:
         if include_token:
             token = self.token_manager.get_token()
             headers["authorization"] = f"Bearer {token.access_token}"
+
+        if tr_id:
+            headers["tr_id"] = tr_id
 
         return headers
 
@@ -280,14 +357,10 @@ class KISRestClient:
             "CANO": order.account_id[:8],  # 계좌번호 (앞 8자)
             "ACNT_PRDT_CD": order.account_id[8:],  # 계좌상품코드 (뒤 2자)
             "PDNO": order.symbol,  # 종목코드
-            "ORD_DVSN": "01"
-            if order.side == OrderSide.BUY
-            else "02",  # 주문구분 (01: 매수, 02: 매도)
+            "SLL_BK_DVSN_CD": "01" if order.side == OrderSide.BUY else "02",  # 매도매수구분 (01: 매수, 02: 매도)
             "ORD_QTY": str(order.qty),  # 주문수량
             "ORD_UNPR": str(order.price) if order.price else "",  # 주문가격 (지정가만)
-            "ORD_DVSN": "01"
-            if order.order_type == OrderType.MARKET
-            else "00",  # 주문구분 (00: 지정가, 01: 시장가)
+            "ORD_DVSN": "01" if order.order_type == OrderType.MARKET else "00",  # 주문구분 (00: 지정가, 01: 시장가)
         }
 
         # 해시키 생성
