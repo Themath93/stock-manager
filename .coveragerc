@@ -1,0 +1,12 @@
+[coverage:run]
+source =
+    scripts/generate_api_docs.py
+    scripts/validate_docs.py
+omit =
+    */tests/*
+    */__pycache__/*
+
+[coverage:report]
+precision = 2
+show_missing = True
+skip_covered = False
