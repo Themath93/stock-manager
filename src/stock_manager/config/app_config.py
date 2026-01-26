@@ -6,7 +6,7 @@ KIS, Slack, 공통 설정을 통합 관리합니다.
 from enum import Enum
 from typing import Optional
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -19,6 +19,8 @@ class Mode(str, Enum):
 
 class AppConfig(BaseSettings):
     """Stock Manager 통합 설정"""
+
+    model_config = ConfigDict(env_file=".env", case_sensitive=False)
 
     # ===== KIS 설정 =====
     # 환경 모드
@@ -62,11 +64,18 @@ class AppConfig(BaseSettings):
     log_level: str = Field(default="INFO", description="로그 레벨")
 
     # 계좌 ID (선택사항)
-    account_id: Optional[str] = Field(None, description="계좌 ID")
+    # TASK-001: SPEC-BACKEND-API-001-P3 Milestone 1 - Add account_id validation
+    account_id: Optional[str] = Field(None, description="계좌 ID (10 digit numeric)")
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    @field_validator("account_id")
+    @classmethod
+    def validate_account_id(cls, v: Optional[str]) -> Optional[str]:
+        """Validate account_id format (10 digit numeric)"""
+        if v is None:
+            return v
+        if len(v) != 10 or not v.isdigit():
+            raise ValueError("account_id must be exactly 10 digits")
+        return v
 
     # ===== KIS URL 헬퍼 메서드 =====
     def get_kis_rest_base_url(self) -> str:

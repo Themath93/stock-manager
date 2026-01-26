@@ -4,13 +4,13 @@ Port/Adapter 패턴의 구현체로 BrokerPort 인터페이스를 구현합니�
 """
 
 import logging
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 from ..port.broker_port import (
     APIError,
+    AuthenticationError,
     AuthenticationToken,
     BrokerPort,
-    ConnectionError,
     FillEvent,
     Order,
     OrderRequest,
@@ -19,6 +19,7 @@ from ..port.broker_port import (
 from .kis_config import KISConfig
 from .kis_rest_client import KISRestClient
 from .kis_websocket_client import KISWebSocketClient
+from ....utils.security import mask_account_id
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,28 @@ logger = logging.getLogger(__name__)
 class KISBrokerAdapter(BrokerPort):
     """한국투자증권 OpenAPI 브로커 어댑터"""
 
-    def __init__(self, config: KISConfig):
+    # TASK-002: SPEC-BACKEND-API-001-P3 Milestone 1 - Add account_id parameter
+    def __init__(self, config: KISConfig, account_id: str):
+        """Initialize KISBrokerAdapter with config and account_id.
+
+        Args:
+            config: KIS configuration
+            account_id: 10-digit account ID for trading
+
+        Raises:
+            ValueError: If account_id is None or empty
+        """
+        if not account_id:
+            raise ValueError("account_id is required and cannot be None or empty")
+
         self.config = config
+        self.account_id = account_id
         self.rest_client = KISRestClient(config)
-        self.ws_client: KISWebSocketClient | None = None
-        self._approval_key: str | None = None
+        self.ws_client: Optional[KISWebSocketClient] = None
+        self._approval_key: Optional[str] = None
         self._initialized = False
+
+        logger.info(f"KISBrokerAdapter initialized with account_id: {mask_account_id(account_id)}")
 
     # TAG-002: SPEC-BACKEND-API-001 ED-002 WebSocket 초기화
     def _initialize_websocket(self) -> None:
@@ -78,14 +95,27 @@ class KISBrokerAdapter(BrokerPort):
         logger.info(f"Order placed successfully: {broker_order_id}")
         return broker_order_id
 
+    # TASK-003: SPEC-BACKEND-API-001-P3 Milestone 1 - Implement cancel_order
     def cancel_order(self, broker_order_id: str) -> bool:
-        """주문 취소"""
-        logger.info(f"Cancelling order: {broker_order_id}")
-        # account_id 파라미터 필요 (TODO: 개선 필요)
-        # 현재는 임시 구현
-        success = False
-        logger.info(f"Order cancelled: {success}")
-        return success
+        """주문 취소
+
+        Args:
+            broker_order_id: 취소할 주문 ID
+
+        Returns:
+            bool: 취소 성공 여부
+
+        Raises:
+            APIError: 취소 실패 시
+        """
+        logger.info(f"Cancelling order: {broker_order_id} for account: {mask_account_id(self.account_id)}")
+        try:
+            success = self.rest_client.cancel_order(broker_order_id, self.account_id)
+            logger.info(f"Order cancelled: {broker_order_id}, success: {success}")
+            return success
+        except Exception as e:
+            logger.error(f"Failed to cancel order {broker_order_id}: {e}")
+            raise APIError(f"Cancel order failed: {e}")
 
     def get_orders(self, account_id: str) -> List[Order]:
         """주문 목록 조회"""

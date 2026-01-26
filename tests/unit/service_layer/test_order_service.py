@@ -5,18 +5,17 @@ Unit tests for OrderService
 import pytest
 from decimal import Decimal
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from stock_manager.service_layer.order_service import (
     OrderService,
     OrderStatus,
-    OrderError,
     OrderStatusError,
-    IdempotencyConflictError,
     RiskViolationError,
     RiskService,
 )
 from stock_manager.domain.order import Order, OrderRequest
+from stock_manager.config.app_config import AppConfig
 
 
 class TestRiskService:
@@ -323,9 +322,20 @@ class TestOrderService:
         return db
 
     @pytest.fixture
-    def order_service(self, mock_broker, db_connection):
+    def app_config(self):
+        """테스트용 AppConfig"""
+        return AppConfig(
+            kis_app_key="test_key",
+            kis_app_secret="test_secret",
+            slack_bot_token="test_token",
+            slack_channel_id="test_channel",
+            account_id="1234567890",
+        )
+
+    @pytest.fixture
+    def order_service(self, mock_broker, db_connection, app_config):
         """테스트용 OrderService"""
-        return OrderService(mock_broker, db_connection)
+        return OrderService(mock_broker, db_connection, app_config)
 
     def test_create_order_success(self, order_service, db_connection):
         """주문 생성 성공 테스트"""
@@ -729,6 +739,7 @@ class TestOrderService:
             updated_at=datetime.now(),
         )
         order_service._get_order_from_db = Mock(return_value=order)
+        # Remove mock to let actual validation logic run
 
         # FILLED → PARTIAL (되돌리기, 불허용)
         with pytest.raises(OrderStatusError):

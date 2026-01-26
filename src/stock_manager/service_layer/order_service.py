@@ -6,10 +6,9 @@ Order Service
 
 import logging
 from typing import List, Optional
-from datetime import datetime
 from decimal import Decimal
-from uuid import uuid4
 
+from ..config.app_config import AppConfig
 from ..domain.order import (
     Order,
     Fill,
@@ -22,6 +21,7 @@ from ..adapters.broker.port import (
     OrderSide,
     OrderType,
 )
+from ..utils.security import mask_account_id
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +76,27 @@ class OrderError(Exception):
 class OrderService:
     """주문 서비스"""
 
-    def __init__(self, broker: BrokerPort, db_connection):
+    # TASK-004: SPEC-BACKEND-API-001-P3 Milestone 1 - Add AppConfig parameter
+    def __init__(self, broker: BrokerPort, db_connection, config: AppConfig):
+        """Initialize OrderService with broker, database connection, and config.
+
+        Args:
+            broker: Broker adapter for trading operations
+            db_connection: Database connection for persistence
+            config: Application configuration including account_id
+
+        Raises:
+            ValueError: If config.account_id is None
+        """
+        if not config.account_id:
+            raise ValueError("config.account_id is required")
+
         self.broker = broker
         self.db = db_connection
+        self.config = config
         self.risk_service = RiskService(db_connection)  # 리스크 서비스 초기화
+
+        logger.info(f"OrderService initialized with account_id: {mask_account_id(config.account_id)}")
 
     def create_order(self, request: OrderRequest) -> Order:
         """주문 생성 (idempotency key 중복 검사 + 리스크 검증 포함)
@@ -530,13 +547,14 @@ class OrderService:
             )
             self.db.commit()
 
+    # TASK-004: SPEC-BACKEND-API-001-P3 Milestone 1 - Use config.account_id
     def _to_broker_order_request(self, order: Order):
         """Order를 BrokerPort.OrderRequest로 변환"""
         # BrokerPort에서 OrderSide/OrderType import
-        from ..adapters.broker.port import OrderSide, OrderType, OrderRequest
+        from ..adapters.broker.port import OrderSide, OrderRequest
 
         return OrderRequest(
-            account_id="0000000000",  # TODO: 실제 계좌 ID
+            account_id=self.config.account_id,
             symbol=order.symbol,
             side=OrderSide(order.side),
             order_type=OrderType(order.order_type),
@@ -591,10 +609,9 @@ class OrderService:
 
         for order in orders:
             try:
+                # TASK-005: SPEC-BACKEND-API-001-P3 Milestone 1 - Use config.account_id
                 # 브로커에서 주문 상태 조회
-                broker_orders = self.broker.get_orders(
-                    account_id="0000000000"
-                )  # TODO: 실제 계좌 ID
+                broker_orders = self.broker.get_orders(account_id=self.config.account_id)
                 broker_order_map = {
                     o.broker_order_id: o for o in broker_orders if o.broker_order_id
                 }
