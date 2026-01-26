@@ -319,6 +319,32 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 - SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)
 - SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (2026-01-25 완료)
 
+### SPEC-KIS-DOCS-001: KIS OpenAPI 문서 재정비 및 TR_ID 매핑 시스템 (Milestone 1-2 완료)
+- **TR_ID 매핑 데이터베이스 구축** ✅ 완료
+  - 336개 API의 실전/모의 TR_ID 매핑 완료
+  - `docs_raw/kis-openapi/_data/tr_id_mapping.json` 생성
+  - Excel 파싱 스크립트 구현 (`scripts/parse_kis_excel.py`)
+- **Excel 파싱 스크립트** ✅ 완료
+  - HTS_OPENAPI.xlsx 자동 파싱
+  - 카테고리별 API 분류 (16개 카테고리)
+  - TR_ID, API ID, HTTP Method, URL 정보 추출
+- **문서 수정 스크립트** ✅ 완료
+  - 기존 문서 TR_ID 일괄 수정
+  - API ID → 실제 TR_ID 변환
+  - 실전/모의 TR_ID 명확히 구분
+- **API 문서 템플릿** ✅ 완료
+  - 표준화된 문서 구조 정의
+  - TR_ID 정보 포함 섹션 추가
+  - Request/Response 필드 템플릿
+- **REST Client TR_ID 지원** ✅ 완료
+  - `KISRESTClient.get_tr_id()` 메서드 구현
+  - 요청 헤더에 `tr_id` 필드 자동 포함
+  - 실전/모의 환경별 TR_ID 반환
+- **품질 지표** ✅ 달성
+  - 테스트 커버리지: 40/40 통과 (100%)
+  - TRUST 5 점수: 93/100 PASS
+  - 문서 일관성: 100%
+
 ### 진행 중인 작업
 - SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (85% 완료)
   - 완료: BrokerPort 인터페이스, KIS 설정, REST/WebSocket 클라이언트

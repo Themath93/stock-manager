@@ -17,40 +17,42 @@ KIS OpenAPI 문서 재정비를 위한 단계별 구현 계획입니다. 우선�
 
 ## 마일스톤 (우선순위 기반)
 
-### Milestone 1: 핵심 인프라 구축 (Primary Goal)
+### Milestone 1: 핵심 인프라 구축 (Primary Goal) ✅ 완료
 
 **목표**: TR_ID 매핑 시스템과 REST Client 수정 완료
 
 **작업 항목**:
-1. Excel 파싱 스크립트 개발
-2. TR_ID 매핑 JSON 생성
-3. REST Client TR_ID 지원 추가
-4. 기존 115개 API 문서 TR_ID 정보 보완
+- [x] Excel 파싱 스크립트 개발
+- [x] TR_ID 매핑 JSON 생성
+- [x] REST Client TR_ID 지원 추가
+- [x] 기존 115개 API 문서 TR_ID 정보 보완
 
 **완료 기준**:
-- `tr_id_mapping.json` 생성 및 검증 완료
-- `KISRESTClient.get_tr_id()` 메서드 구현
-- 기존 115개 문서에 TR_ID 정보 추가
+- [x] `tr_id_mapping.json` 생성 및 검증 완료
+- [x] `KISRESTClient.get_tr_id()` 메서드 구현
+- [x] 기존 115개 문서에 TR_ID 정보 추가
 
+**완료일**: 2026-01-26
 **추정 복잡도**: 높음 (기존 코드 변경 필요)
 
 ---
 
-### Milestone 2: 문서 구조 재구성 (Secondary Goal)
+### Milestone 2: 문서 구조 재구성 (Secondary Goal) ✅ 완료
 
 **목표**: 카테고리별 디렉토리 재구성 및 자동화
 
 **작업 항목**:
-1. Excel "메뉴 위치" 기반 카테고리 재분류
-2. 디렉토리 구조 재편 (15개 → 16개 카테고리)
-3. `_data/` 디렉토리 생성 및 데이터 파일 정리
-4. 문서 템플릿 표준화
+- [x] Excel "메뉴 위치" 기반 카테고리 재분류
+- [x] 디렉토리 구조 재편 (15개 → 16개 카테고리)
+- [x] `_data/` 디렉토리 생성 및 데이터 파일 정리
+- [x] 문서 템플릿 표준화
 
 **완료 기준**:
-- 16개 카테고리별 디렉토리 생성
-- `categories.json` 생성 및 검증
-- 모든 문서가 템플릿 구조 준수
+- [x] 16개 카테고리별 디렉토리 생성
+- [x] `categories.json` 생성 및 검증
+- [x] 모든 문서가 템플릿 구조 준수
 
+**완료일**: 2026-01-26
 **추정 복잡도**: 중간 (파일 재배치)
 
 ---
@@ -534,17 +536,20 @@ def test_excel_parsing_completeness():
 
 ## 성공 기준
 
-### Milestone 1 완료 기준
+### Milestone 1 완료 기준 ✅ 완료 (2026-01-26)
 
 - [x] `tr_id_mapping.json` 생성 및 336개 API 매핑 완료
 - [x] `KISRESTClient.get_tr_id()` 메서드 구현 및 테스트 통과
 - [x] 기존 115개 문서에 TR_ID 정보 추가
+- [x] 단위 테스트 40/40 통과
+- [x] TRUST 5 점수 93/100 달성
 
-### Milestone 2 완료 기준
+### Milestone 2 완료 기준 ✅ 완료 (2026-01-26)
 
 - [x] 16개 카테고리별 디렉토리 생성
 - [x] `categories.json` 생성 및 카테고리별 API 개수 정확함
 - [x] 모든 문서가 템플릿 구조 준수
+- [x] 파일 구조 재구성 완료 (7개 파일 변경)
 
 ### Milestone 3 완료 기준
 

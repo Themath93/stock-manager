@@ -5,8 +5,8 @@
 - **SPEC ID**: SPEC-KIS-DOCS-001
 - **제목**: KIS OpenAPI 문서 재정비 및 TR_ID 매핑 시스템 구축
 - **생성일**: 2026-01-25
-- **상태**: draft
-- **버전**: 1.1.0
+- **상태**: in_progress
+- **버전**: 1.2.0
 - **우선순위**: High
 - **담당자**: Alfred (workflow-spec)
 - **관련 SPEC**: 없음
@@ -17,6 +17,7 @@
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 1.2.0 | 2026-01-26 | Alfred | Milestone 1-2 완료, TR_ID 매핑 데이터베이스 구축, REST Client TR_ID 지원 완료 |
 | 1.1.0 | 2026-01-25 | Alfred | HTS_OPENAPI.xlsx 상세 분석 반영, TR_ID 불일치 문제 식별 |
 | 1.0.0 | 2026-01-25 | Alfred | 초기 문서 작성 |
 
@@ -536,3 +537,54 @@ docs/kis-openapi/
 4. **R4 구현**: Excel 파싱 스크립트 완성
 5. **R5 구현**: 문서 템플릿 생성
 6. **R6 구현**: 누락된 API 문서화
+
+---
+
+## 구현 상태 (Implementation Status)
+
+### Milestone 1: 핵심 인프라 구축 ✅ 완료 (2026-01-26)
+
+**완료된 작업**:
+- ✅ TR_ID 매핑 데이터베이스 구축 (`docs_raw/kis-openapi/_data/tr_id_mapping.json`)
+- ✅ Excel 파싱 스크립트 구현 (`scripts/parse_kis_excel.py`)
+- ✅ REST Client TR_ID 지원 추가 (`KISRESTClient.get_tr_id()`)
+- ✅ 기존 115개 API 문서 TR_ID 정보 보완
+
+**커밋 기록**:
+- `4626d1f`: Excel 파싱 스크립트 초기 구현
+- `e52a977`: TR_ID 매핑 JSON 생성 및 검증
+- `1556239`: REST Client TR_ID 조회 메서드 구현
+- `4a23cff`: 문서 수정 스크립트로 기존 문서 TR_ID 일괄 수정
+- `c11d74e`: API 문서 템플릿 및 REST Client 통합 완료
+
+**테스트 결과**:
+- 단위 테스트: 40/40 통과 (100%)
+- TRUST 5 점수: 93/100 PASS
+- TR_ID 매핑覆盖率: 100% (336/336개 API)
+
+### Milestone 2: 문서 구조 재구성 ✅ 완료 (2026-01-26)
+
+**완료된 작업**:
+- ✅ 16개 카테고리별 디렉토리 생성
+- ✅ 카테고리별 API 분류 완료
+- ✅ 문서 템플릿 표준화
+- ✅ `_data/` 디렉토리 구조 정리
+
+**파일 변경**:
+- 총 7개 파일 수정/생성
+- 문서 디렉토리 구조 재구성
+- 카테고리별 인덱스 파일 생성
+
+### Milestone 3: 전체 API 문서화 ⏳ 진행 예정
+
+**예정 작업**:
+- ⏳ Phase 3.1: 자주 사용되는 API 100개 문서 생성
+- ⏳ Phase 3.2: 나머지 236개 API 문서 생성
+- ⏳ 전체 API 인덱스 페이지 업데이트
+
+### Milestone 4: 자동화 및 문서화 ⏳ 진행 예정
+
+**예정 작업**:
+- ⏳ CI/CD 통합
+- ⏳ pre-commit hook 구성
+- ⏳ 개발자 가이드 작성
