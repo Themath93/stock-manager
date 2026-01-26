@@ -1,0 +1,280 @@
+{
+  "generated_at": "2026-01-26T23:39:55.326034",
+  "version": "1.0.0",
+  "total_apis": 336,
+  "total_categories": 22,
+  "categories": [
+    {
+      "id": "oauth",
+      "name": "oauth",
+      "api_count": 4,
+      "http_methods": {
+        "POST": 4
+      },
+      "communication_types": {
+        "REST": 3,
+        "WEBSOCKET": 1
+      },
+      "index_file": "docs/kis-openapi/api/oauth/index.md"
+    },
+    {
+      "id": "domestic-stock-orders",
+      "name": "[국내주식] 주문/계좌",
+      "api_count": 23,
+      "http_methods": {
+        "GET": 18,
+        "POST": 5
+      },
+      "communication_types": {
+        "REST": 23
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-orders/index.md"
+    },
+    {
+      "id": "domestic-stock-basic",
+      "name": "[국내주식] 기본시세",
+      "api_count": 21,
+      "http_methods": {
+        "GET": 21
+      },
+      "communication_types": {
+        "REST": 21
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-basic/index.md"
+    },
+    {
+      "id": "domestic-stock-elw",
+      "name": "[국내주식] ELW 시세",
+      "api_count": 22,
+      "http_methods": {
+        "GET": 22
+      },
+      "communication_types": {
+        "REST": 22
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-elw/index.md"
+    },
+    {
+      "id": "domestic-stock-sector",
+      "name": "[국내주식] 업종/기타",
+      "api_count": 14,
+      "http_methods": {
+        "GET": 14
+      },
+      "communication_types": {
+        "REST": 14
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-sector/index.md"
+    },
+    {
+      "id": "domestic-stock-info",
+      "name": "[국내주식] 종목정보",
+      "api_count": 26,
+      "http_methods": {
+        "GET": 26
+      },
+      "communication_types": {
+        "REST": 26
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-info/index.md"
+    },
+    {
+      "id": "domestic-stock-analysis",
+      "name": "[국내주식] 시세분석",
+      "api_count": 29,
+      "http_methods": {
+        "GET": 29
+      },
+      "communication_types": {
+        "REST": 28,
+        "WEBSOCKET": 1
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-analysis/index.md"
+    },
+    {
+      "id": "domestic-stock-ranking",
+      "name": "[국내주식] 순위분석",
+      "api_count": 22,
+      "http_methods": {
+        "GET": 22
+      },
+      "communication_types": {
+        "REST": 22
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-ranking/index.md"
+    },
+    {
+      "id": "domestic-stock-realtime",
+      "name": "[국내주식] 실시간시세",
+      "api_count": 29,
+      "http_methods": {
+        "POST": 29
+      },
+      "communication_types": {
+        "WEBSOCKET": 27,
+        "REST": 2
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-realtime/index.md"
+    },
+    {
+      "id": "domestic-futures-orders",
+      "name": "[국내선물옵션] 주문/계좌",
+      "api_count": 14,
+      "http_methods": {
+        "GET": 12,
+        "POST": 2
+      },
+      "communication_types": {
+        "REST": 14
+      },
+      "index_file": "docs/kis-openapi/api/domestic-futures-orders/index.md"
+    },
+    {
+      "id": "domestic-futures-basic",
+      "name": "[국내선물옵션] 기본시세",
+      "api_count": 9,
+      "http_methods": {
+        "GET": 9
+      },
+      "communication_types": {
+        "REST": 9
+      },
+      "index_file": "docs/kis-openapi/api/domestic-futures-basic/index.md"
+    },
+    {
+      "id": "domestic-futures-realtime",
+      "name": "[국내선물옵션] 실시간시세",
+      "api_count": 20,
+      "http_methods": {
+        "POST": 20
+      },
+      "communication_types": {
+        "WEBSOCKET": 20
+      },
+      "index_file": "docs/kis-openapi/api/domestic-futures-realtime/index.md"
+    },
+    {
+      "id": "overseas-stock-orders",
+      "name": "[해외주식] 주문/계좌",
+      "api_count": 18,
+      "http_methods": {
+        "GET": 12,
+        "POST": 6
+      },
+      "communication_types": {
+        "REST": 18
+      },
+      "index_file": "docs/kis-openapi/api/overseas-stock-orders/index.md"
+    },
+    {
+      "id": "overseas-stock-basic",
+      "name": "[해외주식] 기본시세",
+      "api_count": 13,
+      "http_methods": {
+        "GET": 13
+      },
+      "communication_types": {
+        "REST": 13
+      },
+      "index_file": "docs/kis-openapi/api/overseas-stock-basic/index.md"
+    },
+    {
+      "id": "overseas-stock-analysis",
+      "name": "[해외주식] 시세분석",
+      "api_count": 15,
+      "http_methods": {
+        "GET": 15
+      },
+      "communication_types": {
+        "REST": 15
+      },
+      "index_file": "docs/kis-openapi/api/overseas-stock-analysis/index.md"
+    },
+    {
+      "id": "overseas-stock-realtime",
+      "name": "[해외주식] 실시간시세",
+      "api_count": 4,
+      "http_methods": {
+        "POST": 4
+      },
+      "communication_types": {
+        "WEBSOCKET": 4
+      },
+      "index_file": "docs/kis-openapi/api/overseas-stock-realtime/index.md"
+    },
+    {
+      "id": "overseas-futures-orders",
+      "name": "[해외선물옵션] 주문/계좌",
+      "api_count": 11,
+      "http_methods": {
+        "POST": 2,
+        "GET": 9
+      },
+      "communication_types": {
+        "REST": 11
+      },
+      "index_file": "docs/kis-openapi/api/overseas-futures-orders/index.md"
+    },
+    {
+      "id": "overseas-futures-basic",
+      "name": "[해외선물옵션] 기본시세",
+      "api_count": 20,
+      "http_methods": {
+        "GET": 20
+      },
+      "communication_types": {
+        "REST": 20
+      },
+      "index_file": "docs/kis-openapi/api/overseas-futures-basic/index.md"
+    },
+    {
+      "id": "overseas-futures-realtime",
+      "name": "[해외선물옵션]실시간시세",
+      "api_count": 4,
+      "http_methods": {
+        "POST": 4
+      },
+      "communication_types": {
+        "WEBSOCKET": 4
+      },
+      "index_file": "docs/kis-openapi/api/overseas-futures-realtime/index.md"
+    },
+    {
+      "id": "bond-orders",
+      "name": "[장내채권] 주문/계좌",
+      "api_count": 7,
+      "http_methods": {
+        "POST": 3,
+        "GET": 4
+      },
+      "communication_types": {
+        "REST": 7
+      },
+      "index_file": "docs/kis-openapi/api/bond-orders/index.md"
+    },
+    {
+      "id": "bond-basic",
+      "name": "[장내채권] 기본시세",
+      "api_count": 8,
+      "http_methods": {
+        "GET": 8
+      },
+      "communication_types": {
+        "REST": 8
+      },
+      "index_file": "docs/kis-openapi/api/bond-basic/index.md"
+    },
+    {
+      "id": "bond-realtime",
+      "name": "[장내채권] 실시간시세",
+      "api_count": 3,
+      "http_methods": {
+        "POST": 3
+      },
+      "communication_types": {
+        "WEBSOCKET": 3
+      },
+      "index_file": "docs/kis-openapi/api/bond-realtime/index.md"
+    }
+  ]
+}
