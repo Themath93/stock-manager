@@ -319,7 +319,7 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 - SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)
 - SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (2026-01-25 완료)
 
-### SPEC-KIS-DOCS-001: KIS OpenAPI 문서 재정비 및 TR_ID 매핑 시스템 (Milestone 1-2 완료)
+### SPEC-KIS-DOCS-001: KIS OpenAPI 문서 재정비 및 TR_ID 매핑 시스템 (Milestone 3 완료)
 - **TR_ID 매핑 데이터베이스 구축** ✅ 완료
   - 336개 API의 실전/모의 TR_ID 매핑 완료
   - `docs_raw/kis-openapi/_data/tr_id_mapping.json` 생성
@@ -340,8 +340,16 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
   - `KISRESTClient.get_tr_id()` 메서드 구현
   - 요청 헤더에 `tr_id` 필드 자동 포함
   - 실전/모의 환경별 TR_ID 반환
+- **Milestone 3: API 문서 자동 생성 시스템** ✅ 완료
+  - 336개 KIS OpenAPI API 문서 자동 생성 완료
+  - 16개 카테고리별 문서 자동 분류 및 구조화
+  - 표준화된 마크다운 템플릿 기반 문서 생성
+  - TR_ID 매핑 데이터와의 자동 연동
+  - Request/Response 필드 상세 문서화
+  - API별 예제 코드 및 사용법 포함
 - **품질 지표** ✅ 달성
-  - 테스트 커버리지: 40/40 통과 (100%)
+  - API 문서 커버리지: 336/336 (100%)
+  - 테스트 커버리지: 90/90 tests 통과 (87.53%)
   - TRUST 5 점수: 93/100 PASS
   - 문서 일관성: 100%
 
