@@ -1,228 +1,289 @@
 # {{ api_name }}
 
-## 개요
+## API Overview
 
-{{ description }}
+**API ID**: `{{ api_id }}`
+**Category**: {{ category }}
+**HTTP Method**: {{ http_method }}
+**URL**: `{{ url }}`
+**Communication Type**: {{ communication_type }}
 
-## API 정보
+## Description
 
-| 항목 | 내용 |
-|--------|--------|
-| **API 명** | {{ api_name }} |
-| **API ID** | {{ api_id }} |
-| **HTTP Method** | {{ http_method }} |
-| **URL** | {{ url }} |
-| **Domain (실전)** | https://openapi.koreainvestment.com:9443 |
-| **Domain (모의)** | https://openapivts.koreainvestment.com:29443 |
-{% if real_tr_id %}
-| **실전 TR_ID** | `{{ real_tr_id }}` |
-{% endif %}
-{% if paper_tr_id %}
-| **모의 TR_ID** | `{{ paper_tr_id }}` |
-{% else %}
-| **모의 TR_ID** | 미지원 |
-{% endif %}
-{% if hashkey_required %}
-| **Hashkey 필요** | {{ hashkey_required }} |
+{{ api_name }} API for {{ category }}.
+
+## TR_ID Information
+
+| Environment | TR_ID |
+|-------------|-------|
+| Real Trading | `{% if real_tr_id %}{{ real_tr_id }}{% else %}N/A{% endif %}` |
+| Paper Trading | `{% if paper_tr_id and paper_tr_id != "모의투자 미지원" %}{{ paper_tr_id }}{% else %}Not Supported{% endif %}` |
+
+{% if real_tr_id == "" and paper_tr_id == "" %}**Note**: This API does not require a TR_ID.
+{% elif paper_tr_id == "모의투자 미지원" %}**Note**: Paper trading is not supported for this API.
 {% endif %}
 
-{% if unsupported_paper_trading %}
-> **⚠️ 주의:** 이 API는 모의투자에서 지원되지 않습니다.
-{% endif %}
+## Endpoint
 
-## 설명
+```
+{{ http_method }} {{ url }}
+```
 
-{{ detailed_description }}
+## Request Headers
 
-## Request Header
+| Header | Value | Required | Description |
+|--------|-------|----------|-------------|
+| `Authorization` | `Bearer {access_token}` | Yes | OAuth 2.0 access token |
+| `appkey` | `{app_key}` | Yes | KIS OpenAPI app key |
+| `appsecret` | `{app_secret}` | Yes | KIS OpenAPI app secret |
+| `tr_id` | `{% if real_tr_id %}{{ real_tr_id }}{% else %}N/A{% endif %}` | Conditional | TR_ID for real trading |
+| `tr_id` | `{% if paper_tr_id and paper_tr_id != "모의투자 미지원" %}{{ paper_tr_id }}{% else %}N/A{% endif %}` | Conditional | TR_ID for paper trading |
+| `custtype` | `P` or `B` | Yes | Customer type (P: Individual, B: Corporate) |
 
-| Element | 한글명 | Type | Required | Description |
-|----------|----------|-------|-----------|-------------|
-| content-type | 컨텐츠타입 | string | Y | application/json; charset=utf-8 |
-| appkey | 앱키 | string | Y | 한국투자증권 홈페이지에서 발급받은 appkey |
-| appsecret | 앱시크릿키 | string | Y | 한국투자증권 홈페이지에서 발급받은 appsecret |
-| authorization | 접근토큰 | string | Y | Bearer {access_token} |
-{% if real_tr_id %}
-| tr_id | TR_ID | string | Y | `{{ real_tr_id }}` (실전) |
-{% endif %}
-{% if paper_tr_id %}
-| | | | | `{{ paper_tr_id }}` (모의) |
-{% endif %}
-{% if hashkey_required %}
-| hashkey | 해시키 | string | N | POST 요청 시 본문 해시값 (보안 강화용) |
-{% endif %}
+{% if http_method in ["GET", "POST"] %}
 
-{% if request_parameters %}
 ## Request Parameters
 
-{% for param in request_parameters %}
-| {{ param.name }} | {{ param.korean_name }} | {{ param.type }} | {{ param.required }} | {{ param.description }} |
-{% endfor %}
+{% if api_id.startswith("국내주식") or api_id.startswith("해외주식") or api_id.startswith("v1_국내주식") %}
+### Required Parameters
+
+| Parameter | Type | Description | Required |
+|-----------|------|-------------|----------|
+| `tr_id` | string | TR_ID (Real: `{% if real_tr_id %}{{ real_tr_id }}{% endif %}`, Paper: `{% if paper_tr_id %}{{ paper_tr_id }}{% endif %}`) | Yes |
+| `CANO` | string | Account number (8 digits) | Conditional |
+| `ACNT_PRDT_CD` | string | Account product code (2 digits) | Conditional |
+| `ETC_TR_ID_PREFIX` | string | TR_ID prefix for multiple TR_IDs | Conditional |
+
+### Optional Parameters
+
+For detailed parameter information, refer to the official KIS OpenAPI documentation.
+
+{% elif api_id.startswith("인증") or api_id == "Hashkey" or api_id.startswith("실시간-") %}
+### Required Parameters
+
+| Parameter | Type | Description | Required |
+|-----------|------|-------------|----------|
+| `grant_type` | string | Grant type for OAuth 2.0 | Conditional |
+| `code` | string | Authorization code | Conditional |
+| `client_id` | string | OAuth 2.0 client ID | Conditional |
+| `client_secret` | string | OAuth 2.0 client secret | Conditional |
+
+### Optional Parameters
+
+For detailed parameter information, refer to the official KIS OpenAPI documentation.
+
+{% else %}
+### Required Parameters
+
+| Parameter | Type | Description | Required |
+|-----------|------|-------------|----------|
+| `tr_id` | string | TR_ID (Real: `{% if real_tr_id %}{{ real_tr_id }}{% endif %}`, Paper: `{% if paper_tr_id %}{{ paper_tr_id }}{% endif %}`) | Yes |
+
+### Optional Parameters
+
+For detailed parameter information, refer to the official KIS OpenAPI documentation.
+
+{% endif %}
+{% else %}
+No parameters required beyond standard authentication headers.
 {% endif %}
 
-{% if request_body_example %}
-## Request Body Example
+## Response
+
+{% if communication_type == "REST" %}
+
+### Response Format (REST)
+
+JSON response format with standard KIS OpenAPI structure.
 
 ```json
-{{ request_body_example }}
+{
+  "rt_cd": "0",
+  "msg_cd": "",
+  "msg1": "Normal processing completed",
+  "output": {
+    // Response data fields
+  }
+}
 ```
-{% endif %}
 
-{% if response_fields %}
-## Response Fields
+### Response Fields
 
-{% for field in response_fields %}
-| {{ field.name }} | {{ field.korean_name }} | {{ field.type }} | {{ field.description }} |
-{% endfor %}
-{% endif %}
+For detailed field information, refer to the official KIS OpenAPI documentation.
 
-{% if response_example %}
-## Response Example
+{% elif communication_type == "WEBSOCKET" %}
+
+### Response Format (WebSocket)
+
+WebSocket real-time data format.
 
 ```json
-{{ response_example }}
+{
+  "tr_id": "{{ real_tr_id }}",
+  "rt_cd": "0",
+  "msg_cd": "",
+  "msg1": "",
+  "output": {
+    // Real-time data fields
+  }
+}
 ```
+
+### Response Fields
+
+For detailed field information, refer to the official KIS OpenAPI documentation.
+
 {% endif %}
 
-## Python 코드 예시
+## Error Handling
+
+### Error Response Format
+
+```json
+{
+  "rt_cd": "1",
+  "msg_cd": "EGW00223",
+  "msg1": "Error message description"
+}
+```
+
+### Common Error Codes
+
+| Error Code | Description | Action |
+|------------|-------------|--------|
+| `EGW00123` | Invalid access token | Refresh access token |
+| `EGW00223` | Invalid request parameters | Check request parameters |
+| `EGW00331` | Rate limit exceeded | Implement retry with exponential backoff |
+| `EGW00415` | Unauthorized access | Check authentication credentials |
+
+## Example Usage
+
+### Python Example
 
 ```python
 import requests
-{% if hashkey_required %}
-import hashlib
+from typing import Dict, Any
 
-def get_hashkey(appkey, appsecret, request_body):
-    """해시키 발급"""
-    url = "https://openapi.koreainvestment.com:9443/uapi/hashkey"
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "appkey": appkey,
-        "appsecret": appsecret
-    }
-
-    response = requests.post(url, headers=headers, json=request_body)
-
-    if response.status_code == 200:
-        return response.json()["HASH"]
-    else:
-        raise Exception(f"해시키 발급 실패: {response.status_code}")
-
+# Configuration
+APP_KEY = "your_app_key"
+APP_SECRET = "your_app_secret"
+ACCESS_TOKEN = "your_access_token"
+BASE_URL = "https://api.koreainvestment.com"
+{% if paper_tr_id and paper_tr_id != "모의투자 미지원" %}
+# Paper Trading
+TR_ID = "{{ paper_tr_id }}"
+{% elif real_tr_id %}
+# Real Trading
+TR_ID = "{{ real_tr_id }}"
+{% else %}
+# No TR_ID required for this API
+TR_ID = None
 {% endif %}
-def {{ function_name }}(access_token, appkey, appsecret{% for param in required_params %}, {{ param.name }}{% endfor %}):
-    """
-    {{ api_description }}
 
-    Args:
-        access_token: 접근 토큰
-        appkey: 앱키
-        appsecret: 앱시크릿키
-{% for param in required_params %}
-        {{ param.name }}: {{ param.description }}
-{% endfor %}
+def make_api_request() -> Dict[str, Any]:
+    """
+    Make API request to {{ api_name }}.
 
     Returns:
-        dict: API 응답 결과
+        Dict[str, Any]: API response data
     """
-    url = "{{ full_url }}"
-
-{% if request_body_build %}
-    # 요청 본문 구성
-    request_body = {
-{% for line in request_body_build %}
-        {{ line }}
-{% endfor %}
-    }
-
-    # 해시키 생성
-    hashkey = get_hashkey(appkey, appsecret, request_body)
+    url = f"{BASE_URL}{{ url }}"
 
     headers = {
-        "Authorization": f"Bearer {access_token}",
-        "appkey": appkey,
-        "appsecret": appsecret,
-        "Content-Type": "application/json; charset=utf-8",
-        "tr_id": "{{ real_tr_id }}"{% if hashkey_required %},
-        "hashkey": hashkey
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "appkey": APP_KEY,
+        "appsecret": APP_SECRET,
+        "custtype": "P",  # P: Individual, B: Corporate
     }
-{% else %}
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "appkey": appkey,
-        "appsecret": appsecret,
-        "Content-Type": "application/json; charset=utf-8",
-        "tr_id": "{{ real_tr_id }}"
-    }
-{% endif %}
 
-{% if http_method == "GET" %}
+    {% if real_tr_id or paper_tr_id %}
+    # Add TR_ID if required
+    if TR_ID:
+        headers["tr_id"] = TR_ID
+    {% endif %}
+
+    {% if http_method == "GET" %}
     params = {
-{% for param in query_params %}
-        "{{ param.name }}": {{ param.name }},
-{% endfor %}
+        # Add required parameters here
+        # Example: "CANO": "12345678",
+        #          "ACNT_PRDT_CD": "01",
     }
 
     response = requests.get(url, headers=headers, params=params)
-{% else %}
-    {% if request_body_build %}
-    response = requests.post(url, headers=headers, json=request_body)
+
+    {% elif http_method == "POST" %}
+    data = {
+        # Add required parameters here
+    }
+
+    response = requests.post(url, headers=headers, json=data)
+
     {% else %}
     response = requests.post(url, headers=headers)
+
     {% endif %}
-{% endif %}
+    response.raise_for_status()
+    return response.json()
 
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception(f"API 요청 실패: {response.status_code}, {response.text}")
+# Example usage
+if __name__ == "__main__":
+    try:
+        result = make_api_request()
 
-# 사용 예시
-appkey = "PSg5dctL9dKPo727J13Ur405OSXXXXXXXXXX"
-appsecret = "yo2t8zS68zpdjGuWvFyM9VikjXE0i0CbgPEamnqPA00G0bIfrdfQb2RUD1xP7SqatQXr1cD1fGUNsb78MMXoq6o4lAYt9YTtHAjbMoFy+c72kbq5owQY1Pvp39/x6ejpJlXCj7gE3yVOB/h25Hvl+URmYeBTfrQeOqIAOYc/OIXXXXXXXXXX"
+        if result.get("rt_cd") == "0":
+            print("API call successful")
+            print(f"Response: {result.get('output')}")
+        else:
+            print(f"API error: {result.get('msg1')}")
+            print(f"Error code: {result.get('msg_cd')}")
 
-# 접근 토큰 발급
-token_response = requests.post(
-    "https://openapi.koreainvestment.com:9443/oauth2/tokenP",
-    headers={"Content-Type": "application/json"},
-    json={
-        "grant_type": "client_credentials",
-        "appkey": appkey,
-        "appsecret": appsecret
-    }
-)
-access_token = token_response.json()["access_token"]
-
-# API 호출
-{% if call_example %}
-{{ call_example }}
-{% else %}
-result = {{ function_name }}(
-    access_token,
-    appkey,
-    appsecret
-    {% for param in required_params %}
-    ,
-    {{ param.name }}="{{ param.value }}"
-    {% endfor %}
-)
-
-print(result)
-{% endif %}
+    except requests.exceptions.RequestException as e:
+        print(f"Request failed: {e}")
 ```
 
-## 참고사항
+### Using KISRestClient (Recommended)
 
-{% for note in notes %}
-- {{ note }}
-{% endfor %}
+```python
+from stock_manager.adapters.broker.kis import KISConfig, KISRestClient
 
-## 관련 API
+# Configure client
+config = KISConfig(
+    kis_app_key="your_app_key",
+    kis_app_secret="your_app_secret",
+)
 
+client = KISRestClient(config)
+
+# Get TR_ID automatically
+tr_id = client.get_tr_id(
+    api_id="{{ api_id }}",
+    is_paper_trading=False  # Set to True for paper trading
+)
+
+# Make request
+response = client.make_request(
+    method="{{ http_method.lower() }}",
+    url="{{ url }}",
+    params={...}  # Request parameters
+)
+```
+
+## Notes
+
+- This API requires valid OAuth 2.0 authentication credentials (app_key, app_secret, access_token)
+- TR_ID must be set according to the trading environment (real or paper)
+- For detailed parameter specifications and response fields, refer to the [official KIS OpenAPI documentation](https://apiportal.koreainvestment.com/)
+- Rate limiting: Implement exponential backoff retry logic for rate limit errors
+- Token refresh: Access tokens expire periodically; implement automatic token refresh
+
+## Related APIs
+
+{% if related_apis %}
 {% for related_api in related_apis %}
-- [{{ related_api.name }}](../{{ related_api.category }}/{{ related_api.file }})
+- [{{ related_api.name }}](../{{ related_api.category_slug }}/{{ related_api.id }}.md) - `{{ related_api.api_id }}`
 {% endfor %}
+{% endif %}
 
-## 변경 이력
+## Category
 
-| 날짜 | 변경 내용 |
-|------|----------|
-| {{ initial_date }} | 초기 문서 작성 |
+[Back to {{ category }}](../index.md) | [API Documentation Index](../../index.md)
