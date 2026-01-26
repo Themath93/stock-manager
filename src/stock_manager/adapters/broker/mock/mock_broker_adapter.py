@@ -110,6 +110,11 @@ class MockBrokerAdapter(BrokerPort):
         logger.info(f"Mock fetching cash for account: {account_id}")
         return self._cash
 
+    def get_stock_balance(self, account_id: str) -> list[dict]:
+        """주식잔고 조회 (Mock)"""
+        logger.info(f"Mock fetching stock balance for account: {account_id}")
+        return []
+
     def subscribe_quotes(self, symbols: List[str], callback: Callable[[QuoteEvent], None]):
         """호가 구독 (Mock)"""
         logger.info(f"Mock subscribing to quotes for {len(symbols)} symbols")

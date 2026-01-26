@@ -24,7 +24,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Set, Tuple
+from typing import Dict, Any, List, Set, Tuple, TypedDict
 
 # Configure logging
 logging.basicConfig(
@@ -66,6 +66,26 @@ CATEGORY_SLUGS = {
 }
 
 
+class CategoryResults(TypedDict):
+    """Type for category validation results."""
+    total: int
+    documented: int
+    missing: List[str]
+    content_errors: List[str]
+
+
+class ValidationResult(TypedDict):
+    """Type for overall validation results."""
+    total_apis: int
+    documented_apis: int
+    missing_files: List[str]
+    empty_files: List[str]
+    content_errors: List[str]
+    broken_links: List[str]
+    categories: Dict[str, CategoryResults]
+
+
+
 def sanitize_filename(api_id: str) -> str:
     """Sanitize API ID for use as filename."""
     sanitized = re.sub(r'[^\w\-]', '-', api_id)
@@ -85,7 +105,7 @@ def load_tr_id_mapping() -> Dict[str, Any]:
 
 def categorize_apis(tr_id_mapping: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     """Categorize APIs by their category slug."""
-    categorized = {}
+    categorized: Dict[str, List[Dict[str, Any]]] = {}
 
     for api_id, api_data in tr_id_mapping.items():
         category = api_data["category"]
@@ -113,7 +133,7 @@ def validate_file_exists(
     Returns:
         Tuple of (is_valid, list of error messages)
     """
-    errors = []
+    errors: List[str] = []
 
     if not file_path.exists():
         errors.append(f"{file_type} file missing: {file_path}")
@@ -136,7 +156,7 @@ def validate_markdown_content(
     Returns:
         List of validation errors
     """
-    errors = []
+    errors: List[str] = []
 
     # Required sections
     required_sections = [
@@ -184,7 +204,7 @@ def extract_links(content: str, file_path: Path) -> List[Tuple[str, int]]:
     Returns:
         List of (link_url, line_number) tuples
     """
-    links = []
+    links: List[Tuple[str, int]] = []
     lines = content.split('\n')
 
     link_pattern = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
@@ -208,7 +228,7 @@ def validate_internal_link(
     Returns:
         List of error messages
     """
-    errors = []
+    errors: List[str] = []
 
     # Skip external links
     if link.startswith('http://') or link.startswith('https://'):
@@ -239,7 +259,7 @@ class DocumentationValidator:
 
     def __init__(self, detailed: bool = False):
         self.detailed = detailed
-        self.results = {
+        self.results: ValidationResult = {
             "total_apis": 0,
             "documented_apis": 0,
             "missing_files": [],
@@ -257,7 +277,7 @@ class DocumentationValidator:
         """Validate all APIs in a category."""
         logger.info(f"Validating category: {category_slug}")
 
-        category_results = {
+        category_results: CategoryResults = {
             "total": len(apis),
             "documented": 0,
             "missing": [],
@@ -343,7 +363,7 @@ class DocumentationValidator:
         logger.info("=" * 60)
 
         # Overall statistics
-        logger.info(f"\nOverall Statistics:")
+        logger.info("\nOverall Statistics:")
         logger.info(f"  Total APIs: {self.results['total_apis']}")
         logger.info(f"  Documented APIs: {self.results['documented_apis']}")
         logger.info(f"  Coverage: {self.results['documented_apis'] / self.results['total_apis'] * 100:.1f}%")
@@ -379,7 +399,7 @@ class DocumentationValidator:
 
         # Category breakdown
         if self.results["categories"]:
-            logger.info(f"\nCategory Breakdown:")
+            logger.info("\nCategory Breakdown:")
             for category_slug, cat_results in sorted(self.results["categories"].items()):
                 logger.info(f"  {category_slug}:")
                 logger.info(f"    Documented: {cat_results['documented']}/{cat_results['total']}")

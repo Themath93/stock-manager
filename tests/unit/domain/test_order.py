@@ -6,7 +6,7 @@ import pytest
 from decimal import Decimal
 from datetime import datetime
 
-from src.stock_manager.domain.order import Order, Fill, OrderRequest, OrderStatus
+from stock_manager.domain.order import Order, Fill, OrderRequest, OrderStatus
 
 
 class TestOrderStatus:

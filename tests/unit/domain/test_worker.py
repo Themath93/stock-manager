@@ -6,7 +6,7 @@ import pytest
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.stock_manager.domain.worker import (
+from stock_manager.domain.worker import (
     WorkerStatus,
     StockLock,
     WorkerProcess,

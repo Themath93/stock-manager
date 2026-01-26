@@ -450,6 +450,9 @@ class OrderService:
         RETURNING id
         """
 
+        # Handle both OrderSide enum and string values
+        side_value = fill_event.side.value if isinstance(fill_event.side, OrderSide) else fill_event.side
+
         with self.db.cursor() as cursor:
             cursor.execute(
                 query,
@@ -457,7 +460,7 @@ class OrderService:
                     order_id,
                     fill_event.broker_order_id,
                     fill_event.symbol,
-                    fill_event.side.value,
+                    side_value,
                     str(fill_event.qty),
                     str(fill_event.price),
                     fill_event.filled_at,

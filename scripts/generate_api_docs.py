@@ -29,7 +29,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from jinja2 import Environment, FileSystemLoader, Template
@@ -180,7 +180,7 @@ def categorize_apis(tr_id_mapping: Dict[str, Any]) -> Dict[str, List[Dict[str, A
     Returns:
         Dict[str, List[Dict]]: Categorized APIs
     """
-    categorized = {}
+    categorized: Dict[str, List[Dict[str, Any]]] = {}
 
     for api_id, api_data in tr_id_mapping.items():
         category = api_data["category"]
@@ -316,7 +316,7 @@ def generate_api_docs(
         filtered_apis = categorized_apis
 
     # Statistics
-    stats = {
+    stats: Dict[str, Any] = {
         "total_apis": 0,
         "total_categories": len(filtered_apis),
         "categories": {},
@@ -445,13 +445,13 @@ def generate_api_summary(
         apis = categorized_apis.get(category_slug, [])
         
         # Count by HTTP method
-        method_counts = {}
+        method_counts: Dict[str, int] = {}
         for api in apis:
             method = api["http_method"]
             method_counts[method] = method_counts.get(method, 0) + 1
 
         # Count by communication type
-        comm_counts = {}
+        comm_counts: Dict[str, int] = {}
         for api in apis:
             comm = api["communication_type"]
             comm_counts[comm] = comm_counts.get(comm, 0) + 1
@@ -487,7 +487,7 @@ def validate_docs() -> bool:
     categorized_apis = categorize_apis(tr_id_mapping)
 
     # Validation results
-    validation_results = {
+    validation_results: Dict[str, Any] = {
         "total_apis": len(tr_id_mapping),
         "documented_apis": 0,
         "missing_apis": [],
@@ -519,7 +519,7 @@ def validate_docs() -> bool:
             validation_results["errors"].append(f"Missing category index: {index_file}")
 
     # Print validation results
-    logger.info(f"Validation Results:")
+    logger.info("Validation Results:")
     logger.info(f"  Total APIs: {validation_results['total_apis']}")
     logger.info(f"  Documented APIs: {validation_results['documented_apis']}")
     logger.info(f"  Missing APIs: {len(validation_results['missing_apis'])}")
@@ -533,7 +533,7 @@ def validate_docs() -> bool:
             logger.warning(f"  ... and {len(validation_results['missing_apis']) - 5} more")
 
     if validation_results["errors"]:
-        logger.error(f"Validation errors found:")
+        logger.error("Validation errors found:")
         for error in validation_results["errors"]:
             logger.error(f"  - {error}")
 
