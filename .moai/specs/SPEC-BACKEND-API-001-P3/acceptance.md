@@ -553,6 +553,7 @@ Scenario: 토큰 만료 시 자동 갱신 및 재시도
 - [x] NotImplementedError 없음
 - [x] TODO 코멘트 모두 제거
 - [x] 타입 힌트 100% 적용
+- [x] Milestone 1 완료 (account_id 저장 및 cancel_order 구현)
 
 ### 테스트 완료
 - [ ] 단위 테스트 90%+ 커버리지

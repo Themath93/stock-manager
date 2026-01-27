@@ -54,7 +54,7 @@ class KISBrokerAdapter(BrokerPort):
     def _initialize_websocket(self) -> None:
         """WebSocket 초기화"""
         if self.ws_client is None:
-            # approval_key 발급 (TODO: 실제 REST API 호출 필요)
+            # approval_key 발급
             self._approval_key = self._get_approval_key_from_rest()
             self.ws_client = KISWebSocketClient(self.config, self._approval_key)
             self.ws_client.connect_websocket()

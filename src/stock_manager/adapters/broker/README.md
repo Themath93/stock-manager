@@ -54,8 +54,8 @@ from src.stock_manager.adapters.broker.port import (
 # 1. 설정 로드
 config = KISConfig()
 
-# 2. 브로커 어댑터 초기화
-broker = KISBrokerAdapter(config)
+# 2. 브로커 어댑터 초기화 (account_id 파라미터 필요)
+broker = KISBrokerAdapter(config, account_id="1234567890")
 
 # 3. 인증
 token = broker.authenticate()

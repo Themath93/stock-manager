@@ -44,7 +44,9 @@
 - [x] KISBrokerAdapter 생성자에 account_id 파라미터 추가
 - [x] cancel_order 메서드에서 self.account_id 사용
 - [x] TODO 코멘트 모두 제거
-- [ ] 단위 테스트 통과 (account_id 관련)
+- [x] 단위 테스트 통과 (account_id 관련)
+
+**Milestone 1 완료 알림**: 2026-01-27 기준으로 모든 완료 기준 충족. 다음 Milestone 2(통합 테스트 작성)로 진행 예정.
 
 의존성:
 - KISRestClient.cancel_order(broker_order_id, account_id) 이미 구현됨

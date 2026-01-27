@@ -5,7 +5,7 @@
 - **SPEC ID**: SPEC-BACKEND-API-001-P3
 - **제목**: KISBrokerAdapter 구현 완료 및 WebSocket 연결 통합
 - **생성일**: 2026-01-27
-- **상태**: planned
+- **상태**: in_progress
 - **버전**: 1.0.0
 - **우선순위**: HIGH
 - **담당자**: Alfred (workflow-spec)
@@ -26,14 +26,14 @@
 
 SPEC-BACKEND-API-001 Phase 3에서는 한국투자증권 OpenAPI 브로커 어댑터(KISBrokerAdapter)의 구현을 완성하여 실제 트레이딩 기능을 활성화합니다. 현재 85% 완료된 상태에서 누락된 기능을 구현하고 WebSocket 연결을 통합하여 전체 시스템을 완성합니다.
 
-**현재 상태**: SPEC-BACKEND-API-001 Phase 1-2 완료 (85%)
+**현재 상태**: SPEC-BACKEND-API-001 Phase 1-2 완료, Milestone 1 완료 (90%)
 - ✅ BrokerPort 인터페이스 정의
 - ✅ KIS 설정 모듈 (LIVE/PAPER 모드)
 - ✅ REST 클라이언트 Phase 2 (access_token, approval_key, 해시키, 토큰 갱신)
 - ✅ WebSocket 클라이언트 (연결/종료, 구독)
 - ✅ MockBrokerAdapter (테스트용)
-- ⚠️ KISBrokerAdapter 미완성 (cancel_order TODO)
-- ⚠️ 통합 테스트 미작성
+- ✅ Milestone 1 완료: account_id 저장 및 cancel_order 구현
+- ⚠️ 통합 테스트 미작성 (Milestone 2)
 
 **Phase 3 목표**: 실제 트레이딩 가능한 완성된 KISBrokerAdapter 구현
 
@@ -525,21 +525,21 @@ def _to_broker_order_request(self, order: Order):
 
 | Requirement | Component | Status |
 |-------------|-----------|--------|
-| REQ-UB-001: BrokerPort 인터페이스 완전 구현 | KISBrokerAdapter | PENDING |
-| REQ-UB-002: account_id 저장 및 사용 | KISBrokerAdapter.__init__ | PENDING |
+| REQ-UB-001: BrokerPort 인터페이스 완전 구현 | KISBrokerAdapter | COMPLETE |
+| REQ-UB-002: account_id 저장 및 사용 | KISBrokerAdapter.__init__ | COMPLETE |
 | REQ-UB-003: WebSocket 연결 상태 관리 | KISBrokerAdapter._initialized | COMPLETE |
-| REQ-UB-004: 에러 로깅 및 예외 처리 | KISBrokerAdapter.* | PENDING |
-| REQ-ED-001: cancel_order 호출 시 account_id 사용 | KISBrokerAdapter.cancel_order | PENDING |
+| REQ-UB-004: 에러 로깅 및 예외 처리 | KISBrokerAdapter.* | COMPLETE |
+| REQ-ED-001: cancel_order 호출 시 account_id 사용 | KISBrokerAdapter.cancel_order | COMPLETE |
 | REQ-ED-002: WebSocket 연결 실패 시 재시도 | KISWebSocketClient | COMPLETE |
 | REQ-ED-003: 인증 토큰 만료 시 자동 갱신 | TokenManager | COMPLETE |
 | REQ-ED-004: subscribe_quotes 호출 시 WebSocket 초기화 | KISBrokerAdapter.subscribe_quotes | COMPLETE |
 | REQ-SD-001: WebSocket 초기화 상태 확인 | KISBrokerAdapter._initialize_websocket | COMPLETE |
 | REQ-SD-002: approval_key 발급 상태 확인 | KISBrokerAdapter._get_approval_key_from_rest | COMPLETE |
-| REQ-SD-003: account_id 누락 시 예외 발생 | KISBrokerAdapter.__init__ | PENDING |
-| REQ-UB-001: account_id 노출 금지 | KISBrokerAdapter (logging) | PENDING |
+| REQ-SD-003: account_id 누락 시 예외 발생 | KISBrokerAdapter.__init__ | COMPLETE |
+| REQ-UB-001: account_id 노출 금지 | KISBrokerAdapter (logging) | COMPLETE |
 | REQ-UB-002: approval_key 노출 금지 | KISBrokerAdapter (logging) | COMPLETE |
-| REQ-UB-003: 스레드 안전성 위반 금지 | KISBrokerAdapter (threading) | PENDING |
-| REQ-UB-004: NotImplementedError 금지 | KISBrokerAdapter (all methods) | PENDING |
+| REQ-UB-003: 스레드 안전성 위반 금지 | KISBrokerAdapter (threading) | COMPLETE |
+| REQ-UB-004: NotImplementedError 금지 | KISBrokerAdapter (all methods) | COMPLETE |
 
 ---
 

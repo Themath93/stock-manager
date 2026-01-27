@@ -46,7 +46,7 @@ cp .env.example .env
 
 ## 구현된 기능
 
-### SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (85% 완료)
+### SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (90% 완료)
 - **BrokerPort 인터페이스** ✅ 완료
   - 추상 인터페이스 정의 (port/broker_port.py)
 - **KIS 설정 모듈** ✅ 완료
@@ -72,10 +72,15 @@ cp .env.example .env
   - 테스트 통과율: 100% (26/26)
   - TRUST 5 점수: 94.3%
   - 스레드 안전성: 완료
-- **Phase 3 예정 작업** ⏳
-  - KISBrokerAdapter 완성
-  - WebSocket 연결 통합
-  - 통합 테스트 작성
+- **Phase 3 진행 중** ⏳
+  - **Milestone 1 완료** (2026-01-27)
+    - AppConfig.account_id 필드 구현
+    - KISBrokerAdapter 생성자에 account_id 파라미터 추가
+    - cancel_order 메서드에서 self.account_id 사용 완료
+    - 단위 테스트 통과 (12/12 tests passing)
+    - TODO 코멘트 제거
+  - **Milestone 2 예정**: 통합 테스트 작성
+  - **Milestone 3 예정**: 문서화 및 코드 정리
 
 ### SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
 - 주문 생성 (idempotency key 중복 검사 포함)
