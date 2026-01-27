@@ -5,8 +5,8 @@
 - **SPEC ID**: SPEC-BACKEND-API-001-P3
 - **제목**: KISBrokerAdapter 구현 완료 및 WebSocket 연결 통합
 - **생성일**: 2026-01-27
-- **상태**: in_progress
-- **버전**: 1.0.0
+- **상태**: in_progress (Milestone 1 Complete, Milestone 2 Planning)
+- **버전**: 1.1.0
 - **우선순위**: HIGH
 - **담당자**: Alfred (workflow-spec)
 - **부모 SPEC**: SPEC-BACKEND-API-001
@@ -18,6 +18,7 @@
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 1.1.0 | 2026-01-27 | Alfred | Milestone 2 통합 테스트 계획 추가 |
 | 1.0.0 | 2026-01-27 | Alfred | 초기 SPEC 작성 |
 
 ---
@@ -26,16 +27,28 @@
 
 SPEC-BACKEND-API-001 Phase 3에서는 한국투자증권 OpenAPI 브로커 어댑터(KISBrokerAdapter)의 구현을 완성하여 실제 트레이딩 기능을 활성화합니다. 현재 85% 완료된 상태에서 누락된 기능을 구현하고 WebSocket 연결을 통합하여 전체 시스템을 완성합니다.
 
-**현재 상태**: SPEC-BACKEND-API-001 Phase 1-2 완료, Milestone 1 완료 (90%)
+**현재 상태**: SPEC-BACKEND-API-001 Phase 1-2 완료, Milestone 1 완료 (100%), Milestone 2 진행 중
 - ✅ BrokerPort 인터페이스 정의
 - ✅ KIS 설정 모듈 (LIVE/PAPER 모드)
 - ✅ REST 클라이언트 Phase 2 (access_token, approval_key, 해시키, 토큰 갱신)
 - ✅ WebSocket 클라이언트 (연결/종료, 구독)
 - ✅ MockBrokerAdapter (테스트용)
 - ✅ Milestone 1 완료: account_id 저장 및 cancel_order 구현
-- ⚠️ 통합 테스트 미작성 (Milestone 2)
+- 🔄 Milestone 2 진행 중: 통합 테스트 작성 (17개 테스트 케이스)
 
 **Phase 3 목표**: 실제 트레이딩 가능한 완성된 KISBrokerAdapter 구현
+
+**Milestone 2 세부 사항**:
+- 통합 테스트 파일: `tests/integration/test_kis_broker_adapter.py`
+- 총 17개 테스트 케이스
+  - 초기화: 2개 (init 성공/실패)
+  - 인증: 2개 (토큰 발급 성공/실패)
+  - 주문 생명주기: 4개 (place_order, cancel_order 성공/실패)
+  - 조회 메서드: 3개 (get_orders, get_cash, get_stock_balance)
+  - WebSocket: 4개 (연결, 구독, 재연결, 종료)
+  - 보안: 2개 (account_id/approval_key 마스킹)
+- 목표 커버리지: 85%
+- 예상 작업 시간: 5시간
 
 ---
 
@@ -142,8 +155,14 @@ SPEC-BACKEND-API-001 Phase 3에서는 한국투자증권 OpenAPI 브로커 어�
 TAG-SPEC-BACKEND-API-001-P3-001: cancel_order 완성
 TAG-SPEC-BACKEND-API-001-P3-002: account_id 저장 및 사용
 TAG-SPEC-BACKEND-API-001-P3-003: WebSocket 연결 통합
-TAG-SPEC-BACKEND-API-001-P3-004: 통합 테스트 작성
+TAG-SPEC-BACKEND-API-001-P3-004: 통합 테스트 작성 (Milestone 2)
 TAG-SPEC-BACKEND-API-001-P3-005: TRUST 5 준수
+TAG-SPEC-BACKEND-API-001-P3-006: 초기화 테스트 (2개 케이스)
+TAG-SPEC-BACKEND-API-001-P3-007: 인증 테스트 (2개 케이스)
+TAG-SPEC-BACKEND-API-001-P3-008: 주문 생명주기 테스트 (4개 케이스)
+TAG-SPEC-BACKEND-API-001-P3-009: 조회 메서드 테스트 (3개 케이스)
+TAG-SPEC-BACKEND-API-001-P3-010: WebSocket 테스트 (4개 케이스)
+TAG-SPEC-BACKEND-API-001-P3-011: 보안 마스킹 테스트 (2개 케이스)
 ```
 
 ### 1. Ubiquitous Requirements (항상 지원)

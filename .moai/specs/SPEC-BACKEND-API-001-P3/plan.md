@@ -56,45 +56,130 @@
 
 ### Secondary Goal (차순위)
 
-**Milestone 2: 통합 테스트 작성**
+**Milestone 2: 통합 테스트 작성 (Integration Tests)**
 
 구현 파일:
 - `tests/integration/test_kis_broker_adapter.py`
 
 작업 내용:
 
-1. **테스트 환경 설정**
-   - Mock KIS API 응답 (httpx.MockTransport)
-   - Mock WebSocket 연결
-   - 테스트용 계좌 ID 설정
+**1. 테스트 환경 설정**
+- Mock KIS API 응답 (httpx.MockTransport)
+- Mock WebSocket 연결
+- 테스트용 계좌 ID 설정
+- 테스트 픽스처 (fixtures) 정의
 
-2. **생명주기 테스트**
-   - authenticate() → 토큰 발급 검증
-   - place_order() → broker_order_id 반환 검증
-   - cancel_order() → 성공/실패 케이스 검증
-   - get_orders(), get_cash(), get_stock_balance() → 데이터 반환 검증
+**2. 테스트 케이스 상세 분해 (총 17개)**
 
-3. **WebSocket 테스트**
-   - connect_websocket() → 연결 성공 검증
-   - subscribe_quotes() → 콜백 등록 검증
-   - subscribe_executions() → 체결 이벤트 수신 검증
-   - disconnect_websocket() → 연결 종료 검증
+**Category 1: 초기화 테스트 (2개 케이스)**
+- `test_kis_broker_adapter_init_success`: 정상 초기화, account_id 저장 확인
+- `test_kis_broker_adapter_init_failure`: account_id=None인 경우 ValueError 발생 확인
 
-4. **에러 케이스 테스트**
-   - 잘못된 broker_order_id로 cancel_order() → False 반환
-   - API 401 에러 → 토큰 자동 갱신 후 재시도
-   - WebSocket 연결 실패 → 재연결 시도
+**Category 2: 인증 테스트 (2개 케이스)**
+- `test_authenticate_success`: 토큰 발급 성공, AuthenticationToken 반환 확인
+- `test_authenticate_failure`: 인증 실패 시 AuthenticationError 발생 확인
+
+**Category 3: 주문 생명주기 테스트 (4개 케이스)**
+- `test_place_order_success`: place_order 정상 동작, broker_order_id 반환 확인
+- `test_place_order_failure`: place_order API 실패 시 예외 처리 확인
+- `test_cancel_order_success`: cancel_order 정상 동작, True 반환 확인
+- `test_cancel_order_failure`: cancel_order API 실패 시 False 반환 확인
+
+**Category 4: 조회 메서드 테스트 (3개 케이스)**
+- `test_get_orders`: 주문 목록 조회, 데이터 형식 확인
+- `test_get_cash`: 예수금 조회, Decimal 반환 확인
+- `test_get_stock_balance`: 주식잔고 조회, 필드 포함 확인
+
+**Category 5: WebSocket 테스트 (4개 케이스)**
+- `test_connect_websocket`: WebSocket 연결 성공, _initialized=True 확인
+- `test_subscribe_quotes`: 호가 구독, 콜백 등록 확인
+- `test_subscribe_executions`: 체결 구독, 이벤트 수신 확인
+- `test_disconnect_websocket`: WebSocket 종료, _initialized=False 확인
+
+**Category 6: 보안 마스킹 테스트 (2개 케이스)**
+- `test_account_id_masking`: account_id 로그 시 "123456****" 마스킹 확인
+- `test_approval_key_masking`: approval_key 로그 시 "abcd1234..." 마스킹 확인
+
+**3. Mock API 응답 스펙**
+
+```python
+# 인증 토큰 응답
+MOCK_TOKEN_RESPONSE = {
+    "access_token": "test_access_token_12345",
+    "token_type": "Bearer",
+    "expires_in": 86400,
+}
+
+# 주문 취소 성공 응답
+MOCK_CANCEL_SUCCESS = {
+    "rt_cd": "0",
+    "msg1": "정상처리 되었습니다.",
+    "ODNO": "ORDER123",
+}
+
+# 예수금 조회 응답
+MOCK_CASH_RESPONSE = {
+    "rt_cd": "0",
+    "output2": {
+        "dnca_tot_amt": "100000000",  # 총 예수금
+        "pchs_amt_smtl_amt": "50000000",  # 주문 가능 금액
+    },
+}
+
+# 주식잔고 조회 응답
+MOCK_BALANCE_RESPONSE = {
+    "rt_cd": "0",
+    "output1": [
+        {
+            "pdno": "005930",  # 종목코드
+            "hldg_qty": "10",  # 보유 수량
+            "pchs_avg_pric": "80000",  # 평균 단가
+        }
+    ],
+}
+```
+
+**4. Given-When-Then 포맷 예시**
+
+```gherkin
+Scenario: 정상적인 주문 취소
+  Given a KISBrokerAdapter instance with account_id "1234567890"
+  And an order was placed with broker_order_id "ORDER123"
+  When cancel_order("ORDER123") is called
+  Then KISRestClient.cancel_order should be called with broker_order_id="ORDER123" and account_id="1234567890"
+  And cancel_order should return True
+  And log should contain "Order cancelled successfully: ORDER123"
+```
 
 완료 기준:
-- [ ] 최소 10개 통합 테스트 케이스 작성
-- [ ] 모든 정상 케이스 통과
-- [ ] 모든 에러 케이스 통과
-- [ ] 테스트 커버리지 85% 이상
+- [ ] 총 17개 통합 테스트 케이스 작성
+  - [ ] 초기화: 2개
+  - [ ] 인증: 2개
+  - [ ] 주문 생명주기: 4개
+  - [ ] 조회 메서드: 3개
+  - [ ] WebSocket: 4개
+  - [ ] 보안: 2개
+- [ ] 모든 정상 케이스 통과 (15개)
+- [ ] 모든 에러 케이스 통과 (2개)
+- [ ] 테스트 커버리지 85% 이상 (kis_broker_adapter.py 기준)
+- [ ] 보안 마스킹 검증 통과 (account_id, approval_key)
+
+**Acceptance Criteria (Milestone 2)**:
+- **AC-001**: Code coverage >= 85% for kis_broker_adapter.py
+- **AC-002**: All normal cases pass (15/15 tests)
+- **AC-003**: All error cases pass (2/2 tests)
+- **AC-004**: Security masking verified in logs
 
 의존성:
-- Milestone 1 완료 필요
+- Milestone 1 완료 필요 (account_id 저장, cancel_order 구현)
 - pytest, pytest-asyncio 필요
+- pytest-cov 필요 (커버리지 리포트)
 - docker-compose PostgreSQL 필요 (다른 테스트에서 이미 사용 중)
+
+예상 작업 시간: 5시간
+- 테스트 환경 설정: 1시간
+- 17개 테스트 케이스 작성: 3시간
+- 커버리지 확인 및 개선: 1시간
 
 ---
 
