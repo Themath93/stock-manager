@@ -6,7 +6,7 @@ and SettlementService with real database operations.
 """
 
 import pytest
-from datetime import datetime, time, date
+from datetime import time, date
 from decimal import Decimal
 
 from stock_manager.service_layer.market_lifecycle_service import (
@@ -19,7 +19,7 @@ from stock_manager.service_layer.settlement_service import (
     SettlementServiceImpl,
 )
 from stock_manager.adapters.broker.mock import MockBrokerAdapter
-from stock_manager.adapters.storage.postgresql_adapter import PostgreSQLAdapter
+from stock_manager.adapters.storage.postgresql_adapter import create_postgresql_adapter
 from stock_manager.service_layer.order_service import OrderService
 from stock_manager.service_layer.position_service import PositionService
 
@@ -31,8 +31,7 @@ def db_connection():
 
     db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/stock_manager_test")
 
-    adapter = PostgreSQLAdapter()
-    adapter.database_url = db_url
+    adapter = create_postgresql_adapter(database_url=db_url)
     adapter.connect()
 
     yield adapter
@@ -43,13 +42,17 @@ def db_connection():
 @pytest.fixture
 def mock_broker():
     """Mock broker adapter"""
-    return MockBrokerAdapter()
+    broker = MockBrokerAdapter()
+    broker.authenticate()  # Authenticate for testing
+    return broker
 
 
 @pytest.fixture
 def order_service(db_connection, mock_broker):
     """Order service fixture"""
-    return OrderService(mock_broker, db_connection)
+    from stock_manager.config.app_config import AppConfig
+    config = AppConfig(account_id="7263942401")  # Test account ID
+    return OrderService(mock_broker, db_connection, config)
 
 
 @pytest.fixture
@@ -139,9 +142,9 @@ class TestMarketLifecycleServiceIntegration:
             row = cursor.fetchone()
 
         assert row is not None
-        assert row[0] == "READY"
-        assert row[1] is not None  # market_open_at
-        assert row[2] == "SUCCESS"  # recovery_status
+        assert row['state'] == "READY"
+        assert row['market_open_at'] is not None  # market_open_at
+        assert row['recovery_status'] == "SUCCESS"  # recovery_status
 
 
 @pytest.mark.integration
@@ -182,10 +185,16 @@ class TestSettlementServiceIntegration:
     """Integration tests for SettlementService"""
 
     def test_daily_settlement_creation(
-        self, settlement_service: SettlementServiceImpl
+        self, settlement_service: SettlementServiceImpl, db_connection
     ):
         """Test daily settlement creation"""
         trade_date = date.today()
+
+        # Cleanup first: delete any existing settlement for today
+        db_connection.execute_query(
+            "DELETE FROM daily_settlements WHERE trade_date = %s",
+            params=(trade_date,)
+        )
 
         settlement = settlement_service.create_daily_settlement(trade_date)
 
@@ -197,6 +206,12 @@ class TestSettlementServiceIntegration:
         retrieved = settlement_service.get_daily_settlement(trade_date)
         assert retrieved is not None
         assert retrieved.id == settlement.id
+
+        # Cleanup after test
+        db_connection.execute_query(
+            "DELETE FROM daily_settlements WHERE id = %s",
+            params=(settlement.id,)
+        )
 
 
 @pytest.mark.integration
