@@ -10,6 +10,10 @@ pip install -e .
 
 cp .env.example .env
 # 환경 변수 채우기
+
+# CLI 실행 (설치 후)
+stock-manager health                    # 시스템 상태 확인
+stock-manager worker-start worker-001   # 워커 시작
 ```
 
 ## 구조
@@ -33,6 +37,7 @@ cp .env.example .env
   - `notifications/`: Slack 등 알림
   - `observability/`: logger/metrics
 - `src/stock_manager/entrypoints/`: CLI/worker/scheduler
+- `src/stock_manager/main.py`: CLI entry point (worker-start, health commands)
 - `src/stock_manager/utils/`: 공통 유틸
   - `slack.py`: Slack 알림 전송 유틸
 - `scripts/`: 유틸리티 스크립트
@@ -186,6 +191,38 @@ cp .env.example .env
   logger.info("Application started")          # Slack 전송 없음
   ```
 
+### SPEC-CLI-001: CLI Worker Entrypoints (완료)
+- **CLI 엔트리 포인트 (`src/stock_manager/main.py`)** ✅ 완료
+  - Typer 기반 현대적 CLI 프레임워크
+  - `worker-start` 명령: 워커 인스턴스 시작
+  - `health` 명령: 시스템 상태 확인 (DB/Broker 연결)
+- **신호 처리 (Signal Handling)** ✅ 완료
+  - SIGTERM/SIGINT (Ctrl+C) 그레이스풀 셧다운
+  - 전역 플래그 기반 비동기 셧다운 조정
+  - 적절한 종료 코드 반환 (0=성공, 1=설정 오류, 2=인프라 오류, 130=SIGINT)
+- **비동기-동기 브릿지** ✅ 완료
+  - `asyncio.run()`으로 WorkerMain 실행
+  - RichHandler 기반 구조화된 로깅
+- **환경 변수 검증** ✅ 완료
+  - AppConfig 로딩 및 검증
+  - 데이터베이스 연결 검사
+  - 브로커 인증 검사
+- **품질 지표** ✅ 달성
+  - 테스트 커버리지: 94.90% (목표 85% 초과)
+  - CLI 테스트: 36개 통과
+  - TRUST 5 준수 완료
+- **사용 예제**
+  ```bash
+  # 워커 시작
+  stock-manager worker-start worker-001 --log-level DEBUG
+
+  # 시스템 상태 확인
+  stock-manager health
+
+  # 상세 출력
+  stock-manager health --verbose
+  ```
+
 ### Slack 알림
 - 주문/체결/리스크 이벤트 알림
 - 에러 로그 알림 (자동 레벨 기반 라우팅)
@@ -319,6 +356,7 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 ## 프로젝트 진행 상태
 
 ### 완료된 SPEC
+- SPEC-CLI-001: CLI Worker Entrypoints (2026-01-29 완료)
 - SPEC-OBSERVABILITY-001: 로그 레벨 기반 Slack 알림 시스템 (2026-01-25 완료)
 - SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
 - SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)

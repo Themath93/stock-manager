@@ -5,7 +5,8 @@
 - **SPEC ID**: SPEC-CLI-001
 - **Title**: CLI Worker Entrypoints Implementation
 - **Created**: 2026-01-29
-- **Status**: planned
+- **Status**: complete
+- **Completed**: 2026-01-29
 - **Version**: 1.0.0
 - **Priority**: HIGH
 - **Assignee**: Senior Backend Engineer
@@ -588,16 +589,16 @@ idempotency_key=f"{self.worker_id}_sell_{self._current_symbol}_{datetime.now(tim
 
 | TAG | Description | File | Status |
 |-----|-------------|------|--------|
-| TAG-SPEC-CLI-001-001 | main.py CLI entrypoint using Typer | main.py | TODO |
-| TAG-SPEC-CLI-001-002 | Worker execution command with arguments | main.py | TODO |
-| TAG-SPEC-CLI-001-003 | Signal handling (SIGTERM, SIGINT) | main.py | TODO |
-| TAG-SPEC-CLI-001-004 | Async-to-sync bridge using asyncio.run() | main.py | TODO |
-| TAG-SPEC-CLI-001-005 | Structured logging configuration | main.py | TODO |
-| TAG-SPEC-CLI-001-006 | Console script entrypoint in pyproject.toml | pyproject.toml | TODO |
-| TAG-SPEC-CLI-001-007 | Fix datetime.utcnow() deprecated usage | worker_main.py | TODO |
-| TAG-SPEC-CLI-001-008 | CLI testability (subprocess testing) | tests/cli/ | TODO |
-| TAG-SPEC-CLI-001-009 | Error handling and exit codes | main.py | TODO |
-| TAG-SPEC-CLI-001-010 | Environment variable validation | main.py | TODO |
+| TAG-SPEC-CLI-001-001 | main.py CLI entrypoint using Typer | main.py | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-002 | Worker execution command with arguments | main.py | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-003 | Signal handling (SIGTERM, SIGINT) | main.py | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-004 | Async-to-sync bridge using asyncio.run() | main.py | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-005 | Structured logging configuration | main.py | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-006 | Console script entrypoint in pyproject.toml | pyproject.toml | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-007 | Fix datetime.utcnow() deprecated usage | worker_main.py | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-008 | CLI testability (subprocess testing) | tests/cli/ | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-009 | Error handling and exit codes | main.py | ✅ COMPLETE |
+| TAG-SPEC-CLI-001-010 | Environment variable validation | main.py | ✅ COMPLETE |
 
 ---
 
