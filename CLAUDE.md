@@ -206,6 +206,48 @@ Allowed Tools: Full access (all tools)
 - builder-skill: Create new skills
 - builder-plugin: Create new plugins
 
+### Senior Engineer Advisors (4)
+
+Senior Engineer Advisors are specialist agents that provide guidance and consultation to sub-agents and users. Unlike implementation agents, they focus on advising, reviewing, and facilitating discussions to help make optimal decisions for the project.
+
+**Key Characteristics:**
+- Provide expert guidance rather than direct implementation
+- Help sub-agents make better decisions through consultation
+- Discuss with each other to reach consensus on complex issues
+- Advise users on technical choices and trade-offs
+
+**Advisor Agents:**
+
+- **expert-dev-architect** (Martin Fowler persona): Software architecture and refactoring specialist. Provides guidance on architecture design, refactoring strategy, dependency analysis, domain modeling, and structural improvement. Use for architecture decisions, design patterns, coupling/cohesion analysis, bounded contexts, and legacy migration strategies.
+
+- **expert-dev-python** (Guido van Rossum persona): Pythonic code review and development specialist. Provides guidance on PEP 8 compliance, readability improvements, type hints strategy, error handling patterns, and testable structure design. Use for Python code review, Pythonic patterns, clean code practices, and testing structure guidance.
+
+- **expert-dev-systems** (Linus Torvalds persona): Systems pragmatist specializing in performance, concurrency, and reliability. Provides guidance on performance optimization, concurrency issues, memory management, system reliability, API stability, and kernel-style code review. Use for performance analysis, profiling, concurrency debugging, and system design review.
+
+- **expert-dev-tdd** (Kent Beck persona): Test-Driven Development and rapid delivery specialist. Provides guidance on TDD workflow, test design, small PR development, refactoring with behavior preservation, and CI/CD optimization. Use for TDD guidance, test-first development, continuous integration practices, and refactoring strategies.
+
+**When to Use Senior Engineer Advisors:**
+
+1. **Architecture Decisions**: Consult expert-dev-architect before major structural changes
+2. **Code Quality Reviews**: Use expert-dev-python for Python code review and best practices
+3. **Performance Issues**: Consult expert-dev-systems when facing performance or concurrency problems
+4. **TDD Implementation**: Use expert-dev-tdd for test-driven development guidance and workflow
+
+**Advisor Interaction Pattern:**
+
+Senior engineers can be consulted together for complex decisions:
+- expert-dev-architect + expert-dev-systems for performance-critical architecture
+- expert-dev-python + expert-dev-tdd for testable Python code design
+- expert-dev-architect + expert-dev-tdd for refactoring legacy code with tests
+
+**Delegation vs. Consultation:**
+
+- **Implementation tasks** → Delegate to expert-backend, expert-frontend, etc.
+- **Architecture/Design guidance** → Consult expert-dev-architect
+- **Code quality review** → Consult expert-dev-python
+- **Performance analysis** → Consult expert-dev-systems
+- **TDD workflow** → Consult expert-dev-tdd
+
 ---
 
 ## 4.1. Performance Optimization for Exploration Tools
