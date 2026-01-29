@@ -7,7 +7,7 @@ Implements ED-001: Worker Status Machine and all event-driven requirements.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -308,7 +308,7 @@ class WorkerMain:
                 order_type=OrderType.MARKET if price is None else OrderType.LIMIT,
                 qty=qty,
                 price=price,
-                idempotency_key=f"{self.worker_id}_buy_{candidate.symbol}_{datetime.utcnow().isoformat()}",
+                idempotency_key=f"{self.worker_id}_buy_{candidate.symbol}_{datetime.now(timezone.utc).isoformat()}",
             )
 
             # Execute order via OrderService
@@ -343,7 +343,7 @@ class WorkerMain:
                 order_type=OrderType.MARKET if price is None else OrderType.LIMIT,
                 qty=qty,
                 price=price,
-                idempotency_key=f"{self.worker_id}_sell_{self._current_symbol}_{datetime.utcnow().isoformat()}",
+                idempotency_key=f"{self.worker_id}_sell_{self._current_symbol}_{datetime.now(timezone.utc).isoformat()}",
             )
 
             # Execute order via OrderService

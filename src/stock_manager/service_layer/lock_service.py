@@ -6,10 +6,8 @@ Implements WH-001: Stock Lock Management.
 """
 
 import logging
-from datetime import datetime, timedelta
-from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from uuid import uuid4
 
 from ..domain.worker import StockLock
 from ..adapters.storage.port import DatabasePort
@@ -79,7 +77,7 @@ class LockService:
             LockAcquisitionError: If lock is already held by another worker
         """
         ttl = ttl or self.default_ttl
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + ttl
 
         # Try to acquire lock using row-level locking
@@ -92,7 +90,7 @@ class LockService:
             # We use INSERT ... ON CONFLICT to handle race conditions
             query = """
                 INSERT INTO stock_locks (symbol, worker_id, acquired_at, expires_at, heartbeat_at, status)
-                VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+                VALUES (%s, %s, %s, %s, %s, 'ACTIVE')
                 ON CONFLICT (symbol) DO NOTHING
                 RETURNING id, symbol, worker_id, acquired_at, expires_at, heartbeat_at, status, created_at, updated_at
             """
@@ -145,7 +143,7 @@ class LockService:
             query = """
                 UPDATE stock_locks
                 SET status = 'EXPIRED', updated_at = CURRENT_TIMESTAMP
-                WHERE symbol = $1 AND worker_id = $2 AND status = 'ACTIVE'
+                WHERE symbol = %s AND worker_id = %s AND status = 'ACTIVE'
                 RETURNING id
             """
             params = (symbol, worker_id)
@@ -187,14 +185,14 @@ class LockService:
             LockExpiredError: If lock has expired
         """
         ttl = ttl or self.default_ttl
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + ttl
 
         try:
             query = """
                 UPDATE stock_locks
-                SET expires_at = $1, heartbeat_at = $2, updated_at = CURRENT_TIMESTAMP
-                WHERE symbol = $3 AND worker_id = $4 AND status = 'ACTIVE' AND expires_at > CURRENT_TIMESTAMP
+                SET expires_at = %s, heartbeat_at = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE symbol = %s AND worker_id = %s AND status = 'ACTIVE' AND expires_at > CURRENT_TIMESTAMP
                 RETURNING id, symbol, worker_id, acquired_at, expires_at, heartbeat_at, status, created_at, updated_at
             """
             params = (expires_at, now, symbol, worker_id)
@@ -245,12 +243,12 @@ class LockService:
             LockNotFoundError: If lock not found
         """
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             query = """
                 UPDATE stock_locks
-                SET heartbeat_at = $1, updated_at = CURRENT_TIMESTAMP
-                WHERE symbol = $2 AND worker_id = $3 AND status = 'ACTIVE' AND expires_at > CURRENT_TIMESTAMP
+                SET heartbeat_at = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE symbol = %s AND worker_id = %s AND status = 'ACTIVE' AND expires_at > CURRENT_TIMESTAMP
                 RETURNING id
             """
             params = (now, symbol, worker_id)
@@ -351,7 +349,7 @@ class LockService:
             query = """
                 SELECT id, symbol, worker_id, acquired_at, expires_at, heartbeat_at, status, created_at, updated_at
                 FROM stock_locks
-                WHERE symbol = $1
+                WHERE symbol = %s
                 ORDER BY created_at DESC
                 LIMIT 1
             """
@@ -384,7 +382,7 @@ class LockService:
             query = """
                 UPDATE stock_locks
                 SET status = 'EXPIRED', updated_at = CURRENT_TIMESTAMP
-                WHERE symbol = $1 AND status = 'ACTIVE' AND expires_at < CURRENT_TIMESTAMP
+                WHERE symbol = %s AND status = 'ACTIVE' AND expires_at < CURRENT_TIMESTAMP
             """
             params = (symbol,)
 

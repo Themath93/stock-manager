@@ -5,7 +5,7 @@ Worker process and related domain models for SPEC-BACKEND-WORKER-004.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 
@@ -39,11 +39,11 @@ class StockLock:
 
     def is_valid(self) -> bool:
         """Check if lock is still valid (not expired)"""
-        return self.status == "ACTIVE" and datetime.utcnow() < self.expires_at
+        return self.status == "ACTIVE" and datetime.now(timezone.utc) < self.expires_at
 
     def needs_renewal(self, ttl: timedelta) -> bool:
         """Check if lock needs to be renewed soon"""
-        time_until_expiry = self.expires_at - datetime.utcnow()
+        time_until_expiry = self.expires_at - datetime.now(timezone.utc)
         return time_until_expiry < (ttl / 2)
 
 
@@ -66,7 +66,7 @@ class WorkerProcess:
 
     def is_alive(self, ttl: timedelta) -> bool:
         """Check if worker is alive based on heartbeat"""
-        time_since_heartbeat = datetime.utcnow() - self.last_heartbeat_at
+        time_since_heartbeat = datetime.now(timezone.utc) - self.last_heartbeat_at
         return time_since_heartbeat < (ttl * 3)
 
 

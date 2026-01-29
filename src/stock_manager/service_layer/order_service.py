@@ -386,7 +386,7 @@ class OrderService:
                     request.idempotency_key,
                 ),
             )
-            order_id = cursor.fetchone()[0]
+            order_id = cursor.fetchone()["id"]
             self.db.commit()
 
         return order_id
@@ -535,6 +535,8 @@ class OrderService:
 
     def _log_event(self, level: str, message: str, payload: dict = None) -> None:
         """이벤트 로깅"""
+        import json
+
         query = """
         INSERT INTO events (level, message, payload)
         VALUES (%s, %s, %s)
@@ -543,7 +545,7 @@ class OrderService:
         with self.db.cursor() as cursor:
             cursor.execute(
                 query,
-                (level, message, payload if payload else None),
+                (level, message, json.dumps(payload) if payload else None),
             )
             self.db.commit()
 
@@ -563,23 +565,23 @@ class OrderService:
             idempotency_key=order.idempotency_key,
         )
 
-    def _row_to_order(self, row: tuple) -> Order:
-        """DB row를 Order 객체로 변환"""
+    def _row_to_order(self, row: dict) -> Order:
+        """DB row를 Order 객체로 변환 (RealDictCursor returns dict)"""
         return Order(
-            id=row[0],
-            broker_order_id=row[1],
-            idempotency_key=row[2],
-            symbol=row[3],
-            side=row[4],
-            order_type=row[5],
-            qty=Decimal(row[6]),
-            price=Decimal(row[7]) if row[7] else None,
-            status=OrderStatus(row[8]),
-            filled_qty=Decimal(row[9]) if row[9] else Decimal("0"),
-            avg_fill_price=Decimal(row[10]) if row[10] else None,
-            requested_at=row[11],
-            created_at=row[12],
-            updated_at=row[13],
+            id=row['id'],
+            broker_order_id=row['broker_order_id'],
+            idempotency_key=row['idempotency_key'],
+            symbol=row['symbol'],
+            side=row['side'],
+            order_type=row['order_type'],
+            qty=Decimal(row['qty']),
+            price=Decimal(row['price']) if row['price'] else None,
+            status=OrderStatus(row['status']),
+            filled_qty=Decimal(row['filled_qty']) if row['filled_qty'] else Decimal("0"),
+            avg_fill_price=Decimal(row['avg_fill_price']) if row['avg_fill_price'] else None,
+            requested_at=row['requested_at'],
+            created_at=row['created_at'],
+            updated_at=row['updated_at'],
         )
 
     def _row_to_fill(self, row: tuple) -> Fill:

@@ -82,7 +82,7 @@ class SystemState:
         Valid transitions:
         - OFFLINE → INITIALIZING
         - INITIALIZING → READY
-        - READY → TRADING
+        - READY → TRADING, CLOSING (PoC: allow direct close from READY)
         - TRADING → CLOSING
         - CLOSING → CLOSED
         - CLOSED → INITIALIZING
@@ -91,7 +91,12 @@ class SystemState:
         valid_transitions = {
             SystemStateEnum.OFFLINE: [SystemStateEnum.INITIALIZING],
             SystemStateEnum.INITIALIZING: [SystemStateEnum.READY, SystemStateEnum.STOPPED],
-            SystemStateEnum.READY: [SystemStateEnum.TRADING, SystemStateEnum.STOPPED],
+            # PoC: Allow READY → CLOSING for simplified close flow
+            SystemStateEnum.READY: [
+                SystemStateEnum.TRADING,
+                SystemStateEnum.CLOSING,
+                SystemStateEnum.STOPPED,
+            ],
             SystemStateEnum.TRADING: [
                 SystemStateEnum.TRADING,
                 SystemStateEnum.CLOSING,

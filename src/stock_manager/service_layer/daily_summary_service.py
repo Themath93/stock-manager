@@ -51,7 +51,7 @@ class DailySummaryService:
         Returns:
             DailySummary: Generated daily summary
         """
-        summary_date = summary_date or datetime.utcnow().date()
+        summary_date = summary_date or datetime.now(timezone.utc).date()
 
         # Fetch trade data for the day
         trade_data = self._fetch_trade_data(worker_id, summary_date)

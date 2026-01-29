@@ -13,7 +13,7 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, date
 from decimal import Decimal
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 
 from ..domain.market_lifecycle import (
     DailySettlement,
@@ -364,14 +364,14 @@ class SettlementServiceImpl(SettlementService):
 
             if row:
                 return DailySettlement(
-                    id=row[0],
-                    trade_date=row[1],
-                    realized_pnl=Decimal(row[2]),
-                    unrealized_pnl=Decimal(row[3]),
-                    total_pnl=Decimal(row[4]),
-                    positions_snapshot=row[5],
-                    created_at=row[6],
-                    updated_at=row[7],
+                    id=row['id'],
+                    trade_date=row['trade_date'],
+                    realized_pnl=Decimal(row['realized_pnl']),
+                    unrealized_pnl=Decimal(row['unrealized_pnl']),
+                    total_pnl=Decimal(row['total_pnl']),
+                    positions_snapshot=row['positions_snapshot'],
+                    created_at=row['created_at'],
+                    updated_at=row['updated_at'],
                 )
 
         except Exception as e:
@@ -388,6 +388,8 @@ class SettlementServiceImpl(SettlementService):
         Returns:
             int: Settlement ID
         """
+        import json
+
         query = """
         INSERT INTO daily_settlements (
             trade_date, realized_pnl, unrealized_pnl, total_pnl, positions_snapshot
@@ -403,10 +405,10 @@ class SettlementServiceImpl(SettlementService):
                     str(settlement.realized_pnl),
                     str(settlement.unrealized_pnl),
                     str(settlement.total_pnl),
-                    settlement.positions_snapshot,
+                    json.dumps(settlement.positions_snapshot),
                 ),
             )
-            settlement_id = cursor.fetchone()[0]
+            settlement_id = cursor.fetchone()['id']
             self.db.commit()
 
         return settlement_id

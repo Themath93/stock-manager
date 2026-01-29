@@ -182,7 +182,7 @@ class MarketDataPoller:
             current_price=market_data.price,
             volume=market_data.volume,
             change_percent=market_data.change_percent,
-            discovered_at=datetime.utcnow(),
+            discovered_at=datetime.now(timezone.utc),
             metadata={
                 "change": float(market_data.change),
                 "timestamp": market_data.timestamp.isoformat(),

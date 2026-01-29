@@ -6,7 +6,7 @@ and heartbeat management. Implements WH-002: Worker Process Tracking.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import uuid4
 
@@ -77,7 +77,7 @@ class WorkerLifecycleService:
         """
         worker_id = worker_id or str(uuid4())
         heartbeat_interval = heartbeat_interval or self.default_heartbeat_interval
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Check if worker already exists
         existing = self._get_worker_by_id(worker_id)
@@ -89,7 +89,7 @@ class WorkerLifecycleService:
                 INSERT INTO worker_processes (
                     worker_id, status, current_symbol, started_at, last_heartbeat_at, heartbeat_interval
                 )
-                VALUES ($1, 'IDLE', NULL, $2, $3, $4)
+                VALUES (%s, 'IDLE', NULL, %s, %s, %s)
                 RETURNING id, worker_id, status, current_symbol, started_at, last_heartbeat_at, heartbeat_interval, created_at, updated_at
             """
             params = (worker_id, now, now, heartbeat_interval)
@@ -145,12 +145,12 @@ class WorkerLifecycleService:
             WorkerNotFoundError: If worker not found
         """
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             query = """
                 UPDATE worker_processes
-                SET last_heartbeat_at = $1, updated_at = CURRENT_TIMESTAMP
-                WHERE worker_id = $2 AND status != 'EXITING'
+                SET last_heartbeat_at = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE worker_id = %s AND status != 'EXITING'
                 RETURNING id
             """
             params = (now, worker_id)
@@ -205,12 +205,12 @@ class WorkerLifecycleService:
             raise ValueError("current_symbol is required when transitioning to HOLDING state")
 
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             query = """
                 UPDATE worker_processes
-                SET status = $1, current_symbol = $2, last_heartbeat_at = $3, updated_at = CURRENT_TIMESTAMP
-                WHERE worker_id = $4
+                SET status = %s, current_symbol = %s, last_heartbeat_at = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE worker_id = %s
                 RETURNING id, worker_id, status, current_symbol, started_at, last_heartbeat_at, heartbeat_interval, created_at, updated_at
             """
             params = (new_status.value, current_symbol, now, worker_id)
@@ -294,13 +294,13 @@ class WorkerLifecycleService:
             int: Number of workers cleaned up
         """
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             ttl_threshold = now - self.worker_ttl
 
             query = """
                 UPDATE worker_processes
                 SET status = 'EXITING', updated_at = CURRENT_TIMESTAMP
-                WHERE status != 'EXITING' AND last_heartbeat_at < $1
+                WHERE status != 'EXITING' AND last_heartbeat_at < %s
                 RETURNING id
             """
             params = (ttl_threshold,)
@@ -323,7 +323,7 @@ class WorkerLifecycleService:
             query = """
                 SELECT id, worker_id, status, current_symbol, started_at, last_heartbeat_at, heartbeat_interval, created_at, updated_at
                 FROM worker_processes
-                WHERE worker_id = $1
+                WHERE worker_id = %s
                 ORDER BY created_at DESC
                 LIMIT 1
             """

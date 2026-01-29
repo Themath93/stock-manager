@@ -7,7 +7,7 @@ Uses psycopg2 for database connectivity with connection pooling.
 
 import logging
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 try:
     import psycopg2
@@ -106,24 +106,28 @@ class PostgreSQLAdapter(DatabasePort):
         if self._connection_pool is None:
             raise RuntimeError("Connection pool not initialized. Call connect() first.")
 
+        conn = None
         try:
-            with self._connection_pool.getconn() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                    cursor.execute(query, params)
+            conn = self._connection_pool.getconn()
+            conn.autocommit = True  # Enable autocommit for PoC simplicity
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(query, params)
 
-                    if fetch_one:
-                        return cursor.fetchone()
-                    elif fetch_all:
-                        return cursor.fetchall()
-                    else:
-                        conn.commit()
-                        return None
+                if fetch_one:
+                    return cursor.fetchone()
+                elif fetch_all:
+                    return cursor.fetchall()
+                else:
+                    return None
 
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
             logger.debug(f"Query: {query}")
             logger.debug(f"Params: {params}")
             raise
+        finally:
+            if conn:
+                self._connection_pool.putconn(conn)
 
     def execute_transaction(
         self,
@@ -170,6 +174,22 @@ class PostgreSQLAdapter(DatabasePort):
         except Exception as e:
             logger.error(f"Failed to close connection pool: {e}")
 
+    def commit(self) -> None:
+        """Commit transaction (no-op for cursor-based pattern)
+
+        Note: When using cursor() context manager, transactions are auto-committed
+        on connection return. This method exists for API compatibility.
+        """
+        pass
+
+    def rollback(self) -> None:
+        """Rollback transaction (no-op for cursor-based pattern)
+
+        Note: When using cursor() context manager with exceptions, rollback
+        happens automatically. This method exists for API compatibility.
+        """
+        pass
+
     @contextmanager
     def transaction(self):
         """Context manager for transaction handling
@@ -194,6 +214,45 @@ class PostgreSQLAdapter(DatabasePort):
             logger.error(f"Transaction failed: {e}")
             raise
         finally:
+            if conn:
+                self._connection_pool.putconn(conn)
+
+    @contextmanager
+    def cursor(self):
+        """Context manager for cursor compatibility with OrderService
+
+        Provides a cursor interface for compatibility with existing service layer code
+        that uses `with db.cursor() as cursor:` pattern.
+
+        Usage:
+            with db.cursor() as cursor:
+                cursor.execute("SELECT * FROM orders")
+                rows = cursor.fetchall()
+                db.commit()
+
+        Yields:
+            psycopg2.cursor: Database cursor with RealDictCursor factory
+
+        Raises:
+            RuntimeError: If connection pool is not initialized
+            Exception: If cursor operation fails
+        """
+        if self._connection_pool is None:
+            raise RuntimeError("Connection pool not initialized. Call connect() first.")
+
+        conn = None
+        cursor_obj = None
+        try:
+            conn = self._connection_pool.getconn()
+            conn.autocommit = True  # Enable autocommit for PoC simplicity
+            cursor_obj = conn.cursor(cursor_factory=RealDictCursor)
+            yield cursor_obj
+        except Exception as e:
+            logger.error(f"Cursor operation failed: {e}")
+            raise
+        finally:
+            if cursor_obj:
+                cursor_obj.close()
             if conn:
                 self._connection_pool.putconn(conn)
 

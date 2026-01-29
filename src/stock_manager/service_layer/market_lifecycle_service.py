@@ -14,7 +14,7 @@ References:
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, time
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Callable
 
 from ..domain.market_lifecycle import (
     SystemState,
@@ -216,6 +216,8 @@ class MarketLifecycleServiceImpl(MarketLifecycleService):
 
     def _save_system_state(self) -> None:
         """Save system state to database"""
+        import json
+
         query = """
         INSERT INTO system_states (
             state, market_open_at, market_closed_at, last_recovery_at,
@@ -232,7 +234,7 @@ class MarketLifecycleServiceImpl(MarketLifecycleService):
                     self._system_state.market_closed_at,
                     self._system_state.last_recovery_at,
                     self._system_state.recovery_status.value,
-                    self._system_state.recovery_details,
+                    json.dumps(self._system_state.recovery_details),
                 ),
             )
             self.db.commit()
@@ -566,6 +568,8 @@ class MarketLifecycleServiceImpl(MarketLifecycleService):
             message: Event message
             payload: Event payload
         """
+        import json
+
         query = """
         INSERT INTO events (level, message, payload)
         VALUES (%s, %s, %s)
@@ -573,7 +577,11 @@ class MarketLifecycleServiceImpl(MarketLifecycleService):
 
         try:
             with self.db.cursor() as cursor:
-                cursor.execute(query, (level, message, payload if payload else None))
+                cursor.execute(query, (
+                    level,
+                    message,
+                    json.dumps(payload) if payload else None
+                ))
                 self.db.commit()
         except Exception as e:
             logger.error(f"Failed to log event: {e}")
