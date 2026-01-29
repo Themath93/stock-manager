@@ -20,7 +20,7 @@ class Mode(str, Enum):
 class AppConfig(BaseSettings):
     """Stock Manager 통합 설정"""
 
-    model_config = ConfigDict(env_file=".env", case_sensitive=False)
+    model_config = ConfigDict(env_file=".env", case_sensitive=False, extra='ignore')
 
     # ===== KIS 설정 =====
     # 환경 모드
@@ -62,6 +62,13 @@ class AppConfig(BaseSettings):
 
     # ===== 공통 설정 =====
     log_level: str = Field(default="INFO", description="로그 레벨")
+
+    # 데이터베이스 URL
+    # TAG-SPEC-CLI-001-010
+    database_url: str = Field(
+        default="postgresql://postgres:postgres@localhost:5432/stock_manager",
+        description="PostgreSQL database URL"
+    )
 
     # 계좌 ID (선택사항)
     # TASK-001: SPEC-BACKEND-API-001-P3 Milestone 1 - Add account_id validation
