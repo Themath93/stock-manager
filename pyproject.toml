@@ -37,11 +37,29 @@ line-length = 100
 target-version = "py313"
 
 [tool.pytest.ini_options]
-addopts = "-q"
-pythonpath = ["src"]
+# Pytest configuration for KIS API tests (Kent Beck TDD style)
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+    "--cov=stock_manager",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-fail-under=80",  # Working toward 85% target
+]
 asyncio_mode = "auto"
 markers = [
+    "red: Tests that document expected failures (RED phase)",
+    "green: Tests that verify fixes (GREEN phase)",
+    "refactor: Tests that validate refactoring (REFACTOR phase)",
+    "slow: Tests that take more than 1 second",
     "integration: marks tests as integration tests (requires external services)",
+    "unit: Unit tests (isolated, fast)",
+    "tdd: Tests following TDD methodology",
 ]
 
 [dependency-groups]
