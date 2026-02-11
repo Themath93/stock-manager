@@ -31,7 +31,7 @@ class TestKISConfig:
     ) -> None:
         """Test configuration loads from environment variables."""
         with patch.dict(os.environ, mock_env_vars, clear=True):
-            config = KISConfig()
+            config = KISConfig(_env_file=None)
 
             assert config.app_key.get_secret_value() == "test_app_key_12345"
             assert config.app_secret.get_secret_value() == "test_app_secret_67890"
@@ -47,7 +47,7 @@ class TestKISConfig:
         env.pop("KIS_USE_MOCK", None)
 
         with patch.dict(os.environ, env, clear=True):
-            config = KISConfig()
+            config = KISConfig(_env_file=None)
 
             assert config.use_mock is True
             assert config.is_mock_trading is True
@@ -61,7 +61,7 @@ class TestKISConfig:
         env["KIS_USE_MOCK"] = "false"
 
         with patch.dict(os.environ, env, clear=True):
-            config = KISConfig()
+            config = KISConfig(_env_file=None)
 
             assert config.use_mock is False
             assert config.is_mock_trading is False
@@ -84,7 +84,7 @@ class TestKISConfig:
     def test_oauth_path_real(self, kis_config_real: KISConfig) -> None:
         """Test OAuth path for real trading."""
         assert kis_config_real.oauth_path == KIS_OAUTH_PATH_REAL
-        assert kis_config_real.oauth_path.endswith("token")
+        assert kis_config_real.oauth_path.endswith("tokenP")
 
     def test_get_canonical_account_number_with_account(
         self,
@@ -107,7 +107,7 @@ class TestKISConfig:
         env.pop("KIS_ACCOUNT_NUMBER", None)
 
         with patch.dict(os.environ, env, clear=True):
-            config = KISConfig()
+            config = KISConfig(_env_file=None)
 
             result = config.get_canonical_account_number()
 
@@ -123,7 +123,7 @@ class TestKISConfig:
 
         with patch.dict(os.environ, env, clear=True):
             with pytest.raises(ValueError, match="KIS_APP_KEY is required"):
-                KISConfig()
+                KISConfig(_env_file=None)
 
     def test_config_validation_missing_app_secret(
         self,
@@ -135,7 +135,7 @@ class TestKISConfig:
 
         with patch.dict(os.environ, env, clear=True):
             with pytest.raises(ValueError, match="KIS_APP_SECRET is required"):
-                KISConfig()
+                KISConfig(_env_file=None)
 
     def test_config_ignores_unknown_env_vars(
         self,
@@ -147,7 +147,7 @@ class TestKISConfig:
 
         with patch.dict(os.environ, env, clear=True):
             # Should not raise error for unknown vars
-            config = KISConfig()
+            config = KISConfig(_env_file=None)
 
             assert config is not None
 
@@ -272,9 +272,10 @@ class TestKISConfigConstants:
         assert KIS_OAUTH_PATH.startswith("/")
         assert KIS_OAUTH_PATH.endswith("tokenP")
         assert KIS_OAUTH_PATH_REAL.startswith("/")
-        assert KIS_OAUTH_PATH_REAL.endswith("token")
+        assert KIS_OAUTH_PATH_REAL.endswith("tokenP")
 
     def test_mock_vs_real_urls_differ(self) -> None:
         """Test mock and real URLs are different."""
         assert KIS_API_BASE_URL != KIS_API_BASE_URL_REAL
-        assert KIS_OAUTH_PATH != KIS_OAUTH_PATH_REAL
+        # Personal OAuth path is the same; only domain differs.
+        assert KIS_OAUTH_PATH == KIS_OAUTH_PATH_REAL

@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+import typer
+
+from stock_manager.config.env_writer import backup_file, ensure_env_file, set_env_vars, scan_env_file
+from stock_manager.config.paths import require_project_root
+from stock_manager.adapters.broker.kis.config import KISConfig
+
+
+@dataclass(frozen=True)
+class SetupResult:
+    env_path: Path
+    verified_kis: bool
+    verified_slack: bool
+
+
+def _mask(value: str) -> str:
+    v = value.strip()
+    if len(v) <= 8:
+        return "****"
+    return f"{v[:4]}...{v[-4:]}"
+
+
+def _verify_kis(config: KISConfig) -> bool:
+    """Best-effort KIS token issuance verification. Never raises."""
+    try:
+        payload = {
+            "grant_type": "client_credentials",
+            "appkey": config.app_key.get_secret_value(),
+            "appsecret": config.app_secret.get_secret_value(),
+        }
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "appkey": config.app_key.get_secret_value(),
+            "appsecret": config.app_secret.get_secret_value(),
+            "custtype": "P",
+        }
+        with httpx.Client(base_url=config.api_base_url, timeout=15.0) as client:
+            resp = client.post(config.oauth_path, json=payload, headers=headers)
+        # KIS sometimes returns 200 with error structure; use body for check.
+        data = resp.json()
+        token = data.get("access_token", "")
+        if token:
+            typer.echo(f"KIS verify: OK (token {_mask(token)})")
+            return True
+        msg = data.get("msg1") or data.get("error_description") or json.dumps(data)[:200]
+        typer.echo(f"KIS verify: FAILED ({resp.status_code}) {msg}")
+        return False
+    except Exception as e:
+        typer.echo(f"KIS verify: FAILED ({e})")
+        return False
+
+
+def _verify_slack(bot_token: str) -> bool:
+    """Best-effort Slack auth.test verification. Never raises."""
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post(
+                "https://slack.com/api/auth.test",
+                headers={"Authorization": f"Bearer {bot_token}"},
+            )
+        data = resp.json()
+        if data.get("ok") is True:
+            user = data.get("user") or ""
+            team = data.get("team") or ""
+            typer.echo(f"Slack verify: OK (@{user} / {team})")
+            return True
+        err = data.get("error") or json.dumps(data)[:200]
+        typer.echo(f"Slack verify: FAILED ({resp.status_code}) {err}")
+        return False
+    except Exception as e:
+        typer.echo(f"Slack verify: FAILED ({e})")
+        return False
+
+
+def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
+    root = require_project_root()
+    env_path = root / ".env"
+    example_path = root / ".env.example"
+
+    if env_path.exists():
+        backup = backup_file(env_path)
+        if backup is not None:
+            typer.echo(f"Backed up .env -> {backup.name}")
+
+    ensure_env_file(env_path, example_path=example_path, reset=reset)
+
+    warnings = scan_env_file(env_path)
+    if warnings:
+        typer.echo("")
+        typer.echo("Note: existing .env looks suspicious. Consider `stock-manager setup --reset`.")
+
+    typer.echo("")
+    typer.echo("KIS (Required)")
+    kis_app_key = typer.prompt("KIS_APP_KEY", hide_input=True).strip()
+    while not kis_app_key:
+        kis_app_key = typer.prompt("KIS_APP_KEY (cannot be empty)", hide_input=True).strip()
+
+    kis_app_secret = typer.prompt("KIS_APP_SECRET", hide_input=True).strip()
+    while not kis_app_secret:
+        kis_app_secret = typer.prompt("KIS_APP_SECRET (cannot be empty)", hide_input=True).strip()
+
+    kis_use_mock = typer.confirm("Use paper trading (KIS_USE_MOCK=true)?", default=True)
+
+    account_number = typer.prompt("KIS_ACCOUNT_NUMBER").strip()
+    while not account_number:
+        account_number = typer.prompt("KIS_ACCOUNT_NUMBER (cannot be empty)").strip()
+    product_code = typer.prompt("KIS_ACCOUNT_PRODUCT_CODE", default="01").strip() or "01"
+
+    typer.echo("")
+    slack_enabled = typer.confirm("Configure Slack notifications?", default=False)
+    slack_bot_token = ""
+    slack_default_channel = ""
+    slack_order_channel = ""
+    slack_alert_channel = ""
+    slack_min_level = "INFO"
+    if slack_enabled:
+        slack_bot_token = typer.prompt("SLACK_BOT_TOKEN (xoxb-...)", hide_input=True).strip()
+        while not slack_bot_token.startswith("xoxb-"):
+            slack_bot_token = typer.prompt("SLACK_BOT_TOKEN must start with xoxb-", hide_input=True).strip()
+        slack_default_channel = typer.prompt("SLACK_DEFAULT_CHANNEL (e.g. C123... or #general)").strip()
+        slack_order_channel = typer.prompt(
+            "SLACK_ORDER_CHANNEL (optional; default=SLACK_DEFAULT_CHANNEL)",
+            default=slack_default_channel,
+        ).strip()
+        slack_alert_channel = typer.prompt(
+            "SLACK_ALERT_CHANNEL (optional; default=SLACK_DEFAULT_CHANNEL)",
+            default=slack_default_channel,
+        ).strip()
+        slack_min_level = typer.prompt(
+            "SLACK_MIN_LEVEL (DEBUG/INFO/WARNING/ERROR)",
+            default="INFO",
+        ).strip().upper() or "INFO"
+
+    updates: dict[str, str] = {
+        "KIS_APP_KEY": kis_app_key,
+        "KIS_APP_SECRET": kis_app_secret,
+        "KIS_USE_MOCK": "true" if kis_use_mock else "false",
+        "KIS_ACCOUNT_NUMBER": account_number,
+        "KIS_ACCOUNT_PRODUCT_CODE": product_code,
+        "SLACK_ENABLED": "true" if slack_enabled else "false",
+        "SLACK_BOT_TOKEN": slack_bot_token,
+        "SLACK_DEFAULT_CHANNEL": slack_default_channel,
+        "SLACK_ORDER_CHANNEL": slack_order_channel,
+        "SLACK_ALERT_CHANNEL": slack_alert_channel,
+        "SLACK_MIN_LEVEL": slack_min_level,
+    }
+
+    set_env_vars(env_path, updates)
+    typer.echo("")
+    typer.echo("Saved configuration to .env")
+
+    verified_kis = False
+    verified_slack = False
+    if not skip_verify:
+        typer.echo("")
+        typer.echo("Verification")
+        try:
+            config = KISConfig(_env_file=str(env_path))
+            verified_kis = _verify_kis(config)
+        except Exception as e:
+            typer.echo(f"KIS verify: FAILED (config) {e}")
+            verified_kis = False
+        if slack_enabled and slack_bot_token:
+            verified_slack = _verify_slack(slack_bot_token)
+
+    return SetupResult(env_path=env_path, verified_kis=verified_kis, verified_slack=verified_slack)

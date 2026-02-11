@@ -5,6 +5,7 @@ including authentication, request handling, and response processing.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 import httpx
@@ -14,6 +15,7 @@ from stock_manager.adapters.broker.kis.config import (
     KISConfig,
     KISConnectionState,
 )
+from stock_manager.adapters.broker.kis.token_cache import load_cached_token, save_cached_token
 from stock_manager.adapters.broker.kis.exceptions import (
     KISAPIError,
     KISAuthenticationError,
@@ -125,11 +127,34 @@ class KISRestClient:
             >>> token = client.authenticate()
             >>> print(token.access_token)
         """
+        # Fast-path: reuse in-memory token if still valid.
+        now = datetime.now(timezone.utc)
+        if self.state.is_authenticated and self.state.access_token is not None:
+            # If we don't know expiry, assume valid to avoid unnecessary re-issuance.
+            if self.state.access_token_expires_at is None:
+                return self.state.access_token
+            if self.state.access_token_expires_at > now + timedelta(seconds=60):
+                return self.state.access_token
+
+        # Disk cache: reuse token across processes/restarts (avoids KIS OAuth rate limits).
+        if self.config.token_cache_enabled:
+            cached = load_cached_token(
+                self.config.get_token_cache_path(),
+                app_key=self.config.app_key.get_secret_value(),
+                api_base_url=self.config.api_base_url,
+                oauth_path=self.config.oauth_path,
+            )
+            if cached is not None:
+                self.state.update_token(cached.token)
+                self.state.access_token_expires_at = cached.expires_at
+                return cached.token
+
         url = self.config.oauth_path
         headers = {
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             "appkey": self.config.app_key.get_secret_value(),
             "appsecret": self.config.app_secret.get_secret_value(),
+            "custtype": self.config.custtype,
         }
 
         payload = {
@@ -157,13 +182,44 @@ class KISRestClient:
             )
 
             self.state.update_token(token)
+            # KIS returns expires_in in seconds (typically 86400).
+            expires_in = int(data.get("expires_in", 86400))
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            self.state.access_token_expires_at = expires_at
+
+            if self.config.token_cache_enabled:
+                try:
+                    save_cached_token(
+                        self.config.get_token_cache_path(),
+                        token=token,
+                        expires_at=expires_at,
+                        app_key=self.config.app_key.get_secret_value(),
+                        api_base_url=self.config.api_base_url,
+                        oauth_path=self.config.oauth_path,
+                        access_token_token_expired=data.get("access_token_token_expired"),
+                    )
+                except Exception:
+                    # Cache is best-effort; never fail auth because we couldn't write.
+                    pass
             logger.info("Successfully authenticated with KIS API")
 
             return token
 
         except httpx.HTTPStatusError as e:
+            # KIS often returns useful error details in JSON body.
+            details = ""
+            try:
+                data = e.response.json()
+                parts = []
+                for k in ["rt_cd", "msg_cd", "msg1", "error", "error_description"]:
+                    if k in data and data.get(k) not in (None, ""):
+                        parts.append(f"{k}={data.get(k)}")
+                if parts:
+                    details = " (" + ", ".join(parts) + ")"
+            except Exception:
+                pass
             raise KISAuthenticationError(
-                f"Authentication failed: {e.response.status_code}",
+                f"Authentication failed: {e.response.status_code}{details}",
                 error_code=str(e.response.status_code),
             ) from e
         except httpx.RequestError as e:
@@ -280,21 +336,19 @@ class KISRestClient:
         Returns:
             True if response contains an error, False otherwise
         """
-        # KIS API error response structure varies by endpoint
-        # rt_cd: "0" = success, "-1" = error
-        # msg_cd: "0" = success, non-zero = error
+        # KIS API error response structure varies by endpoint.
+        # In practice, `rt_cd` is the most reliable indicator:
+        # - "0" success
+        # - "-1"/"1" error
         rt_cd = data.get("rt_cd")
-        msg_cd = data.get("msg_cd")
 
         has_error_code = data.get("error_code") is not None
         has_error = data.get("error") is not None
 
-        return bool(
-            rt_cd == "-1"
-            or (msg_cd and msg_cd != "0")
-            or has_error_code
-            or has_error
-        )
+        if rt_cd is not None:
+            return str(rt_cd) != "0"
+
+        return bool(has_error_code or has_error or data.get("error_description") is not None)
 
     def _create_api_error_from_response(self, data: dict[str, Any]) -> KISAPIError:
         """Create KISAPIError from error response data.

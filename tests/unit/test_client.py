@@ -76,7 +76,6 @@ class TestKISRestClientAuthenticate:
         mock_access_token: KISAccessToken,
     ) -> None:
         """Test successful authentication."""
-        # Arrange
         from tests.factories.mock_responses import MockResponseFactory
 
         mock_response = MockResponseFactory.oauth_token_response(
@@ -86,10 +85,8 @@ class TestKISRestClientAuthenticate:
 
         kis_client._http_client.post.return_value = mock_response
 
-        # Act
         token = kis_client.authenticate()
 
-        # Assert
         assert token.access_token == mock_access_token.access_token
         assert token.token_type == "Bearer"
         assert kis_client.state.is_authenticated is True
@@ -157,7 +154,6 @@ class TestKISRestClientMakeRequest:
         sample_api_response: dict,
     ) -> None:
         """Test successful API request."""
-        # Arrange
         from tests.factories.mock_responses import MockResponseFactory
 
         mock_response = MockResponseFactory.success_kis(
@@ -165,14 +161,12 @@ class TestKISRestClientMakeRequest:
         )
         authenticated_kis_client._http_client.request.return_value = mock_response
 
-        # Act
         result = authenticated_kis_client.make_request(
             "GET",
             "/uapi/domestic-stock/v1/quotations/inquire-price",
             params={"FID_COND_MRKT_DIV_CODE": "J"},
         )
 
-        # Assert
         assert result["rt_cd"] == "0"
         assert authenticated_kis_client._http_client.request.called
 
@@ -181,8 +175,6 @@ class TestKISRestClientMakeRequest:
         kis_client: KISRestClient,
     ) -> None:
         """Test request without authentication fails."""
-        # Don't authenticate the client
-
         with pytest.raises(KISAuthenticationError, match="not authenticated"):
             kis_client.make_request(
                 "GET",
@@ -238,7 +230,6 @@ class TestKISRestClientMakeRequest:
             headers={"tr_id": "TTTC0001"},
         )
 
-        # Verify custom headers were included
         call_args = authenticated_kis_client._http_client.request.call_args
         headers = call_args.kwargs.get("headers", {})
         assert "tr_id" in headers
@@ -253,7 +244,6 @@ class TestKISRestClientMakeRequest:
         mock_response = MockResponseFactory.success_kis()
         kis_client._http_client.request.return_value = mock_response
 
-        # Should not raise authentication error
         result = kis_client.make_request(
             "GET",
             "/test",
@@ -261,6 +251,103 @@ class TestKISRestClientMakeRequest:
         )
 
         assert result is not None
+
+    def test_make_request_http_error_with_json_response(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Test HTTP error handling when response has JSON error data (lines 258-264)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.reason_phrase = "Bad Request"
+        mock_response.json.return_value = {
+            "rt_cd": "-1",
+            "msg_cd": "EGW00223",
+            "msg1": "Invalid parameter value",
+        }
+
+        http_error = httpx.HTTPStatusError(
+            "400 Bad Request",
+            request=MagicMock(),
+            response=mock_response,
+        )
+        mock_response.raise_for_status.side_effect = http_error
+        authenticated_kis_client._http_client.request.return_value = mock_response
+
+        with pytest.raises(KISAPIError) as exc_info:
+            authenticated_kis_client.make_request(
+                "GET",
+                "/test",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response_data is not None
+        assert exc_info.value.response_data["msg_cd"] == "EGW00223"
+
+    def test_make_request_http_error_without_json_response(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Test HTTP error handling when response cannot be parsed as JSON (line 261-262)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.reason_phrase = "Internal Server Error"
+        mock_response.json.side_effect = ValueError("No JSON in response")
+
+        http_error = httpx.HTTPStatusError(
+            "500 Internal Server Error",
+            request=MagicMock(),
+            response=mock_response,
+        )
+        mock_response.raise_for_status.side_effect = http_error
+        authenticated_kis_client._http_client.request.return_value = mock_response
+
+        with pytest.raises(KISAPIError) as exc_info:
+            authenticated_kis_client.make_request(
+                "GET",
+                "/test",
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.response_data is None
+
+    def test_make_request_network_error(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Test network error handling during API request (line 270)."""
+        authenticated_kis_client._http_client.request.side_effect = httpx.RequestError(
+            "Connection refused"
+        )
+
+        with pytest.raises(KISAPIError) as exc_info:
+            authenticated_kis_client.make_request(
+                "GET",
+                "/test",
+            )
+
+        assert "Network error" in str(exc_info.value)
+
+    def test_make_request_with_post_and_json_data(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Test POST request with JSON data."""
+        from tests.factories.mock_responses import MockResponseFactory
+
+        mock_response = MockResponseFactory.success_kis()
+        authenticated_kis_client._http_client.request.return_value = mock_response
+
+        result = authenticated_kis_client.make_request(
+            "POST",
+            "/test",
+            json_data={"key": "value"},
+        )
+
+        assert result is not None
+        call_args = authenticated_kis_client._http_client.request.call_args
+        assert call_args.kwargs.get("method") == "POST"
+        assert call_args.kwargs.get("json") == {"key": "value"}
 
 
 class TestKISRestClientHelpers:
@@ -302,6 +389,22 @@ class TestKISRestClientHelpers:
         """Test success response is not detected as error."""
         assert kis_client._is_error_response(sample_api_response) is False
 
+    def test_is_error_response_with_error_code_field(
+        self,
+        kis_client: KISRestClient,
+    ) -> None:
+        """Test error detection with error_code field."""
+        response = {"error_code": "E001", "error": "Something went wrong"}
+        assert kis_client._is_error_response(response) is True
+
+    def test_is_error_response_with_non_zero_msg_cd(
+        self,
+        kis_client: KISRestClient,
+    ) -> None:
+        """Test success response is not treated as error even with non-zero msg_cd."""
+        response = {"rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상처리 되었습니다."}
+        assert kis_client._is_error_response(response) is False
+
     def test_create_api_error_from_response(
         self,
         kis_client: KISRestClient,
@@ -312,6 +415,33 @@ class TestKISRestClientHelpers:
 
         assert isinstance(error, KISAPIError)
         assert error.error_code == "EGW00223"
+
+    def test_create_api_error_with_alternative_fields(
+        self,
+        kis_client: KISRestClient,
+    ) -> None:
+        """Test creating API error with alternative response fields."""
+        response = {
+            "error_code": "E001",
+            "error_message": "Custom error message",
+        }
+        error = kis_client._create_api_error_from_response(response)
+
+        assert isinstance(error, KISAPIError)
+        assert error.error_code == "E001"
+        assert "Custom error message" in str(error)
+
+    def test_create_api_error_with_unknown_fields(
+        self,
+        kis_client: KISRestClient,
+    ) -> None:
+        """Test creating API error when response has unknown structure."""
+        response = {"unknown": "data"}
+        error = kis_client._create_api_error_from_response(response)
+
+        assert isinstance(error, KISAPIError)
+        assert error.error_code == "UNKNOWN"
+        assert "Unknown error" in str(error)
 
     def test_is_authenticated(
         self,
@@ -334,6 +464,14 @@ class TestKISRestClientHelpers:
 
         assert token is mock_access_token
 
+    def test_get_access_token_when_not_authenticated(
+        self,
+        kis_client: KISRestClient,
+    ) -> None:
+        """Test get_access_token returns None when not authenticated."""
+        token = kis_client.get_access_token()
+        assert token is None
+
 
 class TestKISRestClientContextManager:
     """Tests for context manager support."""
@@ -348,7 +486,6 @@ class TestKISRestClientContextManager:
             assert client is not None
             assert isinstance(client, KISRestClient)
 
-        # Verify close was called
         assert mock_httpx_client.close.called
 
     def test_close_method(
@@ -359,3 +496,17 @@ class TestKISRestClientContextManager:
         kis_client.close()
 
         assert kis_client._http_client.close.called
+
+    def test_context_manager_with_exception(
+        self,
+        kis_config: KISConfig,
+        mock_httpx_client: MagicMock,
+    ) -> None:
+        """Test context manager properly closes even on exception."""
+        try:
+            with KISRestClient(config=kis_config, client=mock_httpx_client) as client:
+                raise ValueError("Test exception")
+        except ValueError:
+            pass
+
+        assert mock_httpx_client.close.called
