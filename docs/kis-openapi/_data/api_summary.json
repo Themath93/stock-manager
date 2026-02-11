@@ -1,0 +1,72 @@
+{
+  "generated_at": "2026-01-29T22:20:12.073312",
+  "version": "1.0.0",
+  "total_apis": 95,
+  "total_categories": 5,
+  "categories": [
+    {
+      "id": "oauth",
+      "name": "oauth",
+      "api_count": 4,
+      "http_methods": {
+        "POST": 4
+      },
+      "communication_types": {
+        "REST": 3,
+        "WEBSOCKET": 1
+      },
+      "index_file": "docs/kis-openapi/api/oauth/index.md"
+    },
+    {
+      "id": "domestic-stock-orders",
+      "name": "[국내주식] 주문/계좌",
+      "api_count": 23,
+      "http_methods": {
+        "GET": 18,
+        "POST": 5
+      },
+      "communication_types": {
+        "REST": 23
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-orders/index.md"
+    },
+    {
+      "id": "domestic-stock-basic",
+      "name": "[국내주식] 기본시세",
+      "api_count": 21,
+      "http_methods": {
+        "GET": 21
+      },
+      "communication_types": {
+        "REST": 21
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-basic/index.md"
+    },
+    {
+      "id": "domestic-stock-realtime",
+      "name": "[국내주식] 실시간시세",
+      "api_count": 29,
+      "http_methods": {
+        "POST": 29
+      },
+      "communication_types": {
+        "WEBSOCKET": 27,
+        "REST": 2
+      },
+      "index_file": "docs/kis-openapi/api/domestic-stock-realtime/index.md"
+    },
+    {
+      "id": "overseas-stock-orders",
+      "name": "[해외주식] 주문/계좌",
+      "api_count": 18,
+      "http_methods": {
+        "GET": 12,
+        "POST": 6
+      },
+      "communication_types": {
+        "REST": 18
+      },
+      "index_file": "docs/kis-openapi/api/overseas-stock-orders/index.md"
+    }
+  ]
+}

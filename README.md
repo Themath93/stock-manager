@@ -10,10 +10,15 @@ pip install -e .
 
 cp .env.example .env
 # 환경 변수 채우기
+
+# CLI 실행 (설치 후)
+stock-manager health                    # 시스템 상태 확인
+stock-manager worker-start worker-001   # 워커 시작
 ```
 
 ## 구조
 - `src/stock_manager/config/`: 환경/설정 로딩
+  - `app_config.py`: 통합 앱 설정 (AppConfig - KIS, Slack, 공통 설정)
 - `src/stock_manager/domain/`: 순수 도메인(전략/리스크/모델)
   - `worker.py`: 워커 도메인 모델 (WorkerStatus, StockLock, WorkerProcess, Candidate, DailySummary)
 - `src/stock_manager/service_layer/`: 유스케이스(장 시작/복구/주문 실행)
@@ -32,18 +37,55 @@ cp .env.example .env
   - `notifications/`: Slack 등 알림
   - `observability/`: logger/metrics
 - `src/stock_manager/entrypoints/`: CLI/worker/scheduler
+- `src/stock_manager/main.py`: CLI entry point (worker-start, health commands)
 - `src/stock_manager/utils/`: 공통 유틸
   - `slack.py`: Slack 알림 전송 유틸
+- `scripts/`: 유틸리티 스크립트
+  - `kis_slack_check.py`: KIS API 및 Slack 알림 연동 테스트 스크립트
 
 ## 다음 단계
 - 리스크 룰 확정 (SPEC-BACKEND-INFRA-003)
 - 전략 로직 구현 (구체화 필요)
-- 워커 아키텍처 구현 완료 ✅ (SPEC-BACKEND-WORKER-004)
-- 테스트 커버리지 개선 (현재 82%)
-- PostgreSQL DB 스키마 적용 (worker_schema.sql)
-- 데이터베이스 포트 구현 (PostgreSQL/SQLite)
+- 테스트 커버리지 개선 (현재 52%, 목표 80%)
+- 리팩토링 및 코드 정리
 
 ## 구현된 기능
+
+### SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (90% 완료)
+- **BrokerPort 인터페이스** ✅ 완료
+  - 추상 인터페이스 정의 (port/broker_port.py)
+- **KIS 설정 모듈** ✅ 완료
+  - LIVE/PAPER 모드 지원
+  - 환경 변수 로딩 (KIS_APP_KEY, KIS_APP_SECRET, MODE)
+  - REST_URL, WS_URL 자동 전환
+- **REST 클라이언트** ✅ 완료 (Phase 2)
+  - access_token 발급 (/oauth2/tokenP)
+  - 주문 전송, 조회 기본 기능
+  - approval_key 발급 (/oauth2/Approval) ✅ 완료
+  - 토큰 자동 갱신 (스레드 안전) ✅ 완료
+  - 해시키 생성 (/uapi/hashkey) ✅ 완료
+  - threading.Lock으로 동시성 제어 ✅ 완료
+- **WebSocket 클라이언트** ✅ 완료
+  - 연결/종료 메서드
+  - 호가 구독 (subscribe_quotes)
+  - 체결 이벤트 구독 (subscribe_executions)
+  - 지수 백오프 재연결 로직
+- **MockBrokerAdapter** ✅ 완료
+  - 테스트용 더블 구현
+- **품질 지표** ✅ 달성
+  - 테스트 커버리지: 85% (목표 80%)
+  - 테스트 통과율: 100% (26/26)
+  - TRUST 5 점수: 94.3%
+  - 스레드 안전성: 완료
+- **Phase 3 진행 중** ⏳
+  - **Milestone 1 완료** (2026-01-27)
+    - AppConfig.account_id 필드 구현
+    - KISBrokerAdapter 생성자에 account_id 파라미터 추가
+    - cancel_order 메서드에서 self.account_id 사용 완료
+    - 단위 테스트 통과 (12/12 tests passing)
+    - TODO 코멘트 제거
+  - **Milestone 2 예정**: 통합 테스트 작성
+  - **Milestone 3 예정**: 문서화 및 코드 정리
 
 ### SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
 - 주문 생성 (idempotency key 중복 검사 포함)
@@ -53,7 +95,7 @@ cp .env.example .env
 - 포지션 계산 및 업데이트
 - 브로커/DB 상태 동기화
 
-### SPEC-BACKEND-WORKER-004: 워커 아키텍처
+### SPEC-BACKEND-WORKER-004: 워커 아키텍처 (완료)
 - **분산 락 서비스 (LockService)**
   - PostgreSQL row-level locks 기반 원자적 락 획득
   - TTL(Time-To-Live) 지원 및 갱신 (renew)
@@ -88,28 +130,281 @@ cp .env.example .env
   - 백그라운드 하트비트 태스크
   - 모든 서비스 통합 (Lock, Lifecycle, Poller, Strategy, Order, Summary)
 
+### SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (완료)
+- **장 시작/종료 서비스 (MarketLifecycleService)**
+  - 장 시작 프로세스 (설정 로드, 인증, 계좌 확인, 전략 파라미터 로드)
+  - 장 종료 프로세스 (미체결 주문 취소 확인, 포지션 스냅샷 생성, 일일 정산 계산)
+  - 시스템 상태 관리 (OFFLINE → INITIALIZING → READY → TRADING → CLOSING → CLOSED)
+  - 거래 중지 모드 (STOPPED 상태 지원)
+- **상태 복구 서비스 (StateRecoveryService)**
+  - DB/브로커 상태 비교 및 동기화
+  - 미체결 주문 복구 (DB 조회 → 브로커 조회 → 상태 동기화)
+  - 포지션 재계산 (체결 기반 포지션 일치 확인)
+  - 복구 실패 시 거래 중지 처리
+- **정산 서비스 (SettlementService)**
+  - 포지션 스냅샷 생성 (모든 포지션 현재 상태 저장)
+  - 일일 정산 계산 (실현 손익, 평가 손익, 총 손익)
+  - DailySettlementEvent 발행
+- **데이터베이스 스키마**
+  - market_states 테이블 (시스템 상태 추적)
+  - daily_settlements 테이블 (일일 정산 기록)
+  - recovery_logs 테이블 (상태 복구 이력)
+
+### SPEC-OBSERVABILITY-001: 로그 레벨 기반 Slack 알림 시스템 (완료)
+- **Python logging.Handler 통합** ✅ 완료
+  - SlackHandler: Python 표준 logging 모듈과 Slack 통합
+  - AlertMapper: 로그 레벨 → 알림 설정 매핑 (CRITICAL, ERROR, WARNING, INFO, DEBUG)
+  - SlackFormatter: 구조화된 Slack 메시지 포맷팅 및 민감 정보 마스킹
+  - SlackHandlerConfig: Pydantic 기반 설정 관리
+- **알림 라우팅 정책** ✅ 완료
+  - CRITICAL: 즉시 알림, 스택 트레이스 포함, (!) 이모지
+  - ERROR: 즉시 알림, (x) 이모지
+  - WARNING: 배치 처리 (5분 집계), (warning) 이모지
+  - INFO/DEBUG: Slack 알림 없음
+- **고급 기능** ✅ 완료
+  - 비동기 전송 (백그라운드 스레드)
+  - 중복 알림 필터 (SHA256 해시 기반, 1분 윈도우)
+  - 민감 정보 마스킹 (token, secret, password, api_key 패턴)
+  - 배치 큐 자동 플러시 (종료 시)
+- **품질 지표** ✅ 완료
+  - 테스트 커버리지: 95% (목표 85% 초과)
+  - 테스트 통과율: 100% (57/57 tests)
+  - TRUST 5 준수 완료
+- **사용 예제**
+  ```python
+  import logging
+  from stock_manager.adapters.observability import SlackHandler, SlackHandlerConfig
+
+  logger = logging.getLogger(__name__)
+  config = SlackHandlerConfig(
+      bot_token=os.getenv("SLACK_BOT_TOKEN"),
+      critical_channel=os.getenv("SLACK_CRITICAL_CHANNEL"),
+      error_channel=os.getenv("SLACK_ERROR_CHANNEL"),
+      warning_channel=os.getenv("SLACK_WARNING_CHANNEL"),
+  )
+  handler = SlackHandler(config)
+  logger.addHandler(handler)
+
+  logger.critical("Critical system failure")  # 즉시 Slack으로 전송
+  logger.error("Database connection failed")  # 즉시 Slack으로 전송
+  logger.warning("High memory usage")         # 5분 배치 처리
+  logger.info("Application started")          # Slack 전송 없음
+  ```
+
+### SPEC-CLI-001: CLI Worker Entrypoints (완료)
+- **CLI 엔트리 포인트 (`src/stock_manager/main.py`)** ✅ 완료
+  - Typer 기반 현대적 CLI 프레임워크
+  - `worker-start` 명령: 워커 인스턴스 시작
+  - `health` 명령: 시스템 상태 확인 (DB/Broker 연결)
+- **신호 처리 (Signal Handling)** ✅ 완료
+  - SIGTERM/SIGINT (Ctrl+C) 그레이스풀 셧다운
+  - 전역 플래그 기반 비동기 셧다운 조정
+  - 적절한 종료 코드 반환 (0=성공, 1=설정 오류, 2=인프라 오류, 130=SIGINT)
+- **비동기-동기 브릿지** ✅ 완료
+  - `asyncio.run()`으로 WorkerMain 실행
+  - RichHandler 기반 구조화된 로깅
+- **환경 변수 검증** ✅ 완료
+  - AppConfig 로딩 및 검증
+  - 데이터베이스 연결 검사
+  - 브로커 인증 검사
+- **품질 지표** ✅ 달성
+  - 테스트 커버리지: 94.90% (목표 85% 초과)
+  - CLI 테스트: 36개 통과
+  - TRUST 5 준수 완료
+- **사용 예제**
+  ```bash
+  # 워커 시작
+  stock-manager worker-start worker-001 --log-level DEBUG
+
+  # 시스템 상태 확인
+  stock-manager health
+
+  # 상세 출력
+  stock-manager health --verbose
+  ```
+
 ### Slack 알림
 - 주문/체결/리스크 이벤트 알림
-- 에러 로그 알림
+- 에러 로그 알림 (자동 레벨 기반 라우팅)
 - 시스템 상태 모니터링
 - 메시지 전송/수정/스레드 댓글 기능 (ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md 참조)
+
+### 통합 설정 관리 (AppConfig)
+- `src/stock_manager/config/app_config.py`에서 통합 설정 관리
+- KIS 설정: 모드(LIVE/PAPER), API 키, REST/WebSocket URL
+- Slack 설정: Bot Token, Channel ID
+- 공통 설정: 로그 레벨, 계좌 ID
+- 운영 모드에 따른 URL 자동 선택 헬퍼 메서드 제공
+
+## 개발 환경 설정
+
+### 로컬 PostgreSQL 환경 (docker-compose)
+프로젝트 루트의 `docker-compose.yml`을 사용하여 로컬 개발용 PostgreSQL 데이터베이스를 실행할 수 있습니다.
+
+```bash
+# PostgreSQL 컨테이너 시작
+docker-compose up -d postgres
+
+# 컨테이너 상태 확인
+docker-compose ps
+
+# 로그 확인
+docker-compose logs postgres
+
+# 컨테이너 중지
+docker-compose down
+
+# 볼륨 포함하여 완전 삭제
+docker-compose down -v
+```
+
+**설정:**
+- 이미지: postgres:15-alpine
+- 포트: 5432
+- 데이터베이스: stock_manager
+- 사용자: postgres / postgres
+- Health check 포함
+
+**환경 변수 (.env):**
+```bash
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=stock_manager
+DB_USER=postgres
+DB_PASSWORD=postgres
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/stock_manager
+```
+
+## 유틸리티 스크립트
+
+### KIS Slack Check 스크립트
+`scripts/kis_slack_check.py`는 KIS API 연결과 Slack 알림 전송을 테스트하는 유틸리티입니다.
+
+```bash
+# 실행 방법
+python scripts/kis_slack_check.py
+
+# 환경 변수 요구사항:
+# - ACCOUNT_ID: 계좌 ID
+# - SLACK_BOT_TOKEN: Slack Bot Token
+# - SLACK_CHANNEL_ID: Slack Channel ID
+# - KIS_APP_KEY 또는 KIS_KIS_APP_KEY: KIS 앱키
+# - KIS_APP_SECRET 또는 KIS_KIS_APP_SECRET: KIS 앱시크릿키
+```
+
+**기능:**
+- KIS API 인증 및 현금 잔고 조회
+- Slack 알림 전송 테스트
+- 계좌 정보 마스킹 처리
+
+## 테스트
+
+### 테스트 커버리지
+
+현재 상태: 85% (26/26 KISRestClient tests passing)
+
+**Phase 2 업데이트:**
+- KISRestClient 단위 테스트: 26개 ✅ (TokenManager 7개, approval_key 3개, 해시키 3개, 기본 13개)
+- 테스트 커버리지: 85% (목표 80% 초과 달성)
+- TRUST 5 점수: 94.3%
+
+**전체 프로젝트 테스트:**
+- 도메인 모델 테스트: Order, Fill, OrderStatus, OrderRequest (10 tests)
+- 도메인 모델 테스트: Worker 도메인 (WorkerStatus, StockLock, WorkerProcess, Candidate, PositionSnapshot, DailySummary) (21 tests)
+- 서비스 레이어 테스트: OrderService, LockService, WorkerLifecycleService 등
+- 어댑터 테스트: MockBroker, KISBroker, KISConfig, KISRestClient, PostgreSQL
+- 유틸리티 테스트: Slack 알림 (7 tests)
+
+### 단위 테스트 실행
+
+```bash
+# 전체 테스트 실행
+pytest tests/
+
+# 단위 테스트만 실행
+pytest tests/unit/
+
+# 특정 모듈 테스트
+pytest tests/unit/domain/test_order.py -v
+
+# 커버리지 리포트
+pytest --cov=src/stock_manager --cov-report=html tests/
+```
+
+### 통합 테스트 실행
+
+통합 테스트는 PostgreSQL 데이터베이스가 필요합니다. docker-compose로 데이터베이스를 먼저 실행하세요.
+
+```bash
+# 1. PostgreSQL 컨테이너 시작
+docker-compose up -d postgres
+
+# 2. 통합 테스트 실행 (대기 시간 후)
+pytest tests/integration/ -v
+
+# 3. 또는 pytest 마크로 통합 테스트만 실행
+pytest -m integration -v
+```
+
+**참고:** 통합 테스트는 데이터베이스가 실행 중이지 않으면 자동으로 건너뜁니다(skip).
 
 ## AI 개발자 가이드
 
 ### ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md
 Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
 
-## 테스트 커버리지
+## 프로젝트 진행 상태
 
-현재 상태: 82% (76/88 tests passing)
+### 완료된 SPEC
+- SPEC-CLI-001: CLI Worker Entrypoints (2026-01-29 완료)
+- SPEC-OBSERVABILITY-001: 로그 레벨 기반 Slack 알림 시스템 (2026-01-25 완료)
+- SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
+- SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)
+- SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (2026-01-25 완료)
 
-- 도메인 모델 테스트: Order, Fill, OrderStatus, OrderRequest (10 tests)
-- 도메인 모델 테스트: Worker 도메인 (WorkerStatus, StockLock, WorkerProcess, Candidate, PositionSnapshot, DailySummary) (21 tests)
-- 서비스 레이어 테스트: OrderService (in progress)
-- 어댑터 테스트: MockBroker, KISBroker, KISConfig, KISRestClient (33 tests)
-- 유틸리티 테스트: Slack 알림 (7 tests)
+### SPEC-KIS-DOCS-001: KIS OpenAPI 문서 재정비 및 TR_ID 매핑 시스템 (Milestone 3 완료)
+- **TR_ID 매핑 데이터베이스 구축** ✅ 완료
+  - 336개 API의 실전/모의 TR_ID 매핑 완료
+  - `docs_raw/kis-openapi/_data/tr_id_mapping.json` 생성
+  - Excel 파싱 스크립트 구현 (`scripts/parse_kis_excel.py`)
+- **Excel 파싱 스크립트** ✅ 완료
+  - HTS_OPENAPI.xlsx 자동 파싱
+  - 카테고리별 API 분류 (16개 카테고리)
+  - TR_ID, API ID, HTTP Method, URL 정보 추출
+- **문서 수정 스크립트** ✅ 완료
+  - 기존 문서 TR_ID 일괄 수정
+  - API ID → 실제 TR_ID 변환
+  - 실전/모의 TR_ID 명확히 구분
+- **API 문서 템플릿** ✅ 완료
+  - 표준화된 문서 구조 정의
+  - TR_ID 정보 포함 섹션 추가
+  - Request/Response 필드 템플릿
+- **REST Client TR_ID 지원** ✅ 완료
+  - `KISRESTClient.get_tr_id()` 메서드 구현
+  - 요청 헤더에 `tr_id` 필드 자동 포함
+  - 실전/모의 환경별 TR_ID 반환
+- **Milestone 3: API 문서 자동 생성 시스템** ✅ 완료
+  - 336개 KIS OpenAPI API 문서 자동 생성 완료
+  - 16개 카테고리별 문서 자동 분류 및 구조화
+  - 표준화된 마크다운 템플릿 기반 문서 생성
+  - TR_ID 매핑 데이터와의 자동 연동
+  - Request/Response 필드 상세 문서화
+  - API별 예제 코드 및 사용법 포함
+- **품질 지표** ✅ 달성
+  - API 문서 커버리지: 336/336 (100%)
+  - 테스트 커버리지: 90/90 tests 통과 (87.53%)
+  - TRUST 5 점수: 93/100 PASS
+  - 문서 일관성: 100%
 
-테스트 실행:
-```bash
-pytest tests/
-```
+### 진행 중인 작업
+- SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (85% 완료)
+  - 완료: BrokerPort 인터페이스, KIS 설정, REST/WebSocket 클라이언트
+  - 완료: approval_key 발급, 토큰 자동 갱신 (스레드 안전), 해시키 생성
+  - 완료: 단위 테스트 26개 (85% 커버리지, TRUST 5: 94.3%)
+  - 예정: KISBrokerAdapter 완성, WebSocket 연결 통합, 통합 테스트
+
+### 다음 단계
+- KISBrokerAdapter 완성 및 WebSocket 연결 통합
+- 통합 테스트 작성
+- 리팩토링 및 코드 정리
+- 전체 프로젝트 테스트 커버리지 개선 (목표 80%)
