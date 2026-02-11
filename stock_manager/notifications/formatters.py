@@ -10,6 +10,34 @@ from typing import Any
 from stock_manager.notifications.models import NotificationEvent, NotificationLevel
 
 
+SYMBOL_NAME_MAP: dict[str, str] = {
+    "005930": "삼성전자",
+    "000660": "SK하이닉스",
+    "035420": "NAVER",
+    "035720": "카카오",
+    "051910": "LG화학",
+    "006400": "삼성SDI",
+    "068270": "셀트리온",
+    "005380": "현대차",
+    "207940": "삼성바이오로직스",
+}
+
+
+EVENT_EMOJI_MAP: dict[str, str] = {
+    "engine.started": "🚀",
+    "engine.stopped": "🛑",
+    "order.filled": "✅",
+    "order.rejected": "❌",
+    "order.canceled": "↩️",
+    "order.created": "📝",
+    "position.stop_loss": "🛡️",
+    "position.take_profit": "💰",
+    "reconciliation.discrepancy": "🔍",
+    "recovery.reconciled": "♻️",
+    "recovery.failed": "🚨",
+}
+
+
 def format_notification(event: NotificationEvent) -> dict[str, Any]:
     """Dispatch to specific formatter based on event_type prefix.
 
@@ -35,7 +63,7 @@ def format_notification(event: NotificationEvent) -> dict[str, Any]:
 
 def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
     """Format engine lifecycle events (engine.started, engine.stopped)."""
-    emoji = _level_to_emoji(event.level)
+    emoji = _event_to_emoji(event)
     details = event.details
 
     if event.event_type == "engine.started":
@@ -63,18 +91,19 @@ def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
 
 def format_order_event(event: NotificationEvent) -> dict[str, Any]:
     """Format order events (order.filled, order.rejected)."""
-    emoji = _level_to_emoji(event.level)
+    emoji = _event_to_emoji(event)
     details = event.details
 
-    symbol = details.get("symbol", "N/A")
+    symbol = _format_symbol_label(details)
     side = details.get("side", "N/A")
+    side_emoji = _side_to_emoji(side)
     quantity = details.get("quantity", 0)
     price = details.get("price")
 
     if event.event_type == "order.filled":
         fields = [
             _mrkdwn_field("*Symbol:*", symbol),
-            _mrkdwn_field("*Side:*", str(side).upper()),
+            _mrkdwn_field("*Side:*", f"{side_emoji} {str(side).upper()}"),
             _mrkdwn_field("*Quantity:*", str(quantity)),
             _mrkdwn_field("*Price:*", _format_currency(price) if price else "Market"),
         ]
@@ -84,12 +113,12 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
     else:  # order.rejected
         fields = [
             _mrkdwn_field("*Symbol:*", symbol),
-            _mrkdwn_field("*Side:*", str(side).upper()),
+            _mrkdwn_field("*Side:*", f"{side_emoji} {str(side).upper()}"),
             _mrkdwn_field("*Quantity:*", str(quantity)),
             _mrkdwn_field("*Reason:*", details.get("reason", "Unknown")),
         ]
 
-    text = f"{emoji} {event.title}: {side} {quantity}x {symbol}"
+    text = f"{emoji} {event.title}: {side_emoji} {side} {quantity}x {symbol}"
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} {event.title}"}},
         {"type": "section", "fields": fields},
@@ -101,10 +130,10 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
 
 def format_position_event(event: NotificationEvent) -> dict[str, Any]:
     """Format position events (position.stop_loss, position.take_profit)."""
-    emoji = _level_to_emoji(event.level)
+    emoji = _event_to_emoji(event)
     details = event.details
 
-    symbol = details.get("symbol", "N/A")
+    symbol = _format_symbol_label(details)
     entry_price = details.get("entry_price")
     trigger_price = details.get("trigger_price")
 
@@ -138,7 +167,7 @@ def format_position_event(event: NotificationEvent) -> dict[str, Any]:
 
 def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
     """Format reconciliation events (reconciliation.discrepancy)."""
-    emoji = _level_to_emoji(event.level)
+    emoji = _event_to_emoji(event)
     details = event.details
 
     fields = [
@@ -161,7 +190,7 @@ def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
 
 def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
     """Format recovery events (recovery.reconciled, recovery.failed)."""
-    emoji = _level_to_emoji(event.level)
+    emoji = _event_to_emoji(event)
     details = event.details
 
     if event.event_type == "recovery.reconciled":
@@ -193,7 +222,7 @@ def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
 
 def _format_generic_event(event: NotificationEvent) -> dict[str, Any]:
     """Format unknown event types with a generic layout."""
-    emoji = _level_to_emoji(event.level)
+    emoji = _event_to_emoji(event)
 
     fields = [_mrkdwn_field(f"*{k}:*", str(v)) for k, v in list(event.details.items())[:8]]
 
@@ -231,6 +260,41 @@ def _level_to_emoji(level: NotificationLevel) -> str:
         NotificationLevel.CRITICAL: ":rotating_light:",
     }
     return emojis.get(level, ":bell:")
+
+
+def _event_to_emoji(event: NotificationEvent) -> str:
+    """Map event type to an explicit emoji, fallback to level emoji."""
+    return EVENT_EMOJI_MAP.get(event.event_type, _level_to_emoji(event.level))
+
+
+def _side_to_emoji(side: Any) -> str:
+    """Map side to emoji for quick visual scan."""
+    side_str = str(side).upper()
+    if side_str == "BUY":
+        return "🟢"
+    if side_str == "SELL":
+        return "🔴"
+    return "⚪"
+
+
+def _format_symbol_label(details: dict[str, Any]) -> str:
+    """Format symbol label with name when available.
+
+    Priority:
+      1) symbol_name / prdt_name / name in event details
+      2) built-in SYMBOL_NAME_MAP by symbol code
+      3) raw symbol
+    """
+    symbol = str(details.get("symbol", "N/A"))
+    symbol_name = details.get("symbol_name") or details.get("prdt_name") or details.get("name")
+    if not symbol_name and symbol != "N/A":
+        symbol_name = SYMBOL_NAME_MAP.get(symbol)
+
+    if symbol_name and symbol and symbol != "N/A":
+        return f"{symbol_name}({symbol})"
+    if symbol_name:
+        return str(symbol_name)
+    return symbol
 
 
 def _format_currency(value: int | float | Decimal | None) -> str:
