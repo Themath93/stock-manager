@@ -1,8 +1,0 @@
-{
-  "active": true,
-  "started_at": "2026-01-29T22:36:09.645Z",
-  "original_prompt": "/oh-my-claudecode:ralph 이제 domestic_stock 쪽 점검시작 oauth 같이 5번 반복",
-  "reinforcement_count": 0,
-  "last_checked_at": "2026-01-29T22:36:09.646Z",
-  "iteration": 7
-}
