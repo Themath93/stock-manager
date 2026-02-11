@@ -29,6 +29,8 @@ def mock_env_vars():
         "KIS_ACCOUNT_NUMBER": "12345678",
         "KIS_ACCOUNT_PRODUCT_CODE": "01",
         "KIS_USE_MOCK": "true",
+        # Keep unit tests isolated from user home directory.
+        "KIS_TOKEN_CACHE_ENABLED": "false",
     }
 
 
@@ -43,7 +45,7 @@ def kis_config(mock_env_vars: dict[str, str]) -> KISConfig:
         KISConfig instance with test credentials
     """
     with patch.dict(os.environ, mock_env_vars, clear=True):
-        return KISConfig()
+        return KISConfig(_env_file=None)
 
 
 @pytest.fixture
@@ -59,7 +61,7 @@ def kis_config_real(mock_env_vars: dict[str, str]) -> KISConfig:
     env = mock_env_vars.copy()
     env["KIS_USE_MOCK"] = "false"
     with patch.dict(os.environ, env, clear=True):
-        return KISConfig()
+        return KISConfig(_env_file=None)
 
 
 @pytest.fixture

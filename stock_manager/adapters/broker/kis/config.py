@@ -5,17 +5,23 @@ tokens, and connection settings.
 """
 
 from dataclasses import dataclass
-from typing import Final
+from datetime import datetime
+from pathlib import Path
+from typing import Final, Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from stock_manager.config.paths import default_env_file
 
 
 # API endpoints
 KIS_API_BASE_URL: Final = "https://openapivts.koreainvestment.com:29443"  # Mock trading
 KIS_API_BASE_URL_REAL: Final = "https://openapi.koreainvestment.com:9443"  # Real trading
 KIS_OAUTH_PATH: Final = "/oauth2/tokenP"
-KIS_OAUTH_PATH_REAL: Final = "/oauth2/token"
+# KIS personal accounts use /oauth2/tokenP for both mock and real.
+# (Some legacy/partner flows use /oauth2/token, but that's out of scope here.)
+KIS_OAUTH_PATH_REAL: Final = "/oauth2/tokenP"
 
 
 class KISConfig(BaseSettings):
@@ -39,9 +45,10 @@ class KISConfig(BaseSettings):
         >>> print(config.is_mock_trading)
     """
 
+    _DEFAULT_ENV_FILE = str(default_env_file())
     model_config = SettingsConfigDict(
         env_prefix="KIS_",
-        env_file=".env",
+        env_file=_DEFAULT_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -56,6 +63,22 @@ class KISConfig(BaseSettings):
 
     # Environment settings
     use_mock: bool = True
+    # Customer type header used by OAuth and some APIs: P=individual, B=corporate
+    custtype: Literal["P", "B"] = "P"
+    # Token caching (strongly recommended to avoid KIS OAuth rate limits)
+    token_cache_enabled: bool = True
+    token_cache_path: str | None = None
+
+    def get_token_cache_path(self) -> Path:
+        """Return the access token cache file path.
+
+        Defaults to ~/.stock_manager/kis_token_{real|paper}.json, but can be overridden
+        via KIS_TOKEN_CACHE_PATH.
+        """
+        if self.token_cache_path:
+            return Path(self.token_cache_path).expanduser()
+        mode = "paper" if self.use_mock else "real"
+        return Path.home() / ".stock_manager" / f"kis_token_{mode}.json"
 
     @property
     def api_base_url(self) -> str:
@@ -192,6 +215,7 @@ class KISConnectionState:
 
     config: KISConfig
     access_token: KISAccessToken | None = None
+    access_token_expires_at: datetime | None = None
     is_authenticated: bool = False
 
     def __post_init__(self) -> None:
@@ -214,6 +238,8 @@ class KISConnectionState:
         """
         self.access_token = token
         self.is_authenticated = token.is_valid()
+        # Expires-at is managed by the caller (client.authenticate) because KISAccessToken
+        # doesn't carry a timestamp and may be set from an external source (tests, setup).
 
     def clear_token(self) -> None:
         """Clear the access token and mark as not authenticated.

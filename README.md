@@ -4,50 +4,39 @@ Python 3.13 기반 자동매매 봇 보일러플레이트.
 
 ## Quickstart
 ```bash
+# 가장 쉬운 방법 (권장)
+./setup.sh
+
+# 또는: 직접 설치 + 설정 위저드
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e '.[dev,cli]'
 
-cp .env.example .env
-# 환경 변수 채우기
+# .env 설정 (인터랙티브)
+stock-manager setup
+stock-manager doctor
 
-# CLI 실행 (설치 후)
-stock-manager health                    # 시스템 상태 확인
-stock-manager worker-start worker-001   # 워커 시작
+# (추가 CLI 커맨드는 프로젝트 상태에 따라 확장 예정)
 ```
 
 ## 구조
-- `src/stock_manager/config/`: 환경/설정 로딩
-  - `app_config.py`: 통합 앱 설정 (AppConfig - KIS, Slack, 공통 설정)
-- `src/stock_manager/domain/`: 순수 도메인(전략/리스크/모델)
-  - `worker.py`: 워커 도메인 모델 (WorkerStatus, StockLock, WorkerProcess, Candidate, DailySummary)
-- `src/stock_manager/service_layer/`: 유스케이스(장 시작/복구/주문 실행)
-  - `order_service.py`: 주문 생성, 전송, 취소, 체결 처리
-  - `position_service.py`: 포지션 계산 및 업데이트
-  - `lock_service.py`: 분산 락 관리 (acquire, release, renew, heartbeat, cleanup)
-  - `worker_lifecycle_service.py`: 워커 생명주기 관리 (start, stop, status, cleanup)
-  - `market_data_poller.py`: 후보 종목 발견 및 필터링
-  - `strategy_executor.py`: 매수/매도 시그널 평가
-  - `pnl_calculator.py`: PnL 계산 (실현/미실현/일일)
-  - `daily_summary_service.py`: 일일 요약 생성 및 조회
-  - `worker_main.py`: 워커 오케스트레이터 (상태 머신, 이벤트 루프)
-- `src/stock_manager/adapters/`: 외부 의존성 어댑터
-  - `broker/`: 한국투자증권 REST/WS
-  - `storage/`: PostgreSQL, 락 관리
-  - `notifications/`: Slack 등 알림
-  - `observability/`: logger/metrics
-- `src/stock_manager/entrypoints/`: CLI/worker/scheduler
-- `src/stock_manager/main.py`: CLI entry point (worker-start, health commands)
-- `src/stock_manager/utils/`: 공통 유틸
-  - `slack.py`: Slack 알림 전송 유틸
+- `stock_manager/`: 애플리케이션 코드
+  - `adapters/`: 외부 의존성 어댑터 (KIS 등)
+  - `notifications/`: Slack 알림 시스템
+  - `trading/`: 트레이딩 도메인/로직
+  - `persistence/`: 상태 저장/복구
+  - `engine.py`: 트레이딩 엔진 파사드
+  - `main.py`: CLI 엔트리포인트 (`stock-manager ...`)
 - `scripts/`: 유틸리티 스크립트
-  - `kis_slack_check.py`: KIS API 및 Slack 알림 연동 테스트 스크립트
+  - `generate_kis_apis.py`: KIS OpenAPI 문서 기반 코드 생성 도구
 
-## 다음 단계
-- 리스크 룰 확정 (SPEC-BACKEND-INFRA-003)
+## 다음 단계 (MVP Focus)
+- 테스트 커버리지 개선 (현재 66%, 목표 80%)
+- KISBrokerAdapter 완성 및 통합 테스트
 - 전략 로직 구현 (구체화 필요)
-- 테스트 커버리지 개선 (현재 52%, 목표 80%)
 - 리팩토링 및 코드 정리
+
+> **MVP 정책:** 해외주식 모듈은 서비스 확장 시 구현 예정 (Post-MVP)
 
 ## 구현된 기능
 
@@ -403,8 +392,10 @@ Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
   - 완료: 단위 테스트 26개 (85% 커버리지, TRUST 5: 94.3%)
   - 예정: KISBrokerAdapter 완성, WebSocket 연결 통합, 통합 테스트
 
-### 다음 단계
+### 다음 단계 (MVP Scope)
 - KISBrokerAdapter 완성 및 WebSocket 연결 통합
 - 통합 테스트 작성
 - 리팩토링 및 코드 정리
 - 전체 프로젝트 테스트 커버리지 개선 (목표 80%)
+
+> **Note:** 해외주식 모듈은 Post-MVP로 연기됨
