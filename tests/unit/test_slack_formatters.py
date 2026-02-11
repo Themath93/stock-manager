@@ -74,7 +74,7 @@ class TestFormatEngineEvent:
         )
         result = format_engine_event(event)
 
-        assert result["text"] == ":white_check_mark: Engine Started"
+        assert result["text"] == "🚀 Engine Started"
         assert result["color"] == "#36a64f"
         assert len(result["blocks"]) == 3
         assert result["blocks"][0]["type"] == "header"
@@ -90,7 +90,7 @@ class TestFormatEngineEvent:
         )
         result = format_engine_event(event)
 
-        assert ":white_check_mark:" in result["text"]
+        assert "🛑" in result["text"]
         assert "Stopped" in str(result["blocks"][1])
 
 
@@ -113,7 +113,7 @@ class TestFormatOrderEvent:
         )
         result = format_order_event(event)
 
-        assert result["text"] == ":white_check_mark: Order Filled: BUY 100x 005930"
+        assert result["text"] == "✅ Order Filled: 🟢 BUY 100x 삼성전자(005930)"
         assert result["color"] == "#36a64f"
         assert len(result["blocks"]) == 3
 
@@ -132,8 +132,27 @@ class TestFormatOrderEvent:
         )
         result = format_order_event(event)
 
-        assert ":warning:" in result["text"]
+        assert "❌" in result["text"]
         assert result["color"] == "#ECB22E"
+
+    def test_format_order_with_explicit_symbol_name(self):
+        """Test order formatter prefers explicit symbol_name from details."""
+        event = NotificationEvent(
+            event_type="order.filled",
+            level=NotificationLevel.INFO,
+            title="Order Filled",
+            details={
+                "symbol": "123456",
+                "symbol_name": "테스트종목",
+                "quantity": 1,
+                "price": 1000,
+                "side": "SELL",
+            },
+        )
+        result = format_order_event(event)
+
+        assert "테스트종목(123456)" in result["text"]
+        assert "🔴" in result["text"]
 
 
 class TestFormatPositionEvent:
@@ -149,7 +168,8 @@ class TestFormatPositionEvent:
         )
         result = format_position_event(event)
 
-        assert "005930" in result["text"]
+        assert "🛡️" in result["text"]
+        assert "삼성전자(005930)" in result["text"]
         assert result["color"] == "#ECB22E"
 
     def test_format_position_take_profit(self):
@@ -162,7 +182,8 @@ class TestFormatPositionEvent:
         )
         result = format_position_event(event)
 
-        assert "000660" in result["text"]
+        assert "💰" in result["text"]
+        assert "SK하이닉스(000660)" in result["text"]
 
     def test_position_event_with_pnl_calculation(self):
         """Test position event with P&L calculation."""
