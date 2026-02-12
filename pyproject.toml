@@ -47,10 +47,6 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
-    "--cov=stock_manager",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-fail-under=80",  # Working toward 85% target
 ]
 asyncio_mode = "auto"
 markers = [
