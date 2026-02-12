@@ -72,6 +72,9 @@ class TestCashOrder:
         assert result["params"]["CANO"] == "12345678"
         assert result["params"]["PDNO"] == "005930"
         assert result["params"]["ORD_QTY"] == "10"
+        assert result["params"]["ORD_DVSN"] == "01"
+        assert result["params"]["ORD_UNPR"] == "0"
+        assert result["params"]["EXCG_ID_DVSN_CD"] == "KRX"
 
     def test_cash_order_sell(self):
         result = orders.cash_order(
@@ -87,7 +90,8 @@ class TestCashOrder:
             ord_dv="00", ord_qty=10, ord_unsl="01", order_type="buy",
             ord_prc=80000, is_paper_trading=False,
         )
-        assert result["params"]["ORD_PRC"] == "80000"
+        assert result["params"]["ORD_DVSN"] == "00"
+        assert result["params"]["ORD_UNPR"] == "80000"
 
     def test_cash_order_paper_trading(self):
         result = orders.cash_order(
@@ -104,6 +108,26 @@ class TestCashOrder:
             tr_id="CUSTOM_TR_ID", is_paper_trading=False,
         )
         assert result["tr_id"] == "CUSTOM_TR_ID"
+
+    def test_cash_order_alias_kwargs_override_legacy_fields(self):
+        result = orders.cash_order(
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
+            ord_prc=1000,
+            ord_dvsn="00",
+            ord_unpr=70000,
+            excg_id_dvsn_cd="SOR",
+            is_paper_trading=False,
+        )
+
+        assert result["params"]["ORD_DVSN"] == "00"
+        assert result["params"]["ORD_UNPR"] == "70000"
+        assert result["params"]["EXCG_ID_DVSN_CD"] == "SOR"
 
 
 # =============================================================================
@@ -249,12 +273,26 @@ class TestInquireBalance:
             cano="12345678", acnt_prdt_cd="01", is_paper_trading=False,
         )
         assert result["tr_id"] == "TTTC8434R"
+        assert result["params"]["AFHR_FLPR_YN"] == "N"
+        assert result["params"]["INQR_DVSN"] == "01"
+        assert result["params"]["UNPR_DVSN"] == "01"
 
     def test_inquire_balance_paper_trading(self):
         result = orders.inquire_balance(
             cano="12345678", acnt_prdt_cd="01", is_paper_trading=True,
         )
         assert result["tr_id"] == "VTTC8434R"
+
+    def test_inquire_balance_allows_overrides(self):
+        result = orders.inquire_balance(
+            cano="12345678",
+            acnt_prdt_cd="01",
+            is_paper_trading=True,
+            INQR_DVSN="02",
+            AFHR_FLPR_YN="Y",
+        )
+        assert result["params"]["INQR_DVSN"] == "02"
+        assert result["params"]["AFHR_FLPR_YN"] == "Y"
 
 
 # =============================================================================

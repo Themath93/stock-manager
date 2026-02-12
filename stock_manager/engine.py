@@ -113,8 +113,8 @@ class TradingEngine:
 
         # Initialize position reconciler
         self._reconciler = PositionReconciler(
-            client=self.client,
             position_manager=self._position_manager,
+            inquire_balance_func=self._inquire_balance,
             interval=60.0,  # Check every minute
             on_discrepancy=self._handle_discrepancy
         )
@@ -173,7 +173,7 @@ class TradingEngine:
             local_state=self._state,
             client=self.client,
             inquire_balance_func=self._inquire_balance,
-            save_state_func=lambda state: save_state_atomic(state, self.state_path),
+            save_state_func=save_state_atomic,
             state_path=self.state_path
         )
 
@@ -187,6 +187,15 @@ class TradingEngine:
                 "missing_positions": len(recovery_report.missing_positions)
             }
         )
+
+        # Fail-fast on reconciliation failure
+        if self._is_recovery_result(recovery_report.result, RecoveryResult.FAILED):
+            error_message = "; ".join(recovery_report.errors) if recovery_report.errors else "unknown error"
+            self._notify(
+                "recovery.failed", NotificationLevel.CRITICAL, "Recovery Failed",
+                errors=recovery_report.errors,
+            )
+            raise RuntimeError(f"Startup reconciliation failed: {error_message}")
 
         # Update state after reconciliation
         self._update_state()
@@ -210,17 +219,12 @@ class TradingEngine:
         )
 
         # Notify recovery events
-        if recovery_report.result == RecoveryResult.RECONCILED:
+        if self._is_recovery_result(recovery_report.result, RecoveryResult.RECONCILED):
             self._notify(
                 "recovery.reconciled", NotificationLevel.WARNING, "Recovery: Position Reconciled",
                 orphan_positions=recovery_report.orphan_positions,
                 missing_positions=recovery_report.missing_positions,
                 quantity_mismatches=recovery_report.quantity_mismatches,
-            )
-        elif recovery_report.result == RecoveryResult.FAILED:
-            self._notify(
-                "recovery.failed", NotificationLevel.CRITICAL, "Recovery Failed",
-                errors=recovery_report.errors,
             )
 
         return recovery_report
@@ -580,6 +584,14 @@ class TradingEngine:
         if not self._running:
             raise RuntimeError("Engine is not running. Call start() first.")
 
+    @staticmethod
+    def _is_recovery_result(value: Any, expected: RecoveryResult) -> bool:
+        if isinstance(value, RecoveryResult):
+            return value == expected
+        if isinstance(value, str):
+            return value.lower() == expected.value
+        return False
+
     def _notify(self, event_type: str, level: NotificationLevel, title: str, **details) -> None:
         """Send notification, swallowing any errors."""
         try:
@@ -630,13 +642,17 @@ class TradingEngine:
         Returns:
             Balance response from broker API
         """
-        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import inquire_balance
+        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
+            get_default_inquire_balance_params,
+            inquire_balance,
+        )
 
         # inquire_balance() returns request config, NOT API response
         request_config = inquire_balance(
             cano=self.account_number,
             acnt_prdt_cd=self.account_product_code,
-            is_paper_trading=self.is_paper_trading
+            is_paper_trading=self.is_paper_trading,
+            **get_default_inquire_balance_params(),
         )
 
         # Must use client.make_request() to actually execute
