@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,9 @@ import typer
 from stock_manager.config.env_writer import backup_file, ensure_env_file, set_env_vars, scan_env_file
 from stock_manager.config.paths import require_project_root
 from stock_manager.adapters.broker.kis.config import KISConfig
+
+_ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8}$")
+_ACCOUNT_PRODUCT_CODE_PATTERN = re.compile(r"^\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -107,10 +111,17 @@ def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
 
     kis_use_mock = typer.confirm("Use paper trading (KIS_USE_MOCK=true)?", default=True)
 
-    account_number = typer.prompt("KIS_ACCOUNT_NUMBER").strip()
-    while not account_number:
-        account_number = typer.prompt("KIS_ACCOUNT_NUMBER (cannot be empty)").strip()
-    product_code = typer.prompt("KIS_ACCOUNT_PRODUCT_CODE", default="01").strip() or "01"
+    account_number = typer.prompt("KIS_ACCOUNT_NUMBER (8 digits, e.g. 12345678)").strip()
+    while not _ACCOUNT_NUMBER_PATTERN.fullmatch(account_number):
+        account_number = typer.prompt(
+            "KIS_ACCOUNT_NUMBER must be exactly 8 digits (example: 12345678)"
+        ).strip()
+
+    product_code = typer.prompt("KIS_ACCOUNT_PRODUCT_CODE (2 digits)", default="01").strip() or "01"
+    while not _ACCOUNT_PRODUCT_CODE_PATTERN.fullmatch(product_code):
+        product_code = typer.prompt(
+            "KIS_ACCOUNT_PRODUCT_CODE must be exactly 2 digits (example: 01)"
+        ).strip()
 
     typer.echo("")
     slack_enabled = typer.confirm("Configure Slack notifications?", default=False)

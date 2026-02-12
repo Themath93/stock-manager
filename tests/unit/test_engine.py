@@ -20,7 +20,7 @@ from stock_manager.trading import (
     Position, PositionStatus, OrderResult
 )
 from stock_manager.persistence import TradingState
-from stock_manager.persistence.recovery import RecoveryReport
+from stock_manager.persistence.recovery import RecoveryReport, RecoveryResult
 from stock_manager.adapters.broker.kis.client import KISRestClient
 
 
@@ -238,6 +238,29 @@ class TestEngineLifecycle:
             assert eng is engine
 
         assert engine._running is False
+
+    @patch('stock_manager.engine.load_state')
+    @patch('stock_manager.engine.startup_reconciliation')
+    def test_start_fails_fast_when_recovery_failed(self, mock_reconcile, mock_load, engine):
+        """Test that start() raises and keeps engine stopped on recovery failure."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.FAILED,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=["Broker unavailable"],
+        )
+
+        with patch.object(engine._price_monitor, "start") as mock_price_start:
+            with patch.object(engine._reconciler, "start") as mock_reconciler_start:
+                with pytest.raises(RuntimeError, match="Startup reconciliation failed"):
+                    engine.start()
+
+        assert engine._running is False
+        mock_price_start.assert_not_called()
+        mock_reconciler_start.assert_not_called()
 
 
 # =============================================================================
@@ -524,3 +547,10 @@ class TestInternalHelpers:
         call_args = mock_client.make_request.call_args
         assert call_args.kwargs["method"] == "GET"
         assert "tr_id" in call_args.kwargs["headers"]
+        params = call_args.kwargs["params"]
+        assert params["AFHR_FLPR_YN"] == "N"
+        assert params["INQR_DVSN"] == "01"
+        assert params["UNPR_DVSN"] == "01"
+        assert params["FUND_STTL_ICLD_YN"] == "N"
+        assert params["FNCG_AMT_AUTO_RDPT_YN"] == "N"
+        assert params["PRCS_DVSN"] == "00"

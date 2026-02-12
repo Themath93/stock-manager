@@ -7,16 +7,25 @@ Python 3.13 기반 자동매매 봇 보일러플레이트.
 # 가장 쉬운 방법 (권장)
 ./setup.sh
 
-# 또는: 직접 설치 + 설정 위저드
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev,cli]'
+# 또는: 직접 설치
+uv sync --extra dev --extra cli
 
 # .env 설정 (인터랙티브)
 stock-manager setup
 stock-manager doctor
 
-# (추가 CLI 커맨드는 프로젝트 상태에 따라 확장 예정)
+# 엔진 실행 (Ctrl+C 종료)
+stock-manager run --duration-sec 0
+
+# 주문: 기본은 dry-run (실주문 없음)
+stock-manager trade buy 005930 1 --price 70000
+
+# 실주문은 --execute 필요
+# 실전(KIS_USE_MOCK=false)에서는 --confirm-live까지 같이 필요
+stock-manager trade buy 005930 1 --price 70000 --execute --confirm-live
+
+# 무주문 스모크: 인증 + 현재가 + 잔고
+stock-manager smoke
 ```
 
 ## 구조
@@ -180,37 +189,40 @@ stock-manager doctor
   logger.info("Application started")          # Slack 전송 없음
   ```
 
-### SPEC-CLI-001: CLI Worker Entrypoints (완료)
-- **CLI 엔트리 포인트 (`src/stock_manager/main.py`)** ✅ 완료
-  - Typer 기반 현대적 CLI 프레임워크
-  - `worker-start` 명령: 워커 인스턴스 시작
-  - `health` 명령: 시스템 상태 확인 (DB/Broker 연결)
-- **신호 처리 (Signal Handling)** ✅ 완료
-  - SIGTERM/SIGINT (Ctrl+C) 그레이스풀 셧다운
-  - 전역 플래그 기반 비동기 셧다운 조정
-  - 적절한 종료 코드 반환 (0=성공, 1=설정 오류, 2=인프라 오류, 130=SIGINT)
-- **비동기-동기 브릿지** ✅ 완료
-  - `asyncio.run()`으로 WorkerMain 실행
-  - RichHandler 기반 구조화된 로깅
-- **환경 변수 검증** ✅ 완료
-  - AppConfig 로딩 및 검증
-  - 데이터베이스 연결 검사
-  - 브로커 인증 검사
-- **품질 지표** ✅ 달성
-  - 테스트 커버리지: 94.90% (목표 85% 초과)
-  - CLI 테스트: 36개 통과
-  - TRUST 5 준수 완료
-- **사용 예제**
-  ```bash
-  # 워커 시작
-  stock-manager worker-start worker-001 --log-level DEBUG
+### CLI 운영 커맨드
+- **엔트리 포인트**: `stock-manager`
+- **핵심 명령**
+  - `stock-manager setup`: `.env` 설정 위저드
+  - `stock-manager doctor`: `.env` 진단 (계좌 형식 포함)
+  - `stock-manager run`: 엔진 실행/유지 (`--duration-sec`, `--skip-auth`)
+  - `stock-manager trade buy|sell SYMBOL QTY --price PRICE`: 주문 (기본 dry-run)
+  - `stock-manager smoke`: 무주문 스모크 (인증 + 시세 + 잔고)
+- **실전 안전장치**
+  - 기본은 dry-run이며 주문 전송 없음
+  - 실주문은 `--execute` 필요
+  - 실전(`KIS_USE_MOCK=false`)에서 실주문은 `--confirm-live`까지 동시 필요
 
-  # 시스템 상태 확인
-  stock-manager health
+### 자동매매 준비 체크
+- `stock-manager run`은 시작 시 `startup_reconciliation`을 반드시 수행합니다.
+- 복구 결과가 `FAILED`면 엔진은 즉시 중단되며, `recovery.failed` CRITICAL 알림 후 종료됩니다.
+- 복구 실패 상태에서 엔진이 계속 기동되는 동작은 허용하지 않습니다.
+- 권장 사전 점검 순서:
+  1. `uv run pytest -q`
+  2. `uv run stock-manager doctor`
+  3. `uv run stock-manager smoke`
+  4. `KIS_USE_MOCK=true uv run stock-manager run --duration-sec 1`
+- 위 4단계가 모두 성공하면 “자동매매 준비 완료(코드/무주문 운영 기준)”로 판단합니다.
 
-  # 상세 출력
-  stock-manager health --verbose
-  ```
+### MCP 점검/장애 대응
+- KIS MCP 호출이 `deadline has elapsed`로 반복 실패하면, 우선 원격 MCP 인증 경로를 점검합니다.
+- Smithery KIS MCP 엔드포인트는 비인증 요청 시 `401`을 반환하는 것이 정상입니다.
+  - `https://server.smithery.ai/@KISOpenAPI/kis-code-assistant-mcp/mcp`
+- 로컬 `mcp-remote` 토큰 캐시가 비정상(`expires_in` 누락/만료 루프)일 때 도구 호출이 타임아웃될 수 있습니다.
+  1. `~/.mcp-auth/mcp-remote-*`의 KIS 토큰 캐시를 삭제
+  2. MCP 재연결로 OAuth 재인증 수행
+  3. 다시 호출 테스트
+- MCP 장애 시 코드 기준 정합성은 로컬 매핑 파일을 소스 오브 트루스로 사용합니다.
+  - `docs/kis-openapi/_data/tr_id_mapping.json`
 
 ### Slack 알림
 - 주문/체결/리스크 이벤트 알림

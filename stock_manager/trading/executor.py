@@ -48,6 +48,26 @@ class OrderExecutor:
     # Track submitted idempotency keys to prevent duplicates
     _submitted_keys: set[str] = field(default_factory=set, init=False)
 
+    @staticmethod
+    def _extract_broker_order_id(response: dict[str, Any]) -> Optional[str]:
+        output = response.get("output")
+        if not isinstance(output, dict):
+            return None
+        order_id = output.get("ODNO")
+        if order_id:
+            return str(order_id)
+        order_id = output.get("odno")
+        if order_id:
+            return str(order_id)
+        return None
+
+    @staticmethod
+    def _extract_message(response: dict[str, Any], *, default: str) -> str:
+        message = response.get("msg1")
+        if isinstance(message, str) and message.strip():
+            return message
+        return default
+
     def buy(
         self,
         symbol: str,
@@ -126,17 +146,28 @@ class OrderExecutor:
             # Determine order type
             ord_dv = "00" if price else "01"  # 00=limit, 01=market
 
-            # Execute order
-            response = cash_order(
+            # Build request config from API helper
+            request_config = cash_order(
                 cano=self.account_number,
                 acnt_prdt_cd=self.account_product_code,
                 pdno=symbol,
                 ord_dv=ord_dv,
                 ord_qty=quantity,
-                ord_unsl="01",  # shares
+                ord_unsl="01",  # legacy compatibility argument
                 order_type=side,
                 ord_prc=price,
+                ord_dvsn=ord_dv,
+                ord_unpr=price if price is not None else 0,
+                excg_id_dvsn_cd="KRX",
                 is_paper_trading=self.is_paper_trading,
+            )
+
+            # Execute order via REST client
+            response = self.client.make_request(
+                method="POST",
+                path=request_config["url_path"],
+                json_data=request_config["params"],
+                headers={"tr_id": request_config["tr_id"]},
             )
 
             # Mark key as submitted
@@ -144,12 +175,11 @@ class OrderExecutor:
 
             # Parse response
             if response.get("rt_cd") == "0":
-                output = response.get("output", {})
                 return OrderResult(
                     success=True,
                     order_id=idempotency_key,
-                    broker_order_id=output.get("ODNO"),
-                    message=response.get("msg1", "OK"),
+                    broker_order_id=self._extract_broker_order_id(response),
+                    message=self._extract_message(response, default="OK"),
                     filled_quantity=quantity,
                     filled_price=price
                 )
@@ -157,7 +187,7 @@ class OrderExecutor:
                 return OrderResult(
                     success=False,
                     order_id=idempotency_key,
-                    message=response.get("msg1", "Unknown error")
+                    message=self._extract_message(response, default="Order execution failed")
                 )
 
         except Exception as e:

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 import typer
 from dotenv import dotenv_values
 
 from stock_manager.config.env_writer import scan_env_file
 from stock_manager.config.paths import find_project_root
+
+_ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8}$")
+_ACCOUNT_PRODUCT_CODE_PATTERN = re.compile(r"^\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -50,7 +54,19 @@ def run_doctor(*, verbose: bool = False) -> DoctorResult:
             if not values.get(key, "").strip():
                 missing_slack.append(key)
 
-    ok = not warnings and not missing_required and not missing_slack
+    account_number = values.get("KIS_ACCOUNT_NUMBER", "").strip()
+    account_product_code = values.get("KIS_ACCOUNT_PRODUCT_CODE", "").strip()
+    account_format_errors: list[str] = []
+    if not _ACCOUNT_NUMBER_PATTERN.fullmatch(account_number):
+        account_format_errors.append(
+            "KIS_ACCOUNT_NUMBER must be exactly 8 digits (example: 12345678)."
+        )
+    if not _ACCOUNT_PRODUCT_CODE_PATTERN.fullmatch(account_product_code):
+        account_format_errors.append(
+            "KIS_ACCOUNT_PRODUCT_CODE must be exactly 2 digits (example: 01)."
+        )
+
+    ok = not warnings and not missing_required and not missing_slack and not account_format_errors
 
     typer.echo("")
     if missing_required:
@@ -62,6 +78,12 @@ def run_doctor(*, verbose: bool = False) -> DoctorResult:
         typer.echo("Slack enabled but missing keys:")
         for k in missing_slack:
             typer.echo(f"  - {k}")
+
+    if account_format_errors:
+        typer.echo("Account format errors:")
+        for error in account_format_errors:
+            typer.echo(f"  - {error}")
+        typer.echo("Fix: run `stock-manager setup` and enter 8-digit account + 2-digit product code.")
 
     typer.echo("")
     if ok:
