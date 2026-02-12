@@ -74,15 +74,18 @@ def startup_reconciliation(
     try:
         # Step 1-2: Get broker positions
         broker_response = inquire_balance_func(client)
-        if broker_response.get("rt_cd") != "0":
+        if str(broker_response.get("rt_cd")) != "0":
+            reason = broker_response.get("msg1") or "unknown error"
             report.result = RecoveryResult.FAILED
-            report.errors.append(
-                f"Failed to query broker: {broker_response.get('msg1')}"
-            )
+            report.errors.append(f"Failed to query broker balance: {reason}")
             return report
 
         broker_positions = broker_response.get("output1", [])
-        broker_symbols = {p["pdno"] for p in broker_positions}
+        if not isinstance(broker_positions, list):
+            broker_positions = []
+        broker_symbols = {
+            symbol for symbol in (_get_broker_symbol(p) for p in broker_positions) if symbol
+        }
         local_symbols = set(local_state.positions.keys())
 
         # Step 3: Find orphans (at broker, not local)
@@ -143,6 +146,17 @@ def startup_reconciliation(
 def _get_broker_qty(broker_positions: list[dict], symbol: str) -> int:
     """Extract quantity for symbol from broker positions."""
     for pos in broker_positions:
-        if pos.get("pdno") == symbol:
-            return int(pos.get("hldg_qty", 0))
+        if _get_broker_symbol(pos) == symbol:
+            qty = pos.get("hldg_qty")
+            if qty is None:
+                qty = pos.get("HLDG_QTY", 0)
+            return int(qty or 0)
     return 0
+
+
+def _get_broker_symbol(position: dict) -> str:
+    """Extract symbol key from broker position dict with key-variant support."""
+    symbol = position.get("pdno")
+    if symbol is None:
+        symbol = position.get("PDNO")
+    return str(symbol) if symbol is not None else ""

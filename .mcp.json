@@ -15,6 +15,16 @@
         "-y",
         "@modelcontextprotocol/server-sequential-thinking"
       ]
+    },
+    "kis-code-assistant-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@latest",
+        "https://server.smithery.ai/@KISOpenAPI/kis-code-assistant-mcp/mcp",
+        "--transport",
+        "http-first"
+      ]
     }
   },
   "staggeredStartup": {

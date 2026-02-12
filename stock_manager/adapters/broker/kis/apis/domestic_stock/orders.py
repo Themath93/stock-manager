@@ -15,6 +15,24 @@ APIs included:
 from typing import Any, Dict, Literal, Optional
 
 
+INQUIRE_BALANCE_DEFAULT_PARAMS: Dict[str, str] = {
+    "AFHR_FLPR_YN": "N",
+    "OFL_YN": "",
+    "INQR_DVSN": "01",
+    "UNPR_DVSN": "01",
+    "FUND_STTL_ICLD_YN": "N",
+    "FNCG_AMT_AUTO_RDPT_YN": "N",
+    "PRCS_DVSN": "00",
+    "CTX_AREA_FK100": "",
+    "CTX_AREA_NK100": "",
+}
+
+
+def get_default_inquire_balance_params() -> Dict[str, str]:
+    """Return a copy of default query params for inquire_balance."""
+    return dict(INQUIRE_BALANCE_DEFAULT_PARAMS)
+
+
 def get_tr_id_cash_order(order_type: Literal["buy", "sell"], is_paper_trading: bool = False) -> str:
     """
     Get TR_ID for cash order API.
@@ -76,18 +94,28 @@ def cash_order(
     """
     Place a cash order for domestic stocks (buy or sell).
 
+    Notes:
+        This helper now emits request-body keys aligned with KIS MCP examples:
+        `ORD_DVSN`, `ORD_UNPR`, and `EXCG_ID_DVSN_CD`.
+        Legacy arguments (`ord_dv`, `ord_prc`, `ord_unsl`) are preserved for
+        backward compatibility and translated to the new keys.
+
     Args:
         cano: Account number (8 digits)
         acnt_prdt_cd: Account product code (2 digits)
         pdno: Product code (stock symbol)
-        ord_dv: Order division - "00": limit order, "01": market order, "02": conditional order
+        ord_dv: Legacy order division (translated to ORD_DVSN)
         ord_qty: Order quantity
-        ord_unsl: Order unit - "01": shares, "02": amount (KRW)
+        ord_unsl: Legacy order unit argument (kept for compatibility)
         order_type: Order side - "buy" for buy order, "sell" for sell order (default: "buy")
-        ord_prc: Order price (required for limit orders)
+        ord_prc: Legacy order price argument (translated to ORD_UNPR)
         tr_id: Custom TR_ID (if None, determined by is_paper_trading and order_type)
         is_paper_trading: Whether to use paper trading environment (default: False)
-        **kwargs: Additional parameters for the API
+        **kwargs: Additional parameters for the API. Supported aliases:
+            - ord_dvsn: explicit order division (overrides ord_dv)
+            - ord_unpr: explicit order unit price (overrides ord_prc)
+            - excg_id_dvsn_cd: exchange code (default "KRX")
+            - sll_type, cndt_pric
 
     Returns:
         API response as dictionary containing order result
@@ -123,18 +151,32 @@ def cash_order(
     if tr_id is None:
         tr_id = get_tr_id_cash_order(order_type, is_paper_trading)
 
+    resolved_ord_dvsn = str(kwargs.pop("ord_dvsn", ord_dv))
+    if not resolved_ord_dvsn:
+        raise ValueError("ord_dv/ord_dvsn must not be empty")
+
+    resolved_ord_unpr = kwargs.pop("ord_unpr", ord_prc)
+    if resolved_ord_unpr is None:
+        resolved_ord_unpr = 0
+
+    excg_id_dvsn_cd = str(kwargs.pop("excg_id_dvsn_cd", "KRX") or "KRX")
+    sll_type = kwargs.pop("sll_type", "")
+    cndt_pric = kwargs.pop("cndt_pric", "")
+
     params = {
         "CANO": cano,
         "ACNT_PRDT_CD": acnt_prdt_cd,
         "PDNO": pdno,
-        "ORD_DV": ord_dv,
+        "ORD_DVSN": resolved_ord_dvsn,
         "ORD_QTY": str(ord_qty),
-        "ORD_UNSL": ord_unsl,
+        "ORD_UNPR": str(resolved_ord_unpr),
+        "EXCG_ID_DVSN_CD": excg_id_dvsn_cd,
         **kwargs,
     }
-
-    if ord_prc is not None:
-        params["ORD_PRC"] = str(ord_prc)
+    if sll_type:
+        params["SLL_TYPE"] = str(sll_type)
+    if cndt_pric:
+        params["CNDT_PRIC"] = str(cndt_pric)
 
     return {
         "tr_id": tr_id,
@@ -409,10 +451,13 @@ def inquire_balance(
     if tr_id is None:
         tr_id = "VTTC8434R" if is_paper_trading else "TTTC8434R"
 
+    query_params = get_default_inquire_balance_params()
+    query_params.update(kwargs)
+
     params = {
         "CANO": cano,
         "ACNT_PRDT_CD": acnt_prdt_cd,
-        **kwargs,
+        **query_params,
     }
 
     return {

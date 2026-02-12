@@ -33,13 +33,13 @@ class PositionReconciler:
 
     def __init__(
         self,
-        client: Any,  # KISRestClient
         position_manager: Any,  # PositionManager
+        inquire_balance_func: Callable[[], dict[str, Any]],
         interval: float = 60.0,  # Check every 60 seconds
         on_discrepancy: Optional[Callable[[ReconciliationResult], None]] = None
     ):
-        self.client = client
         self.position_manager = position_manager
+        self.inquire_balance_func = inquire_balance_func
         self.interval = interval
         self.on_discrepancy = on_discrepancy
         self._stop_event = threading.Event()
@@ -95,26 +95,23 @@ class PositionReconciler:
 
     def _do_reconcile(self) -> ReconciliationResult:
         """Perform reconciliation check."""
-        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import inquire_balance
-
         result = ReconciliationResult()
 
         try:
-            # Get broker positions (requires account parameters)
-            # Assuming position_manager has account info
-            account_number = getattr(self.position_manager, 'account_number', '00000000')
-            account_product_code = getattr(self.position_manager, 'account_product_code', '01')
-            response = inquire_balance(
-                cano=account_number,
-                acnt_prdt_cd=account_product_code
-            )
-            if response.get("rt_cd") != "0":
+            response = self.inquire_balance_func()
+            if str(response.get("rt_cd")) != "0":
+                msg = response.get("msg1") if isinstance(response, dict) else None
                 result.is_clean = False
-                result.discrepancies.append(f"Failed to query broker: {response.get('msg1')}")
+                result.discrepancies.append(f"Failed to query broker: {msg or 'unknown error'}")
                 return result
 
             broker_positions = response.get("output1", [])
-            broker_symbols = {p["pdno"] for p in broker_positions}
+            if not isinstance(broker_positions, list):
+                broker_positions = []
+
+            broker_symbols = {
+                symbol for symbol in (self._extract_symbol(p) for p in broker_positions) if symbol
+            }
 
             # Get local positions
             local_positions = self.position_manager.get_all_positions()
@@ -133,7 +130,7 @@ class PositionReconciler:
             # Check quantity mismatches
             for symbol in broker_symbols & local_symbols:
                 broker_qty = self._get_broker_qty(broker_positions, symbol)
-                local_qty = local_positions[symbol].quantity
+                local_qty = self._extract_local_qty(local_positions[symbol])
                 if broker_qty != local_qty:
                     result.quantity_mismatches[symbol] = (local_qty, broker_qty)
                     result.discrepancies.append(
@@ -154,9 +151,31 @@ class PositionReconciler:
 
         return result
 
+    @staticmethod
+    def _extract_symbol(position: Any) -> str:
+        if not isinstance(position, dict):
+            return ""
+        symbol = position.get("pdno")
+        if symbol is None:
+            symbol = position.get("PDNO")
+        if symbol is None:
+            return ""
+        return str(symbol)
+
+    @staticmethod
+    def _extract_local_qty(position: Any) -> int:
+        if isinstance(position, dict):
+            raw = position.get("quantity", 0)
+        else:
+            raw = getattr(position, "quantity", 0)
+        return int(raw or 0)
+
     def _get_broker_qty(self, broker_positions: list[dict], symbol: str) -> int:
         """Extract quantity for symbol from broker positions."""
         for pos in broker_positions:
-            if pos.get("pdno") == symbol:
-                return int(pos.get("hldg_qty", 0))
+            if self._extract_symbol(pos) == symbol:
+                qty = pos.get("hldg_qty")
+                if qty is None:
+                    qty = pos.get("HLDG_QTY", 0)
+                return int(qty or 0)
         return 0

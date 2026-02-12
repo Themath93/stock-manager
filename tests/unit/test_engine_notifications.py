@@ -287,22 +287,25 @@ class TestRecoveryFailedNotification:
     """Test recovery.failed notification."""
 
     def test_recovery_failed_notification(self, trading_engine, mock_client, mock_notifier):
-        """Test that recovery.failed notification is sent on startup."""
+        """Test that recovery.failed notification is sent and startup is blocked."""
         # Mock recovery report with FAILED result
         mock_recovery_report = Mock()
         mock_recovery_report.result = RecoveryResult.FAILED
         mock_recovery_report.errors = ["Connection failed", "Timeout"]
         mock_recovery_report.orphan_positions = []
         mock_recovery_report.missing_positions = []
+        mock_recovery_report.quantity_mismatches = {}
 
         with patch("stock_manager.engine.load_state", return_value=None):
             with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
-                trading_engine.start()
+                with pytest.raises(RuntimeError, match="Startup reconciliation failed"):
+                    trading_engine.start()
 
         # Verify recovery.failed notification was sent
         calls = mock_notifier.notify.call_args_list
         events = [call[0][0] for call in calls]
         assert any(e.event_type == "recovery.failed" for e in events)
+        assert trading_engine._running is False
 
 
 class TestAllNotificationTypesComplete:
