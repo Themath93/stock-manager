@@ -37,6 +37,11 @@ class TestKISConfig:
             assert config.app_secret.get_secret_value() == "test_app_secret_67890"
             assert config.account_number == "12345678"
             assert config.account_product_code == "01"
+            assert config.request_retry_enabled is True
+            assert config.request_max_attempts == 3
+            assert config.request_initial_backoff_ms == 1
+            assert config.request_backoff_multiplier == 1.0
+            assert config.auto_reauth_enabled is True
 
     def test_config_defaults_to_mock_trading(
         self,

@@ -35,11 +35,17 @@ class PositionReconciler:
         self,
         client: Any,  # KISRestClient
         position_manager: Any,  # PositionManager
+        account_number: str,
+        account_product_code: str = "01",
+        is_paper_trading: bool = False,
         interval: float = 60.0,  # Check every 60 seconds
         on_discrepancy: Optional[Callable[[ReconciliationResult], None]] = None
     ):
         self.client = client
         self.position_manager = position_manager
+        self.account_number = account_number
+        self.account_product_code = account_product_code
+        self.is_paper_trading = is_paper_trading
         self.interval = interval
         self.on_discrepancy = on_discrepancy
         self._stop_event = threading.Event()
@@ -100,13 +106,16 @@ class PositionReconciler:
         result = ReconciliationResult()
 
         try:
-            # Get broker positions (requires account parameters)
-            # Assuming position_manager has account info
-            account_number = getattr(self.position_manager, 'account_number', '00000000')
-            account_product_code = getattr(self.position_manager, 'account_product_code', '01')
-            response = inquire_balance(
-                cano=account_number,
-                acnt_prdt_cd=account_product_code
+            request_config = inquire_balance(
+                cano=self.account_number,
+                acnt_prdt_cd=self.account_product_code,
+                is_paper_trading=self.is_paper_trading,
+            )
+            response = self.client.make_request(
+                method="GET",
+                path=request_config["url_path"],
+                params=request_config["params"],
+                headers={"tr_id": request_config["tr_id"]},
             )
             if response.get("rt_cd") != "0":
                 result.is_clean = False
@@ -133,7 +142,7 @@ class PositionReconciler:
             # Check quantity mismatches
             for symbol in broker_symbols & local_symbols:
                 broker_qty = self._get_broker_qty(broker_positions, symbol)
-                local_qty = local_positions[symbol].quantity
+                local_qty = self._get_local_qty(local_positions[symbol])
                 if broker_qty != local_qty:
                     result.quantity_mismatches[symbol] = (local_qty, broker_qty)
                     result.discrepancies.append(
@@ -160,3 +169,9 @@ class PositionReconciler:
             if pos.get("pdno") == symbol:
                 return int(pos.get("hldg_qty", 0))
         return 0
+
+    def _get_local_qty(self, position: Any) -> int:
+        """Extract quantity from local position (dict or Position model)."""
+        if isinstance(position, dict):
+            return int(position.get("quantity", 0))
+        return int(getattr(position, "quantity", 0))

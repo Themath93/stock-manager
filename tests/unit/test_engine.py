@@ -20,7 +20,7 @@ from stock_manager.trading import (
     Position, PositionStatus, OrderResult
 )
 from stock_manager.persistence import TradingState
-from stock_manager.persistence.recovery import RecoveryReport
+from stock_manager.persistence.recovery import RecoveryReport, RecoveryResult
 from stock_manager.adapters.broker.kis.client import KISRestClient
 
 
@@ -113,6 +113,8 @@ class TestEngineInitialization:
         assert engine._reconciler is not None
         assert engine._state is not None
         assert not engine._running
+        assert engine._position_manager._on_stop_loss is not None
+        assert engine._position_manager._on_take_profit is not None
 
     def test_engine_has_correct_configuration(self, engine, trading_config):
         """Test that engine stores configuration correctly."""
@@ -159,6 +161,7 @@ class TestEngineLifecycle:
         report = engine.start()
 
         assert engine._running is True
+        assert engine._trading_enabled is True
         assert isinstance(report, RecoveryReport)
         mock_load.assert_called_once_with(engine.state_path)
         mock_reconcile.assert_called_once()
@@ -213,6 +216,7 @@ class TestEngineLifecycle:
         engine.stop()
 
         assert engine._running is False
+        assert engine._trading_enabled is False
 
     def test_stop_raises_if_not_running(self, engine):
         """Test that stop() raises error if engine not running."""
@@ -238,6 +242,45 @@ class TestEngineLifecycle:
             assert eng is engine
 
         assert engine._running is False
+
+    @patch('stock_manager.engine.load_state')
+    @patch('stock_manager.engine.startup_reconciliation')
+    def test_start_blocks_trading_when_recovery_failed(self, mock_reconcile, mock_load, engine):
+        """FAILED recovery should put engine in no-trade degraded mode."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.FAILED,
+            errors=["recovery failed"],
+        )
+
+        engine.start()
+
+        assert engine._running is True
+        assert engine._trading_enabled is False
+        with pytest.raises(RuntimeError, match="Trading is disabled"):
+            engine.buy("005930", 10, 70000)
+
+    @patch('stock_manager.engine.load_state')
+    @patch('stock_manager.engine.startup_reconciliation')
+    def test_start_allows_override_on_failed_recovery(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """allow_unsafe_trading=True should override block mode."""
+        config = TradingConfig(allow_unsafe_trading=True, recovery_mode="block")
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.FAILED,
+            errors=["recovery failed"],
+        )
+
+        engine.start()
+        assert engine._trading_enabled is True
 
 
 # =============================================================================
@@ -430,6 +473,7 @@ class TestStatusAndHealth:
         assert status.position_count == 1
         assert status.is_paper_trading is True
         assert str(engine.state_path) in status.state_path
+        assert status.recovery_result == "clean"
 
     def test_is_healthy_returns_true_when_healthy(self, engine):
         """Test that is_healthy() returns True when engine is healthy."""

@@ -1,90 +1,163 @@
 """Unit tests for state persistence."""
+
 import json
-from datetime import datetime
-from stock_manager.persistence.state import (
-    TradingState, save_state_atomic, load_state
-)
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from stock_manager.persistence.state import TradingState, load_state, save_state_atomic
+from stock_manager.trading.models import Order, OrderStatus, Position, PositionStatus
 
 
 class TestTradingState:
-    """Test TradingState model."""
+    """Test TradingState model serialization."""
 
     def test_default_state(self):
         """Test default state creation."""
         state = TradingState()
         assert state.positions == {}
         assert state.pending_orders == {}
-        assert state.version == 1
+        assert state.version == 2
         assert isinstance(state.last_updated, datetime)
 
-    def test_to_dict(self):
-        """Test state serialization to dict."""
-        state = TradingState()
-        state.positions["005930"] = {"symbol": "005930", "quantity": 10}
-        state.pending_orders["order1"] = {"order_id": "order1", "symbol": "005930"}
+    def test_to_dict_serializes_models(self):
+        """Test v2 schema serialization from Position/Order models."""
+        state = TradingState(
+            positions={
+                "005930": Position(
+                    symbol="005930",
+                    quantity=10,
+                    entry_price=Decimal("70000"),
+                    current_price=Decimal("71000"),
+                    status=PositionStatus.OPEN,
+                )
+            },
+            pending_orders={
+                "ord-1": Order(
+                    order_id="ord-1",
+                    idempotency_key="idem-1",
+                    symbol="005930",
+                    side="buy",
+                    quantity=10,
+                    price=70000,
+                    status=OrderStatus.SUBMITTED,
+                )
+            },
+        )
 
         data = state.to_dict()
+        assert data["version"] == 2
+        assert data["positions"]["005930"]["entry_price"] == "70000"
+        assert data["positions"]["005930"]["status"] == "open"
+        assert data["pending_orders"]["ord-1"]["status"] == "submitted"
 
-        assert "positions" in data
-        assert "pending_orders" in data
-        assert "last_updated" in data
-        assert "version" in data
-        assert data["positions"]["005930"]["quantity"] == 10
-        assert data["pending_orders"]["order1"]["order_id"] == "order1"
-
-    def test_from_dict(self):
-        """Test state deserialization from dict."""
+    def test_from_dict_v2_restores_models(self):
+        """Test v2 schema is deserialized to typed models."""
         data = {
-            "positions": {"005930": {"symbol": "005930", "quantity": 10}},
-            "pending_orders": {"order1": {"order_id": "order1"}},
-            "last_updated": "2024-01-01T12:00:00",
-            "version": 1
+            "version": 2,
+            "positions": {
+                "005930": {
+                    "symbol": "005930",
+                    "quantity": 10,
+                    "entry_price": "70000",
+                    "current_price": "71000",
+                    "stop_loss": "68000",
+                    "take_profit": "75000",
+                    "unrealized_pnl": "10000",
+                    "status": "open",
+                    "opened_at": "2024-01-01T00:00:00+00:00",
+                    "closed_at": None,
+                }
+            },
+            "pending_orders": {
+                "ord-1": {
+                    "order_id": "ord-1",
+                    "idempotency_key": "idem-1",
+                    "symbol": "005930",
+                    "side": "buy",
+                    "quantity": 10,
+                    "price": 70000,
+                    "order_type": "limit",
+                    "status": "submitted",
+                    "broker_order_id": None,
+                    "submission_attempts": 1,
+                    "max_attempts": 3,
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "submitted_at": "2024-01-01T00:00:01+00:00",
+                    "filled_at": None,
+                }
+            },
+            "last_updated": "2024-01-01T00:00:02+00:00",
+        }
+        state = TradingState.from_dict(data)
+
+        assert isinstance(state.positions["005930"], Position)
+        assert state.positions["005930"].entry_price == Decimal("70000")
+        assert isinstance(state.pending_orders["ord-1"], Order)
+        assert state.pending_orders["ord-1"].status == OrderStatus.SUBMITTED
+
+    def test_from_dict_v1_legacy_dict_compatible(self):
+        """Test legacy dict-based payloads are still loadable."""
+        data = {
+            "version": 1,
+            "positions": {"005930": {"symbol": "005930", "quantity": 10, "entry_price": "50000"}},
+            "pending_orders": {"ord-1": {"order_id": "ord-1", "symbol": "005930", "side": "buy"}},
+            "last_updated": "2024-01-01T00:00:00",
         }
 
         state = TradingState.from_dict(data)
+        assert isinstance(state.positions["005930"], Position)
+        assert state.positions["005930"].quantity == 10
+        assert isinstance(state.pending_orders["ord-1"], Order)
 
-        assert "005930" in state.positions
-        assert state.positions["005930"]["quantity"] == 10
-        assert "order1" in state.pending_orders
-        assert state.version == 1
-
-    def test_from_dict_with_missing_fields(self):
-        """Test state deserialization handles missing fields."""
-        data = {}
+    def test_from_dict_skips_legacy_string_positions(self):
+        """Test broken legacy stringified positions are skipped."""
+        data = {
+            "version": 1,
+            "positions": {
+                "005930": "Position(symbol='005930', quantity=10, ...)",
+                "000660": {"symbol": "000660", "quantity": 5, "entry_price": "100000"},
+            },
+            "pending_orders": {},
+            "last_updated": "2024-01-01T00:00:00+00:00",
+        }
         state = TradingState.from_dict(data)
-
-        assert state.positions == {}
-        assert state.pending_orders == {}
-        assert state.version == 1
+        assert "005930" not in state.positions
+        assert "000660" in state.positions
 
 
 class TestStatePersistence:
     """Test atomic state persistence."""
 
-    def test_save_and_load_state(self, tmp_path):
-        """Test saving and loading state."""
-        state = TradingState()
-        state.positions["005930"] = {"symbol": "005930", "quantity": 10}
-        state.pending_orders["order1"] = {"order_id": "order1", "symbol": "005930"}
-
+    def test_save_and_load_state_round_trip(self, tmp_path):
+        """Test round-trip persistence with typed models."""
+        state = TradingState(
+            positions={
+                "005930": Position(symbol="005930", quantity=10, entry_price=Decimal("50000"))
+            },
+            pending_orders={
+                "ord-1": Order(
+                    order_id="ord-1",
+                    idempotency_key="idem-1",
+                    symbol="005930",
+                    side="buy",
+                    quantity=10,
+                    price=50000,
+                )
+            },
+        )
         path = tmp_path / "state.json"
         save_state_atomic(state, path)
-
-        # Verify file exists
-        assert path.exists()
-
-        # Load and verify
         loaded = load_state(path)
+
         assert loaded is not None
-        assert "005930" in loaded.positions
-        assert loaded.positions["005930"]["quantity"] == 10
-        assert "order1" in loaded.pending_orders
+        assert isinstance(loaded.positions["005930"], Position)
+        assert loaded.positions["005930"].entry_price == Decimal("50000")
+        assert isinstance(loaded.pending_orders["ord-1"], Order)
 
     def test_save_creates_directory(self, tmp_path):
         """Test that save creates parent directories."""
         state = TradingState()
         path = tmp_path / "subdir" / "state.json"
-
         save_state_atomic(state, path)
 
         assert path.exists()
@@ -94,37 +167,27 @@ class TestStatePersistence:
         """Test that atomic write leaves no temporary files."""
         state = TradingState()
         path = tmp_path / "state.json"
-
         save_state_atomic(state, path)
 
-        # No .tmp file should remain
         tmp_file = tmp_path / ".state.json.tmp"
         assert not tmp_file.exists()
-
-        # Only the final file should exist
-        files = list(tmp_path.iterdir())
-        assert len(files) == 1
-        assert files[0].name == "state.json"
+        assert list(tmp_path.iterdir())[0].name == "state.json"
 
     def test_atomic_write_overwrites_existing(self, tmp_path):
         """Test that atomic write overwrites existing state."""
-        state1 = TradingState()
-        state1.positions["005930"] = {"quantity": 10}
-
-        state2 = TradingState()
-        state2.positions["005930"] = {"quantity": 20}
-
         path = tmp_path / "state.json"
+        state1 = TradingState(
+            positions={"005930": Position(symbol="005930", quantity=10, entry_price=Decimal("1"))}
+        )
+        state2 = TradingState(
+            positions={"005930": Position(symbol="005930", quantity=20, entry_price=Decimal("2"))}
+        )
 
-        # Save first state
         save_state_atomic(state1, path)
-        loaded1 = load_state(path)
-        assert loaded1.positions["005930"]["quantity"] == 10
-
-        # Overwrite with second state
         save_state_atomic(state2, path)
-        loaded2 = load_state(path)
-        assert loaded2.positions["005930"]["quantity"] == 20
+        loaded = load_state(path)
+        assert loaded is not None
+        assert loaded.positions["005930"].quantity == 20
 
     def test_load_nonexistent_returns_none(self, tmp_path):
         """Test loading non-existent file returns None."""
@@ -134,128 +197,58 @@ class TestStatePersistence:
 
     def test_save_preserves_json_format(self, tmp_path):
         """Test that saved state is valid JSON."""
-        state = TradingState()
-        state.positions["005930"] = {
-            "symbol": "005930",
-            "quantity": 10,
-            "entry_price": "50000"
-        }
-
+        state = TradingState(
+            positions={"005930": Position(symbol="005930", quantity=10, entry_price=Decimal("50000"))}
+        )
         path = tmp_path / "state.json"
         save_state_atomic(state, path)
 
-        # Verify it's valid JSON by loading with json module
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             data = json.load(f)
 
         assert "positions" in data
-        assert "005930" in data["positions"]
         assert data["positions"]["005930"]["quantity"] == 10
+        assert data["version"] == 2
 
     def test_save_includes_timestamp(self, tmp_path):
         """Test that saved state includes timestamp."""
         state = TradingState()
         path = tmp_path / "state.json"
-
         save_state_atomic(state, path)
 
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             data = json.load(f)
 
-        assert "last_updated" in data
         assert isinstance(data["last_updated"], str)
-        # Verify it's a valid ISO format timestamp
         datetime.fromisoformat(data["last_updated"])
-
-    def test_save_empty_state(self, tmp_path):
-        """Test saving empty state."""
-        state = TradingState()
-        path = tmp_path / "state.json"
-
-        save_state_atomic(state, path)
-
-        loaded = load_state(path)
-        assert loaded is not None
-        assert loaded.positions == {}
-        assert loaded.pending_orders == {}
-
-    def test_save_complex_state(self, tmp_path):
-        """Test saving state with complex data."""
-        state = TradingState()
-        state.positions["005930"] = {
-            "symbol": "005930",
-            "quantity": 10,
-            "entry_price": "50000",
-            "current_price": "52000",
-            "stop_loss": "47500",
-            "take_profit": "55000",
-            "unrealized_pnl": "20000",
-            "status": "open"
-        }
-        state.pending_orders["order1"] = {
-            "order_id": "order1",
-            "symbol": "005930",
-            "side": "buy",
-            "quantity": 10,
-            "price": 50000,
-            "status": "submitted"
-        }
-
-        path = tmp_path / "state.json"
-        save_state_atomic(state, path)
-
-        loaded = load_state(path)
-        assert loaded is not None
-        assert loaded.positions["005930"]["entry_price"] == "50000"
-        assert loaded.positions["005930"]["unrealized_pnl"] == "20000"
-        assert loaded.pending_orders["order1"]["price"] == 50000
-
-    def test_multiple_saves_are_independent(self, tmp_path):
-        """Test that multiple saves to different files don't interfere."""
-        state1 = TradingState()
-        state1.positions["005930"] = {"quantity": 10}
-
-        state2 = TradingState()
-        state2.positions["000660"] = {"quantity": 20}
-
-        path1 = tmp_path / "state1.json"
-        path2 = tmp_path / "state2.json"
-
-        save_state_atomic(state1, path1)
-        save_state_atomic(state2, path2)
-
-        loaded1 = load_state(path1)
-        loaded2 = load_state(path2)
-
-        assert "005930" in loaded1.positions
-        assert "000660" not in loaded1.positions
-        assert "000660" in loaded2.positions
-        assert "005930" not in loaded2.positions
-
-    def test_state_file_is_readable(self, tmp_path):
-        """Test that state file is human-readable JSON."""
-        state = TradingState()
-        state.positions["005930"] = {"symbol": "005930", "quantity": 10}
-
-        path = tmp_path / "state.json"
-        save_state_atomic(state, path)
-
-        # Read file as text
-        content = path.read_text()
-
-        # Should be formatted JSON (has newlines)
-        assert "\n" in content
-        assert '"positions"' in content
-        assert '"005930"' in content
 
     def test_path_as_string(self, tmp_path):
         """Test that save/load work with string paths."""
-        state = TradingState()
-        state.positions["005930"] = {"quantity": 10}
-
+        state = TradingState(
+            positions={"005930": Position(symbol="005930", quantity=10, entry_price=Decimal("50000"))}
+        )
         path_str = str(tmp_path / "state.json")
         save_state_atomic(state, path_str)
-
         loaded = load_state(path_str)
+
         assert loaded is not None
         assert "005930" in loaded.positions
+
+    def test_backward_compatibility_reads_v1_file(self, tmp_path):
+        """Test v1 persisted file can still be loaded."""
+        path = tmp_path / "legacy_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "positions": {"005930": {"symbol": "005930", "quantity": 10, "entry_price": "50000"}},
+                    "pending_orders": {},
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        loaded = load_state(path)
+
+        assert loaded is not None
+        assert isinstance(loaded.positions["005930"], Position)

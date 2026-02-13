@@ -126,8 +126,8 @@ class OrderExecutor:
             # Determine order type
             ord_dv = "00" if price else "01"  # 00=limit, 01=market
 
-            # Execute order
-            response = cash_order(
+            # Build request config
+            request_config = cash_order(
                 cano=self.account_number,
                 acnt_prdt_cd=self.account_product_code,
                 pdno=symbol,
@@ -138,17 +138,22 @@ class OrderExecutor:
                 ord_prc=price,
                 is_paper_trading=self.is_paper_trading,
             )
-
-            # Mark key as submitted
-            self._submitted_keys.add(idempotency_key)
+            response = self.client.make_request(
+                method="POST",
+                path=request_config["url_path"],
+                json_data=request_config["params"],
+                headers={"tr_id": request_config["tr_id"]},
+            )
 
             # Parse response
-            if response.get("rt_cd") == "0":
+            if response.get("rt_cd", "0") == "0":
+                # Mark key as submitted only on successful broker acceptance.
+                self._submitted_keys.add(idempotency_key)
                 output = response.get("output", {})
                 return OrderResult(
                     success=True,
                     order_id=idempotency_key,
-                    broker_order_id=output.get("ODNO"),
+                    broker_order_id=output.get("ODNO") or output.get("odno"),
                     message=response.get("msg1", "OK"),
                     filled_quantity=quantity,
                     filled_price=price

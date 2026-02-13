@@ -40,6 +40,8 @@ class SlackConfig(BaseSettings):
     order_channel: str = ""
     alert_channel: str = ""
     min_level: str = "INFO"
+    async_enabled: bool = False
+    queue_maxsize: int = 1000
 
     def get_min_level(self) -> NotificationLevel:
         """Parse min_level string to NotificationLevel enum.

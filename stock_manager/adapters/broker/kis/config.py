@@ -68,6 +68,12 @@ class KISConfig(BaseSettings):
     # Token caching (strongly recommended to avoid KIS OAuth rate limits)
     token_cache_enabled: bool = True
     token_cache_path: str | None = None
+    # Request stabilization controls
+    request_retry_enabled: bool = True
+    request_max_attempts: int = 3
+    request_initial_backoff_ms: int = 200
+    request_backoff_multiplier: float = 2.0
+    auto_reauth_enabled: bool = True
 
     def get_token_cache_path(self) -> Path:
         """Return the access token cache file path.

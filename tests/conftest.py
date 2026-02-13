@@ -31,6 +31,11 @@ def mock_env_vars():
         "KIS_USE_MOCK": "true",
         # Keep unit tests isolated from user home directory.
         "KIS_TOKEN_CACHE_ENABLED": "false",
+        "KIS_REQUEST_RETRY_ENABLED": "true",
+        "KIS_REQUEST_MAX_ATTEMPTS": "3",
+        "KIS_REQUEST_INITIAL_BACKOFF_MS": "1",
+        "KIS_REQUEST_BACKOFF_MULTIPLIER": "1.0",
+        "KIS_AUTO_REAUTH_ENABLED": "true",
     }
 
 

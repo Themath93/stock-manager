@@ -212,6 +212,10 @@ class TestTradingConfig:
         assert config.max_position_size_pct == Decimal("0.10")
         assert config.default_stop_loss_pct == Decimal("0.05")
         assert config.default_take_profit_pct == Decimal("0.10")
+        assert config.recovery_mode == "block"
+        assert config.allow_unsafe_trading is False
+        assert config.risk_enforcement_mode == "warn"
+        assert config.portfolio_value == Decimal("0")
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -221,7 +225,11 @@ class TestTradingConfig:
             rate_limit_per_sec=10,
             max_position_size_pct=Decimal("0.20"),
             default_stop_loss_pct=Decimal("0.03"),
-            default_take_profit_pct=Decimal("0.15")
+            default_take_profit_pct=Decimal("0.15"),
+            recovery_mode="warn",
+            allow_unsafe_trading=True,
+            risk_enforcement_mode="enforce",
+            portfolio_value=Decimal("1000000"),
         )
         assert config.max_positions == 5
         assert config.polling_interval_sec == 1.0
@@ -229,6 +237,10 @@ class TestTradingConfig:
         assert config.max_position_size_pct == Decimal("0.20")
         assert config.default_stop_loss_pct == Decimal("0.03")
         assert config.default_take_profit_pct == Decimal("0.15")
+        assert config.recovery_mode == "warn"
+        assert config.allow_unsafe_trading is True
+        assert config.risk_enforcement_mode == "enforce"
+        assert config.portfolio_value == Decimal("1000000")
 
     def test_decimal_precision(self):
         """Test that decimal values maintain precision."""
