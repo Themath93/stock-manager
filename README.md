@@ -28,6 +28,34 @@ stock-manager trade buy 005930 1 --price 70000 --execute --confirm-live
 stock-manager smoke
 ```
 
+## KIS 모드 선택 규칙
+- `KIS_USE_MOCK=true`면 모의투자, `false`면 실전투자입니다.
+- 실전 모드(`false`) 필수값:
+  - `KIS_APP_KEY`
+  - `KIS_APP_SECRET`
+  - `KIS_ACCOUNT_NUMBER`
+- 모의 모드(`true`) 권장값:
+  - `KIS_MOCK_APP_KEY`
+  - `KIS_MOCK_SECRET`
+  - `KIS_MOCK_ACCOUNT_NUMBER`
+- 하위호환 fallback:
+  - 모의 모드에서 `KIS_MOCK_*`가 비어 있으면 `KIS_APP_*`/`KIS_ACCOUNT_NUMBER`를 fallback으로 사용합니다.
+  - doctor에서 fallback 사용 경고를 출력합니다.
+
+## Slack 모의 표기
+- 모든 Slack 알림은 모의모드(`is_paper_trading=true`)일 때 제목/텍스트 앞에 `[MOCK] ` prefix를 붙입니다.
+- 실전모드에서는 prefix가 없습니다.
+
+## KIS API 기준 (MCP 우선, 장애 시 fallback)
+- 우선 KIS MCP로 API 정합성을 확인합니다.
+- MCP 타임아웃/장애 시 로컬 매핑 파일을 소스 오브 트루스로 사용합니다:
+  - `docs/kis-openapi/_data/tr_id_mapping.json`
+- 현재 봇의 핵심 API:
+  - 인증: `/oauth2/tokenP`
+  - 현재가: `/uapi/domestic-stock/v1/quotations/inquire-price`
+  - 잔고: `/uapi/domestic-stock/v1/trading/inquire-balance`
+  - 주문: `/uapi/domestic-stock/v1/trading/order-cash`
+
 ## 구조
 - `stock_manager/`: 애플리케이션 코드
   - `adapters/`: 외부 의존성 어댑터 (KIS 등)

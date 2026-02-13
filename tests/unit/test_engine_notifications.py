@@ -63,6 +63,8 @@ class TestEngineStartNotification:
                 calls = mock_notifier.notify.call_args_list
                 events = [call[0][0] for call in calls]
                 assert any(e.event_type == "engine.started" for e in events)
+                started_event = next(e for e in events if e.event_type == "engine.started")
+                assert started_event.details.get("is_paper_trading") is False
 
 
 class TestEngineStopNotification:
@@ -125,6 +127,8 @@ class TestOrderFilledNotification:
         calls = mock_notifier.notify.call_args_list
         events = [call[0][0] for call in calls]
         assert any(e.event_type == "order.filled" for e in events)
+        filled_event = next(e for e in events if e.event_type == "order.filled")
+        assert filled_event.details.get("is_paper_trading") is False
 
 
 class TestOrderRejectedNotification:

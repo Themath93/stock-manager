@@ -595,11 +595,13 @@ class TradingEngine:
     def _notify(self, event_type: str, level: NotificationLevel, title: str, **details) -> None:
         """Send notification, swallowing any errors."""
         try:
+            payload = dict(details)
+            payload.setdefault("is_paper_trading", self.is_paper_trading)
             event = NotificationEvent(
                 event_type=event_type,
                 level=level,
                 title=title,
-                details=details,
+                details=payload,
             )
             self.notifier.notify(event)
         except Exception as e:
