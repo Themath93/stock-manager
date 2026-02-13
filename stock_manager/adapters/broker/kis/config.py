@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal
 
-from pydantic import SecretStr
+from pydantic import PrivateAttr, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from stock_manager.config.paths import default_env_file
@@ -33,9 +33,12 @@ class KISConfig(BaseSettings):
     The configuration is loaded from environment variables with the "KIS_" prefix.
 
     Environment Variables:
-        KIS_APP_KEY: Application key issued by KIS
-        KIS_APP_SECRET: Application secret key issued by KIS
-        KIS_ACCOUNT_NUMBER: Trading account number (optional)
+        KIS_APP_KEY: Real trading application key issued by KIS
+        KIS_APP_SECRET: Real trading application secret key issued by KIS
+        KIS_MOCK_APP_KEY: Mock trading application key (optional, preferred in mock mode)
+        KIS_MOCK_SECRET: Mock trading application secret (optional, preferred in mock mode)
+        KIS_ACCOUNT_NUMBER: Real trading account number (optional)
+        KIS_MOCK_ACCOUNT_NUMBER: Mock trading account number (optional, preferred in mock mode)
         KIS_ACCOUNT_PRODUCT_CODE: Account product code (optional, default: "01")
         KIS_USE_MOCK: Use mock trading environment (optional, default: true)
 
@@ -54,11 +57,14 @@ class KISConfig(BaseSettings):
     )
 
     # Authentication credentials
-    app_key: SecretStr
-    app_secret: SecretStr
+    app_key: SecretStr | None = None
+    app_secret: SecretStr | None = None
+    mock_app_key: SecretStr | None = None
+    mock_secret: SecretStr | None = None
 
     # Account information (optional for token generation)
     account_number: str | None = None
+    mock_account_number: str | None = None
     account_product_code: str = "01"
 
     # Environment settings
@@ -68,6 +74,13 @@ class KISConfig(BaseSettings):
     # Token caching (strongly recommended to avoid KIS OAuth rate limits)
     token_cache_enabled: bool = True
     token_cache_path: str | None = None
+
+    _effective_app_key: SecretStr = PrivateAttr(default=SecretStr(""))
+    _effective_app_secret: SecretStr = PrivateAttr(default=SecretStr(""))
+    _effective_account_number: str | None = PrivateAttr(default=None)
+    _credential_source: Literal["real", "mock", "real_fallback"] = PrivateAttr(default="real")
+    _account_source: Literal["real", "mock", "real_fallback", "none"] = PrivateAttr(default="none")
+    _fallback_warnings: list[str] = PrivateAttr(default_factory=list)
 
     def get_token_cache_path(self) -> Path:
         """Return the access token cache file path.
@@ -107,6 +120,36 @@ class KISConfig(BaseSettings):
         """
         return self.use_mock
 
+    @property
+    def effective_app_key(self) -> SecretStr:
+        """Effective app key selected by current mode/fallback policy."""
+        return self._effective_app_key
+
+    @property
+    def effective_app_secret(self) -> SecretStr:
+        """Effective app secret selected by current mode/fallback policy."""
+        return self._effective_app_secret
+
+    @property
+    def effective_account_number(self) -> str | None:
+        """Effective account number selected by current mode/fallback policy."""
+        return self._effective_account_number
+
+    @property
+    def fallback_warnings(self) -> tuple[str, ...]:
+        """Warnings emitted when mock mode falls back to real credentials/account."""
+        return tuple(self._fallback_warnings)
+
+    @property
+    def is_using_fallback_credentials(self) -> bool:
+        """True when mock mode is using real credentials as fallback."""
+        return self._credential_source == "real_fallback"
+
+    @property
+    def is_using_fallback_account(self) -> bool:
+        """True when mock mode is using real account as fallback."""
+        return self._account_source == "real_fallback"
+
     def get_canonical_account_number(self) -> str | None:
         """Get the canonical account number format.
 
@@ -133,10 +176,99 @@ class KISConfig(BaseSettings):
         Raises:
             ValueError: If required credentials are missing
         """
-        if not self.app_key.get_secret_value():
-            raise ValueError("KIS_APP_KEY is required")
-        if not self.app_secret.get_secret_value():
-            raise ValueError("KIS_APP_SECRET is required")
+        real_key = self._secret_value(self.app_key)
+        real_secret = self._secret_value(self.app_secret)
+        mock_key = self._secret_value(self.mock_app_key)
+        mock_secret = self._secret_value(self.mock_secret)
+        real_account = self._normalized_or_none(self.account_number)
+        mock_account = self._normalized_or_none(self.mock_account_number)
+
+        self._fallback_warnings.clear()
+
+        if self.use_mock:
+            selected_key, selected_secret, credential_source = self._resolve_mock_credentials(
+                mock_key=mock_key,
+                mock_secret=mock_secret,
+                real_key=real_key,
+                real_secret=real_secret,
+            )
+            selected_account, account_source = self._resolve_mock_account(
+                mock_account=mock_account,
+                real_account=real_account,
+            )
+        else:
+            if not real_key:
+                raise ValueError("KIS_USE_MOCK=false requires KIS_APP_KEY.")
+            if not real_secret:
+                raise ValueError("KIS_USE_MOCK=false requires KIS_APP_SECRET.")
+            selected_key = real_key
+            selected_secret = real_secret
+            selected_account = real_account
+            credential_source = "real"
+            account_source = "real" if real_account else "none"
+
+        self._effective_app_key = SecretStr(selected_key)
+        self._effective_app_secret = SecretStr(selected_secret)
+        self._effective_account_number = selected_account
+        self._credential_source = credential_source
+        self._account_source = account_source
+
+        # Backward-compat: existing call sites read app_key/app_secret/account_number directly.
+        self.app_key = self._effective_app_key
+        self.app_secret = self._effective_app_secret
+        self.account_number = self._effective_account_number
+
+    @staticmethod
+    def _secret_value(value: SecretStr | None) -> str:
+        if value is None:
+            return ""
+        return value.get_secret_value().strip()
+
+    @staticmethod
+    def _normalized_or_none(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _resolve_mock_credentials(
+        self,
+        *,
+        mock_key: str,
+        mock_secret: str,
+        real_key: str,
+        real_secret: str,
+    ) -> tuple[str, str, Literal["mock", "real_fallback"]]:
+        if mock_key and mock_secret:
+            return mock_key, mock_secret, "mock"
+
+        if real_key and real_secret:
+            self._fallback_warnings.append(
+                "KIS_USE_MOCK=true but mock credentials are missing; using KIS_APP_KEY/KIS_APP_SECRET fallback."
+            )
+            return real_key, real_secret, "real_fallback"
+
+        raise ValueError(
+            "KIS_USE_MOCK=true requires KIS_MOCK_APP_KEY/KIS_MOCK_SECRET "
+            "(fallback KIS_APP_KEY/KIS_APP_SECRET also missing)."
+        )
+
+    def _resolve_mock_account(
+        self,
+        *,
+        mock_account: str | None,
+        real_account: str | None,
+    ) -> tuple[str | None, Literal["mock", "real_fallback", "none"]]:
+        if mock_account:
+            return mock_account, "mock"
+
+        if real_account:
+            self._fallback_warnings.append(
+                "KIS_USE_MOCK=true but KIS_MOCK_ACCOUNT_NUMBER is missing; using KIS_ACCOUNT_NUMBER fallback."
+            )
+            return real_account, "real_fallback"
+
+        return None, "none"
 
 
 @dataclass(frozen=True)

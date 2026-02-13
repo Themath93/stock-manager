@@ -6,7 +6,9 @@ Following Kent Beck's TDD methodology:
 - REFACTOR: Improve while keeping tests green
 """
 
+import os
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 import httpx
@@ -143,6 +145,80 @@ class TestKISRestClientAuthenticate:
 
         with pytest.raises(KISAPIError, match="Network error"):
             kis_client.authenticate()
+
+    def test_authenticate_uses_mock_credentials_when_available(self, mock_env_vars: dict) -> None:
+        """Mock mode should use KIS_MOCK_* values for OAuth payload/headers."""
+        env = mock_env_vars.copy()
+        env["KIS_USE_MOCK"] = "true"
+        env["KIS_APP_KEY"] = "real_key"
+        env["KIS_APP_SECRET"] = "real_secret"
+        env["KIS_MOCK_APP_KEY"] = "mock_key"
+        env["KIS_MOCK_SECRET"] = "mock_secret"
+
+        with patch.dict(os.environ, env, clear=True):
+            config = KISConfig(_env_file=None)
+
+        mock_http_client = MagicMock(spec=httpx.Client)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"access_token": "token_mock", "token_type": "Bearer", "expires_in": 86400}
+        mock_http_client.post.return_value = mock_response
+
+        client = KISRestClient(config=config, client=mock_http_client)
+        client.authenticate()
+
+        call_kwargs = mock_http_client.post.call_args.kwargs
+        assert call_kwargs["json"]["appkey"] == "mock_key"
+        assert call_kwargs["json"]["appsecret"] == "mock_secret"
+        assert call_kwargs["headers"]["appkey"] == "mock_key"
+        assert call_kwargs["headers"]["appsecret"] == "mock_secret"
+
+    def test_authenticate_uses_real_credentials_in_real_mode(self, mock_env_vars: dict) -> None:
+        """Real mode should always use KIS_APP_KEY/KIS_APP_SECRET."""
+        env = mock_env_vars.copy()
+        env["KIS_USE_MOCK"] = "false"
+        env["KIS_APP_KEY"] = "real_key"
+        env["KIS_APP_SECRET"] = "real_secret"
+        env["KIS_MOCK_APP_KEY"] = "mock_key"
+        env["KIS_MOCK_SECRET"] = "mock_secret"
+
+        with patch.dict(os.environ, env, clear=True):
+            config = KISConfig(_env_file=None)
+
+        mock_http_client = MagicMock(spec=httpx.Client)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"access_token": "token_real", "token_type": "Bearer", "expires_in": 86400}
+        mock_http_client.post.return_value = mock_response
+
+        client = KISRestClient(config=config, client=mock_http_client)
+        client.authenticate()
+
+        call_kwargs = mock_http_client.post.call_args.kwargs
+        assert call_kwargs["json"]["appkey"] == "real_key"
+        assert call_kwargs["json"]["appsecret"] == "real_secret"
+        assert call_kwargs["headers"]["appkey"] == "real_key"
+        assert call_kwargs["headers"]["appsecret"] == "real_secret"
+
+    def test_authenticate_http_error_includes_mode(self, mock_env_vars: dict) -> None:
+        """Authentication error should include current mode in message."""
+        from tests.factories.mock_responses import MockResponseFactory
+
+        env = mock_env_vars.copy()
+        env["KIS_USE_MOCK"] = "true"
+        env["KIS_MOCK_APP_KEY"] = "mock_key"
+        env["KIS_MOCK_SECRET"] = "mock_secret"
+
+        with patch.dict(os.environ, env, clear=True):
+            config = KISConfig(_env_file=None)
+
+        mock_http_client = MagicMock(spec=httpx.Client)
+        mock_http_client.post.return_value = MockResponseFactory.unauthorized()
+        client = KISRestClient(config=config, client=mock_http_client)
+
+        with pytest.raises(KISAuthenticationError) as exc_info:
+            client.authenticate()
+        assert "(mock)" in str(exc_info.value)
 
 
 class TestKISRestClientMakeRequest:
