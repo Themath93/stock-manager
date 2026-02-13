@@ -106,8 +106,8 @@ class KISRestClient:
 
         return {
             "Authorization": self.state.access_token.authorization_header,
-            "appkey": self.config.app_key.get_secret_value(),
-            "appsecret": self.config.app_secret.get_secret_value(),
+            "appkey": self.config.effective_app_key.get_secret_value(),
+            "appsecret": self.config.effective_app_secret.get_secret_value(),
         }
 
     def authenticate(self) -> KISAccessToken:
@@ -141,7 +141,7 @@ class KISRestClient:
         if self.config.token_cache_enabled:
             cached = load_cached_token(
                 self.config.get_token_cache_path(),
-                app_key=self.config.app_key.get_secret_value(),
+                app_key=self.config.effective_app_key.get_secret_value(),
                 api_base_url=self.config.api_base_url,
                 oauth_path=self.config.oauth_path,
             )
@@ -153,16 +153,18 @@ class KISRestClient:
         url = self.config.oauth_path
         headers = {
             "Content-Type": "application/json; charset=utf-8",
-            "appkey": self.config.app_key.get_secret_value(),
-            "appsecret": self.config.app_secret.get_secret_value(),
+            "appkey": self.config.effective_app_key.get_secret_value(),
+            "appsecret": self.config.effective_app_secret.get_secret_value(),
             "custtype": self.config.custtype,
         }
 
         payload = {
             "grant_type": "client_credentials",
-            "appkey": self.config.app_key.get_secret_value(),
-            "appsecret": self.config.app_secret.get_secret_value(),
+            "appkey": self.config.effective_app_key.get_secret_value(),
+            "appsecret": self.config.effective_app_secret.get_secret_value(),
         }
+
+        mode = "mock" if self.config.use_mock else "real"
 
         try:
             response = self._http_client.post(url, json=payload, headers=headers)
@@ -173,7 +175,9 @@ class KISRestClient:
             # Handle KIS API response structure
             # The response may have different structures depending on the endpoint
             if "access_token" not in data:
-                raise KISAuthenticationError("Invalid token response: missing access_token")
+                raise KISAuthenticationError(
+                    f"Invalid token response ({mode}): missing access_token"
+                )
 
             token = KISAccessToken(
                 access_token=data["access_token"],
@@ -194,7 +198,7 @@ class KISRestClient:
                         self.config.get_token_cache_path(),
                         token=token,
                         expires_at=expires_at,
-                        app_key=self.config.app_key.get_secret_value(),
+                        app_key=self.config.effective_app_key.get_secret_value(),
                         api_base_url=self.config.api_base_url,
                         oauth_path=self.config.oauth_path,
                         access_token_token_expired=data.get("access_token_token_expired"),
@@ -220,7 +224,7 @@ class KISRestClient:
             except Exception:
                 pass
             raise KISAuthenticationError(
-                f"Authentication failed: {e.response.status_code}{details}",
+                f"Authentication failed ({mode}): {e.response.status_code}{details}",
                 error_code=str(e.response.status_code),
             ) from e
         except httpx.RequestError as e:

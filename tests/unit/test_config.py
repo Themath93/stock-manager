@@ -124,10 +124,11 @@ class TestKISConfig:
     ) -> None:
         """Test validation fails when APP_KEY is missing."""
         env = mock_env_vars.copy()
+        env["KIS_USE_MOCK"] = "false"
         env["KIS_APP_KEY"] = ""
 
         with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValueError, match="KIS_APP_KEY is required"):
+            with pytest.raises(ValueError, match="KIS_USE_MOCK=false requires KIS_APP_KEY"):
                 KISConfig(_env_file=None)
 
     def test_config_validation_missing_app_secret(
@@ -136,10 +137,11 @@ class TestKISConfig:
     ) -> None:
         """Test validation fails when APP_SECRET is missing."""
         env = mock_env_vars.copy()
+        env["KIS_USE_MOCK"] = "false"
         env["KIS_APP_SECRET"] = ""
 
         with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValueError, match="KIS_APP_SECRET is required"):
+            with pytest.raises(ValueError, match="KIS_USE_MOCK=false requires KIS_APP_SECRET"):
                 KISConfig(_env_file=None)
 
     def test_config_ignores_unknown_env_vars(

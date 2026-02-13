@@ -93,6 +93,23 @@ class TestFormatEngineEvent:
         assert "🛑" in result["text"]
         assert "Stopped" in str(result["blocks"][1])
 
+    def test_mock_mode_adds_mock_prefix_to_engine_event(self):
+        """Test engine event adds [MOCK] prefix when is_paper_trading is true."""
+        event = NotificationEvent(
+            event_type="engine.started",
+            level=NotificationLevel.INFO,
+            title="Engine Started",
+            details={
+                "position_count": 1,
+                "is_paper_trading": True,
+                "recovery_result": "CLEAN",
+            },
+        )
+        result = format_engine_event(event)
+
+        assert result["text"].startswith("[MOCK] ")
+        assert result["blocks"][0]["text"]["text"].startswith("[MOCK] ")
+
 
 class TestFormatOrderEvent:
     """Test order event formatting."""
@@ -153,6 +170,25 @@ class TestFormatOrderEvent:
 
         assert "테스트종목(123456)" in result["text"]
         assert "🔴" in result["text"]
+
+    def test_mock_mode_adds_mock_prefix_to_order_event(self):
+        """Test order event adds [MOCK] prefix when is_paper_trading is true."""
+        event = NotificationEvent(
+            event_type="order.filled",
+            level=NotificationLevel.INFO,
+            title="Order Filled",
+            details={
+                "symbol": "005930",
+                "quantity": 1,
+                "price": 70000,
+                "side": "BUY",
+                "is_paper_trading": True,
+            },
+        )
+        result = format_order_event(event)
+
+        assert result["text"].startswith("[MOCK] ")
+        assert result["blocks"][0]["text"]["text"].startswith("[MOCK] ")
 
 
 class TestFormatPositionEvent:

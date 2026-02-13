@@ -63,6 +63,8 @@ class TestEngineStartNotification:
                 calls = mock_notifier.notify.call_args_list
                 events = [call[0][0] for call in calls]
                 assert any(e.event_type == "engine.started" for e in events)
+                started_event = next(e for e in events if e.event_type == "engine.started")
+                assert started_event.details.get("is_paper_trading") is False
 
 
 class TestEngineStopNotification:
@@ -125,6 +127,8 @@ class TestOrderFilledNotification:
         calls = mock_notifier.notify.call_args_list
         events = [call[0][0] for call in calls]
         assert any(e.event_type == "order.filled" for e in events)
+        filled_event = next(e for e in events if e.event_type == "order.filled")
+        assert filled_event.details.get("is_paper_trading") is False
 
 
 class TestOrderRejectedNotification:
@@ -287,13 +291,14 @@ class TestRecoveryFailedNotification:
     """Test recovery.failed notification."""
 
     def test_recovery_failed_notification(self, trading_engine, mock_client, mock_notifier):
-        """Test that recovery.failed notification is sent on startup."""
+        """Test that recovery.failed notification is sent and trading is blocked."""
         # Mock recovery report with FAILED result
         mock_recovery_report = Mock()
         mock_recovery_report.result = RecoveryResult.FAILED
         mock_recovery_report.errors = ["Connection failed", "Timeout"]
         mock_recovery_report.orphan_positions = []
         mock_recovery_report.missing_positions = []
+        mock_recovery_report.quantity_mismatches = {}
 
         with patch("stock_manager.engine.load_state", return_value=None):
             with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
@@ -303,6 +308,8 @@ class TestRecoveryFailedNotification:
         calls = mock_notifier.notify.call_args_list
         events = [call[0][0] for call in calls]
         assert any(e.event_type == "recovery.failed" for e in events)
+        assert trading_engine._running is True
+        assert trading_engine._trading_enabled is False
 
     def test_engine_started_includes_degraded_fields_on_recovery_failure(
         self, trading_engine, mock_client, mock_notifier
