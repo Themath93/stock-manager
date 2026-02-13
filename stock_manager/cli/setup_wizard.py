@@ -97,19 +97,68 @@ def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
 
     typer.echo("")
     typer.echo("KIS (Required)")
-    kis_app_key = typer.prompt("KIS_APP_KEY", hide_input=True).strip()
-    while not kis_app_key:
-        kis_app_key = typer.prompt("KIS_APP_KEY (cannot be empty)", hide_input=True).strip()
-
-    kis_app_secret = typer.prompt("KIS_APP_SECRET", hide_input=True).strip()
-    while not kis_app_secret:
-        kis_app_secret = typer.prompt("KIS_APP_SECRET (cannot be empty)", hide_input=True).strip()
-
     kis_use_mock = typer.confirm("Use paper trading (KIS_USE_MOCK=true)?", default=True)
+    if kis_use_mock:
+        typer.echo("Selected mode: MOCK (paper trading)")
+    else:
+        typer.echo("Selected mode: REAL (live trading)")
+    typer.echo("Tip: you can fill both REAL and MOCK credentials for quick mode switching.")
 
-    account_number = typer.prompt("KIS_ACCOUNT_NUMBER").strip()
-    while not account_number:
-        account_number = typer.prompt("KIS_ACCOUNT_NUMBER (cannot be empty)").strip()
+    typer.echo("")
+    typer.echo("[REAL] Credentials")
+    kis_app_key = typer.prompt("KIS_APP_KEY (real)", hide_input=True, default="").strip()
+    kis_app_secret = typer.prompt("KIS_APP_SECRET (real)", hide_input=True, default="").strip()
+    account_number = typer.prompt("KIS_ACCOUNT_NUMBER (real)", default="").strip()
+
+    if not kis_use_mock:
+        while not kis_app_key:
+            kis_app_key = typer.prompt(
+                "KIS_APP_KEY (real, cannot be empty in real mode)",
+                hide_input=True,
+            ).strip()
+        while not kis_app_secret:
+            kis_app_secret = typer.prompt(
+                "KIS_APP_SECRET (real, cannot be empty in real mode)",
+                hide_input=True,
+            ).strip()
+        while not account_number:
+            account_number = typer.prompt(
+                "KIS_ACCOUNT_NUMBER (real, cannot be empty in real mode)"
+            ).strip()
+
+    typer.echo("")
+    typer.echo("[MOCK] Credentials")
+    kis_mock_app_key = typer.prompt("KIS_MOCK_APP_KEY (mock)", hide_input=True, default="").strip()
+    kis_mock_secret = typer.prompt("KIS_MOCK_SECRET (mock)", hide_input=True, default="").strip()
+    kis_mock_account_number = typer.prompt("KIS_MOCK_ACCOUNT_NUMBER (mock)", default="").strip()
+
+    if kis_use_mock:
+        while not kis_mock_app_key:
+            kis_mock_app_key = typer.prompt(
+                "KIS_MOCK_APP_KEY (cannot be empty in mock mode)",
+                hide_input=True,
+            ).strip()
+        while not kis_mock_secret:
+            kis_mock_secret = typer.prompt(
+                "KIS_MOCK_SECRET (cannot be empty in mock mode)",
+                hide_input=True,
+            ).strip()
+        while not kis_mock_account_number:
+            kis_mock_account_number = typer.prompt(
+                "KIS_MOCK_ACCOUNT_NUMBER (cannot be empty in mock mode)"
+            ).strip()
+    else:
+        if not kis_mock_app_key or not kis_mock_secret or not kis_mock_account_number:
+            typer.echo(
+                "Note: mock credentials/account are optional now, but needed when switching to KIS_USE_MOCK=true."
+            )
+
+    if kis_use_mock and (not kis_app_key or not kis_app_secret or not account_number):
+        typer.echo(
+            "Note: real credentials/account are optional in mock mode. "
+            "If omitted, set them later before switching to real trading."
+        )
+
     product_code = typer.prompt("KIS_ACCOUNT_PRODUCT_CODE", default="01").strip() or "01"
 
     typer.echo("")
@@ -140,8 +189,11 @@ def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
     updates: dict[str, str] = {
         "KIS_APP_KEY": kis_app_key,
         "KIS_APP_SECRET": kis_app_secret,
+        "KIS_MOCK_APP_KEY": kis_mock_app_key,
+        "KIS_MOCK_SECRET": kis_mock_secret,
         "KIS_USE_MOCK": "true" if kis_use_mock else "false",
         "KIS_ACCOUNT_NUMBER": account_number,
+        "KIS_MOCK_ACCOUNT_NUMBER": kis_mock_account_number,
         "KIS_ACCOUNT_PRODUCT_CODE": product_code,
         "SLACK_ENABLED": "true" if slack_enabled else "false",
         "SLACK_BOT_TOKEN": slack_bot_token,

@@ -64,6 +64,7 @@ def format_notification(event: NotificationEvent) -> dict[str, Any]:
 def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
     """Format engine lifecycle events (engine.started, engine.stopped)."""
     emoji = _event_to_emoji(event)
+    mode_prefix = _mock_prefix(event)
     details = event.details
 
     if event.event_type == "engine.started":
@@ -79,9 +80,9 @@ def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
             _mrkdwn_field("*Open Positions:*", str(details.get("position_count", 0))),
         ]
 
-    text = f"{emoji} {event.title}"
+    text = f"{mode_prefix}{emoji} {event.title}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} {event.title}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -92,6 +93,7 @@ def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
 def format_order_event(event: NotificationEvent) -> dict[str, Any]:
     """Format order events (order.filled, order.rejected)."""
     emoji = _event_to_emoji(event)
+    mode_prefix = _mock_prefix(event)
     details = event.details
 
     symbol = _format_symbol_label(details)
@@ -118,9 +120,9 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
             _mrkdwn_field("*Reason:*", details.get("reason", "Unknown")),
         ]
 
-    text = f"{emoji} {event.title}: {side_emoji} {side} {quantity}x {symbol}"
+    text = f"{mode_prefix}{emoji} {event.title}: {side_emoji} {side} {quantity}x {symbol}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} {event.title}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -131,6 +133,7 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
 def format_position_event(event: NotificationEvent) -> dict[str, Any]:
     """Format position events (position.stop_loss, position.take_profit)."""
     emoji = _event_to_emoji(event)
+    mode_prefix = _mock_prefix(event)
     details = event.details
 
     symbol = _format_symbol_label(details)
@@ -155,9 +158,9 @@ def format_position_event(event: NotificationEvent) -> dict[str, Any]:
         except (ValueError, ArithmeticError):
             pass
 
-    text = f"{emoji} {event.title}: {symbol}"
+    text = f"{mode_prefix}{emoji} {event.title}: {symbol}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} {event.title}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -168,6 +171,7 @@ def format_position_event(event: NotificationEvent) -> dict[str, Any]:
 def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
     """Format reconciliation events (reconciliation.discrepancy)."""
     emoji = _event_to_emoji(event)
+    mode_prefix = _mock_prefix(event)
     details = event.details
 
     fields = [
@@ -178,9 +182,9 @@ def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
     ]
 
     discrepancy_count = details.get("discrepancy_count", 0)
-    text = f"{emoji} {event.title}: {discrepancy_count} discrepancies found"
+    text = f"{mode_prefix}{emoji} {event.title}: {discrepancy_count} discrepancies found"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} {event.title}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -191,6 +195,7 @@ def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
 def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
     """Format recovery events (recovery.reconciled, recovery.failed)."""
     emoji = _event_to_emoji(event)
+    mode_prefix = _mock_prefix(event)
     details = event.details
 
     if event.event_type == "recovery.reconciled":
@@ -210,9 +215,9 @@ def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
             error_text = "\n".join(f"- {e}" for e in errors[:5])
             fields.append(_mrkdwn_field("*Errors:*", error_text))
 
-    text = f"{emoji} {event.title}"
+    text = f"{mode_prefix}{emoji} {event.title}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} {event.title}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -223,12 +228,13 @@ def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
 def _format_generic_event(event: NotificationEvent) -> dict[str, Any]:
     """Format unknown event types with a generic layout."""
     emoji = _event_to_emoji(event)
+    mode_prefix = _mock_prefix(event)
 
     fields = [_mrkdwn_field(f"*{k}:*", str(v)) for k, v in list(event.details.items())[:8]]
 
-    text = f"{emoji} {event.title} ({event.event_type})"
+    text = f"{mode_prefix}{emoji} {event.title} ({event.event_type})"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} {event.title}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
     ]
     if fields:
         blocks.append({"type": "section", "fields": fields})
@@ -265,6 +271,14 @@ def _level_to_emoji(level: NotificationLevel) -> str:
 def _event_to_emoji(event: NotificationEvent) -> str:
     """Map event type to an explicit emoji, fallback to level emoji."""
     return EVENT_EMOJI_MAP.get(event.event_type, _level_to_emoji(event.level))
+
+
+def _mock_prefix(event: NotificationEvent) -> str:
+    """Return title/text prefix for mock-trading events."""
+    raw = event.details.get("is_paper_trading")
+    if isinstance(raw, bool):
+        return "[MOCK] " if raw else ""
+    return "[MOCK] " if str(raw).strip().lower() in {"1", "true", "yes", "y"} else ""
 
 
 def _side_to_emoji(side: Any) -> str:

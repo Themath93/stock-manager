@@ -10,7 +10,10 @@ def test_doctor_not_ok_when_required_missing(tmp_path: Path, monkeypatch) -> Non
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-    (repo / ".env").write_text("KIS_APP_KEY=\n", encoding="utf-8")
+    (repo / ".env").write_text(
+        "KIS_USE_MOCK=false\nKIS_APP_KEY=\nKIS_APP_SECRET=\nKIS_ACCOUNT_NUMBER=\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.chdir(repo)
     paths.project_root_cached.cache_clear()
@@ -24,7 +27,14 @@ def test_doctor_ok_when_required_present(tmp_path: Path, monkeypatch) -> None:
     repo.mkdir()
     (repo / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     (repo / ".env").write_text(
-        "KIS_APP_KEY=test\nKIS_APP_SECRET=test\nSLACK_ENABLED=false\n", encoding="utf-8"
+        (
+            "KIS_USE_MOCK=true\n"
+            "KIS_MOCK_APP_KEY=mock_key\n"
+            "KIS_MOCK_SECRET=mock_secret\n"
+            "KIS_MOCK_ACCOUNT_NUMBER=87654321\n"
+            "SLACK_ENABLED=false\n"
+        ),
+        encoding="utf-8",
     )
 
     monkeypatch.chdir(repo)
@@ -33,3 +43,43 @@ def test_doctor_ok_when_required_present(tmp_path: Path, monkeypatch) -> None:
     result = run_doctor(verbose=False)
     assert result.ok is True
 
+
+def test_doctor_mock_fallback_is_ok_with_warning(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    (repo / ".env").write_text(
+        (
+            "KIS_USE_MOCK=true\n"
+            "KIS_APP_KEY=real_key\n"
+            "KIS_APP_SECRET=real_secret\n"
+            "KIS_ACCOUNT_NUMBER=12345678\n"
+            "SLACK_ENABLED=false\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(repo)
+    paths.project_root_cached.cache_clear()
+
+    result = run_doctor(verbose=False)
+    captured = capsys.readouterr()
+
+    assert result.ok is True
+    assert "fallback" in captured.out.lower()
+
+
+def test_doctor_mock_missing_both_mock_and_real_is_not_ok(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    (repo / ".env").write_text(
+        "KIS_USE_MOCK=true\nSLACK_ENABLED=false\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(repo)
+    paths.project_root_cached.cache_clear()
+
+    result = run_doctor(verbose=False)
+    assert result.ok is False
