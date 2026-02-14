@@ -291,7 +291,7 @@ class TestRecoveryFailedNotification:
     """Test recovery.failed notification."""
 
     def test_recovery_failed_notification(self, trading_engine, mock_client, mock_notifier):
-        """Test that recovery.failed notification is sent and startup is blocked."""
+        """Test that recovery.failed notification is sent and trading is blocked."""
         # Mock recovery report with FAILED result
         mock_recovery_report = Mock()
         mock_recovery_report.result = RecoveryResult.FAILED
@@ -302,14 +302,35 @@ class TestRecoveryFailedNotification:
 
         with patch("stock_manager.engine.load_state", return_value=None):
             with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
-                with pytest.raises(RuntimeError, match="Startup reconciliation failed"):
-                    trading_engine.start()
+                trading_engine.start()
 
         # Verify recovery.failed notification was sent
         calls = mock_notifier.notify.call_args_list
         events = [call[0][0] for call in calls]
         assert any(e.event_type == "recovery.failed" for e in events)
-        assert trading_engine._running is False
+        assert trading_engine._running is True
+        assert trading_engine._trading_enabled is False
+
+    def test_engine_started_includes_degraded_fields_on_recovery_failure(
+        self, trading_engine, mock_client, mock_notifier
+    ):
+        """engine.started should include degraded trading flags."""
+        mock_recovery_report = Mock()
+        mock_recovery_report.result = RecoveryResult.FAILED
+        mock_recovery_report.errors = ["Connection failed"]
+        mock_recovery_report.orphan_positions = []
+        mock_recovery_report.missing_positions = []
+
+        with patch("stock_manager.engine.load_state", return_value=None):
+            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+                trading_engine.start()
+
+        calls = mock_notifier.notify.call_args_list
+        events = [call[0][0] for call in calls if call[0][0].event_type == "engine.started"]
+        assert len(events) == 1
+        started = events[0]
+        assert started.details.get("trading_enabled") is False
+        assert started.details.get("degraded_reason") == "startup_recovery_failed"
 
 
 class TestAllNotificationTypesComplete:

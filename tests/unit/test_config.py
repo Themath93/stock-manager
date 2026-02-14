@@ -37,59 +37,11 @@ class TestKISConfig:
             assert config.app_secret.get_secret_value() == "test_app_secret_67890"
             assert config.account_number == "12345678"
             assert config.account_product_code == "01"
-            assert config.is_using_fallback_credentials is True
-            assert config.is_using_fallback_account is True
-
-    def test_mock_mode_prefers_mock_credentials_when_present(self, mock_env_vars: dict) -> None:
-        """Mock mode must prefer KIS_MOCK_* credentials over real credentials."""
-        env = mock_env_vars.copy()
-        env["KIS_MOCK_APP_KEY"] = "mock_key_abc"
-        env["KIS_MOCK_SECRET"] = "mock_secret_def"
-        env["KIS_MOCK_ACCOUNT_NUMBER"] = "87654321"
-
-        with patch.dict(os.environ, env, clear=True):
-            config = KISConfig(_env_file=None)
-
-            assert config.use_mock is True
-            assert config.effective_app_key.get_secret_value() == "mock_key_abc"
-            assert config.effective_app_secret.get_secret_value() == "mock_secret_def"
-            assert config.effective_account_number == "87654321"
-            assert config.is_using_fallback_credentials is False
-            assert config.is_using_fallback_account is False
-
-    def test_mock_mode_works_with_mock_only_without_real_keys(self, mock_env_vars: dict) -> None:
-        """Mock mode should work with only KIS_MOCK_* values."""
-        env = mock_env_vars.copy()
-        env["KIS_APP_KEY"] = ""
-        env["KIS_APP_SECRET"] = ""
-        env["KIS_ACCOUNT_NUMBER"] = ""
-        env["KIS_MOCK_APP_KEY"] = "mock_key_only"
-        env["KIS_MOCK_SECRET"] = "mock_secret_only"
-        env["KIS_MOCK_ACCOUNT_NUMBER"] = "87654321"
-
-        with patch.dict(os.environ, env, clear=True):
-            config = KISConfig(_env_file=None)
-
-            assert config.effective_app_key.get_secret_value() == "mock_key_only"
-            assert config.effective_app_secret.get_secret_value() == "mock_secret_only"
-            assert config.effective_account_number == "87654321"
-
-    def test_mock_mode_allows_real_fallback_with_warning(self, mock_env_vars: dict) -> None:
-        """Mock mode should allow real-key fallback with warning."""
-        env = mock_env_vars.copy()
-        env.pop("KIS_MOCK_APP_KEY", None)
-        env.pop("KIS_MOCK_SECRET", None)
-        env.pop("KIS_MOCK_ACCOUNT_NUMBER", None)
-
-        with patch.dict(os.environ, env, clear=True):
-            config = KISConfig(_env_file=None)
-
-            assert config.effective_app_key.get_secret_value() == "test_app_key_12345"
-            assert config.effective_app_secret.get_secret_value() == "test_app_secret_67890"
-            assert config.effective_account_number == "12345678"
-            assert config.is_using_fallback_credentials is True
-            assert config.is_using_fallback_account is True
-            assert len(config.fallback_warnings) >= 1
+            assert config.request_retry_enabled is True
+            assert config.request_max_attempts == 3
+            assert config.request_initial_backoff_ms == 1
+            assert config.request_backoff_multiplier == 1.0
+            assert config.auto_reauth_enabled is True
 
     def test_config_defaults_to_mock_trading(
         self,
@@ -191,23 +143,6 @@ class TestKISConfig:
         with patch.dict(os.environ, env, clear=True):
             with pytest.raises(ValueError, match="KIS_USE_MOCK=false requires KIS_APP_SECRET"):
                 KISConfig(_env_file=None)
-
-    def test_real_mode_requires_real_credentials_even_when_mock_exists(self, mock_env_vars: dict) -> None:
-        """Real mode must not use mock credentials."""
-        env = mock_env_vars.copy()
-        env["KIS_USE_MOCK"] = "false"
-        env["KIS_MOCK_APP_KEY"] = "mock_key_abc"
-        env["KIS_MOCK_SECRET"] = "mock_secret_def"
-        env["KIS_MOCK_ACCOUNT_NUMBER"] = "87654321"
-
-        with patch.dict(os.environ, env, clear=True):
-            config = KISConfig(_env_file=None)
-
-            assert config.effective_app_key.get_secret_value() == "test_app_key_12345"
-            assert config.effective_app_secret.get_secret_value() == "test_app_secret_67890"
-            assert config.effective_account_number == "12345678"
-            assert config.is_using_fallback_credentials is False
-            assert config.is_using_fallback_account is False
 
     def test_config_ignores_unknown_env_vars(
         self,

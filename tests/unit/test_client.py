@@ -425,6 +425,93 @@ class TestKISRestClientMakeRequest:
         assert call_args.kwargs.get("method") == "POST"
         assert call_args.kwargs.get("json") == {"key": "value"}
 
+    def test_make_request_retries_http_5xx_then_succeeds(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Retry should occur on 5xx and eventually succeed."""
+        fail_response = MagicMock()
+        fail_response.status_code = 500
+        fail_response.reason_phrase = "Internal Server Error"
+        fail_response.json.return_value = {"msg1": "server error"}
+        fail_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500",
+            request=MagicMock(),
+            response=fail_response,
+        )
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            fail_response,
+            success_response,
+        ]
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_retries_429_then_succeeds(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Retry should occur on HTTP 429 rate-limit responses."""
+        rate_limited = MagicMock()
+        rate_limited.status_code = 429
+        rate_limited.raise_for_status = MagicMock()
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            rate_limited,
+            success_response,
+        ]
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_auto_reauth_after_401(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Client should authenticate once and retry on 401/403."""
+        unauthorized = MagicMock()
+        unauthorized.status_code = 401
+        unauthorized.raise_for_status = MagicMock()
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            unauthorized,
+            success_response,
+        ]
+
+        new_token = KISAccessToken(access_token="new_token")
+
+        def _reauth():
+            authenticated_kis_client.state.update_token(new_token)
+            return new_token
+
+        authenticated_kis_client.authenticate = MagicMock(side_effect=_reauth)
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        assert authenticated_kis_client.authenticate.call_count == 1
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
 
 class TestKISRestClientHelpers:
     """Tests for client helper methods."""

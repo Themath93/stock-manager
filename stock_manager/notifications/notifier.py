@@ -7,6 +7,7 @@ Uses slack_sdk.WebClient for message posting with:
 """
 
 import logging
+import queue
 import threading
 
 from stock_manager.notifications.config import SlackConfig
@@ -36,12 +37,25 @@ class SlackNotifier:
         self._client = None
         self._lock = threading.Lock()
         self._min_level = config.get_min_level()
+        self._async_enabled = False
+        self._queue: queue.Queue[NotificationEvent] | None = None
+        self._worker_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
 
         if config.enabled and config.bot_token:
             try:
                 from slack_sdk import WebClient
                 self._client = WebClient(token=config.bot_token.get_secret_value())
                 logger.info("SlackNotifier initialized with WebClient")
+                self._async_enabled = config.async_enabled
+                if self._async_enabled:
+                    self._queue = queue.Queue(maxsize=max(1, config.queue_maxsize))
+                    self._worker_thread = threading.Thread(
+                        target=self._worker_loop,
+                        name="SlackNotifierWorker",
+                        daemon=True,
+                    )
+                    self._worker_thread.start()
             except ImportError:
                 logger.warning("slack_sdk not available, falling back to no-op")
             except Exception as e:
@@ -62,22 +76,21 @@ class SlackNotifier:
         if not self._should_send(event):
             return
 
-        try:
-            formatted = format_notification(event)
-            channel = self._resolve_channel(event)
+        if self._async_enabled and self._queue is not None:
+            try:
+                self._queue.put_nowait(event)
+                return
+            except queue.Full:
+                if event.level >= NotificationLevel.ERROR:
+                    logger.warning(
+                        "Slack queue full, using synchronous fallback for %s", event.event_type
+                    )
+                    self._send_sync(event)
+                    return
+                logger.warning("Slack queue full, dropping %s", event.event_type)
+                return
 
-            with self._lock:
-                self._client.chat_postMessage(
-                    channel=channel,
-                    text=formatted["text"],
-                    attachments=[{
-                        "color": formatted["color"],
-                        "blocks": formatted["blocks"],
-                    }],
-                )
-            logger.debug(f"Slack notification sent: {event.event_type}")
-        except Exception as e:
-            logger.warning(f"Slack notification failed: {e}", exc_info=False)
+        self._send_sync(event)
 
     def _should_send(self, event: NotificationEvent) -> bool:
         """Check if event should be sent based on config and level.
@@ -116,3 +129,48 @@ class SlackNotifier:
             return self._config.alert_channel
 
         return self._config.default_channel
+
+    def close(self, timeout: float = 2.0) -> None:
+        """Stop async worker if enabled."""
+        self._stop_event.set()
+        if self._worker_thread:
+            self._worker_thread.join(timeout=timeout)
+            self._worker_thread = None
+
+    def _worker_loop(self) -> None:
+        """Background worker that drains Slack events."""
+        if self._queue is None:
+            return
+
+        while True:
+            if self._stop_event.is_set() and self._queue.empty():
+                return
+
+            try:
+                event = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            try:
+                self._send_sync(event)
+            finally:
+                self._queue.task_done()
+
+    def _send_sync(self, event: NotificationEvent) -> None:
+        """Synchronous send path shared by direct and async worker modes."""
+        try:
+            formatted = format_notification(event)
+            channel = self._resolve_channel(event)
+
+            with self._lock:
+                self._client.chat_postMessage(
+                    channel=channel,
+                    text=formatted["text"],
+                    attachments=[{
+                        "color": formatted["color"],
+                        "blocks": formatted["blocks"],
+                    }],
+                )
+            logger.debug(f"Slack notification sent: {event.event_type}")
+        except Exception as e:
+            logger.warning(f"Slack notification failed: {e}", exc_info=False)

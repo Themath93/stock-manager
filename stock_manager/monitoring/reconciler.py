@@ -33,13 +33,21 @@ class PositionReconciler:
 
     def __init__(
         self,
-        position_manager: Any,  # PositionManager
-        inquire_balance_func: Callable[[], dict[str, Any]],
+        client: Any = None,  # KISRestClient
+        position_manager: Any = None,  # PositionManager
+        account_number: str = "",
+        account_product_code: str = "01",
+        is_paper_trading: bool = False,
         interval: float = 60.0,  # Check every 60 seconds
-        on_discrepancy: Optional[Callable[[ReconciliationResult], None]] = None
+        on_discrepancy: Optional[Callable[[ReconciliationResult], None]] = None,
+        inquire_balance_func: Optional[Callable[[], dict[str, Any]]] = None,
     ):
+        self.client = client
         self.position_manager = position_manager
-        self.inquire_balance_func = inquire_balance_func
+        self.account_number = account_number
+        self.account_product_code = account_product_code
+        self.is_paper_trading = is_paper_trading
+        self._inquire_balance_func = inquire_balance_func
         self.interval = interval
         self.on_discrepancy = on_discrepancy
         self._stop_event = threading.Event()
@@ -98,7 +106,25 @@ class PositionReconciler:
         result = ReconciliationResult()
 
         try:
-            response = self.inquire_balance_func()
+            if self._inquire_balance_func is not None:
+                response = self._inquire_balance_func()
+            else:
+                from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import inquire_balance
+
+                if self.client is None or not self.account_number:
+                    raise ValueError("client and account_number are required for broker reconciliation")
+                request_config = inquire_balance(
+                    cano=self.account_number,
+                    acnt_prdt_cd=self.account_product_code,
+                    is_paper_trading=self.is_paper_trading,
+                )
+                response = self.client.make_request(
+                    method="GET",
+                    path=request_config["url_path"],
+                    params=request_config["params"],
+                    headers={"tr_id": request_config["tr_id"]},
+                )
+
             if str(response.get("rt_cd")) != "0":
                 msg = response.get("msg1") if isinstance(response, dict) else None
                 result.is_clean = False
@@ -108,7 +134,6 @@ class PositionReconciler:
             broker_positions = response.get("output1", [])
             if not isinstance(broker_positions, list):
                 broker_positions = []
-
             broker_symbols = {
                 symbol for symbol in (self._extract_symbol(p) for p in broker_positions) if symbol
             }
@@ -130,7 +155,7 @@ class PositionReconciler:
             # Check quantity mismatches
             for symbol in broker_symbols & local_symbols:
                 broker_qty = self._get_broker_qty(broker_positions, symbol)
-                local_qty = self._extract_local_qty(local_positions[symbol])
+                local_qty = self._get_local_qty(local_positions[symbol])
                 if broker_qty != local_qty:
                     result.quantity_mismatches[symbol] = (local_qty, broker_qty)
                     result.discrepancies.append(
@@ -153,6 +178,7 @@ class PositionReconciler:
 
     @staticmethod
     def _extract_symbol(position: Any) -> str:
+        """Extract symbol from broker payload with key-variant support."""
         if not isinstance(position, dict):
             return ""
         symbol = position.get("pdno")
@@ -161,14 +187,6 @@ class PositionReconciler:
         if symbol is None:
             return ""
         return str(symbol)
-
-    @staticmethod
-    def _extract_local_qty(position: Any) -> int:
-        if isinstance(position, dict):
-            raw = position.get("quantity", 0)
-        else:
-            raw = getattr(position, "quantity", 0)
-        return int(raw or 0)
 
     def _get_broker_qty(self, broker_positions: list[dict], symbol: str) -> int:
         """Extract quantity for symbol from broker positions."""
@@ -179,3 +197,9 @@ class PositionReconciler:
                     qty = pos.get("HLDG_QTY", 0)
                 return int(qty or 0)
         return 0
+
+    def _get_local_qty(self, position: Any) -> int:
+        """Extract quantity from local position (dict or Position model)."""
+        if isinstance(position, dict):
+            return int(position.get("quantity", 0))
+        return int(getattr(position, "quantity", 0))

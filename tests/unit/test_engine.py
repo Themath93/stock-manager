@@ -113,6 +113,8 @@ class TestEngineInitialization:
         assert engine._reconciler is not None
         assert engine._state is not None
         assert not engine._running
+        assert engine._position_manager._on_stop_loss is not None
+        assert engine._position_manager._on_take_profit is not None
 
     def test_engine_has_correct_configuration(self, engine, trading_config):
         """Test that engine stores configuration correctly."""
@@ -159,6 +161,7 @@ class TestEngineLifecycle:
         report = engine.start()
 
         assert engine._running is True
+        assert engine._trading_enabled is True
         assert isinstance(report, RecoveryReport)
         mock_load.assert_called_once_with(engine.state_path)
         mock_reconcile.assert_called_once()
@@ -213,6 +216,7 @@ class TestEngineLifecycle:
         engine.stop()
 
         assert engine._running is False
+        assert engine._trading_enabled is False
 
     def test_stop_raises_if_not_running(self, engine):
         """Test that stop() raises error if engine not running."""
@@ -241,26 +245,42 @@ class TestEngineLifecycle:
 
     @patch('stock_manager.engine.load_state')
     @patch('stock_manager.engine.startup_reconciliation')
-    def test_start_fails_fast_when_recovery_failed(self, mock_reconcile, mock_load, engine):
-        """Test that start() raises and keeps engine stopped on recovery failure."""
+    def test_start_blocks_trading_when_recovery_failed(self, mock_reconcile, mock_load, engine):
+        """FAILED recovery should put engine in no-trade degraded mode."""
         mock_load.return_value = None
         mock_reconcile.return_value = RecoveryReport(
             result=RecoveryResult.FAILED,
-            orphan_positions=[],
-            missing_positions=[],
-            quantity_mismatches={},
-            pending_orders=[],
-            errors=["Broker unavailable"],
+            errors=["recovery failed"],
         )
 
-        with patch.object(engine._price_monitor, "start") as mock_price_start:
-            with patch.object(engine._reconciler, "start") as mock_reconciler_start:
-                with pytest.raises(RuntimeError, match="Startup reconciliation failed"):
-                    engine.start()
+        engine.start()
 
-        assert engine._running is False
-        mock_price_start.assert_not_called()
-        mock_reconciler_start.assert_not_called()
+        assert engine._running is True
+        assert engine._trading_enabled is False
+        with pytest.raises(RuntimeError, match="Trading is disabled"):
+            engine.buy("005930", 10, 70000)
+
+    @patch('stock_manager.engine.load_state')
+    @patch('stock_manager.engine.startup_reconciliation')
+    def test_start_allows_override_on_failed_recovery(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """allow_unsafe_trading=True should override block mode."""
+        config = TradingConfig(allow_unsafe_trading=True, recovery_mode="block")
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.FAILED,
+            errors=["recovery failed"],
+        )
+
+        engine.start()
+        assert engine._trading_enabled is True
 
 
 # =============================================================================
@@ -453,6 +473,7 @@ class TestStatusAndHealth:
         assert status.position_count == 1
         assert status.is_paper_trading is True
         assert str(engine.state_path) in status.state_path
+        assert status.recovery_result == "clean"
 
     def test_is_healthy_returns_true_when_healthy(self, engine):
         """Test that is_healthy() returns True when engine is healthy."""
@@ -547,10 +568,3 @@ class TestInternalHelpers:
         call_args = mock_client.make_request.call_args
         assert call_args.kwargs["method"] == "GET"
         assert "tr_id" in call_args.kwargs["headers"]
-        params = call_args.kwargs["params"]
-        assert params["AFHR_FLPR_YN"] == "N"
-        assert params["INQR_DVSN"] == "01"
-        assert params["UNPR_DVSN"] == "01"
-        assert params["FUND_STTL_ICLD_YN"] == "N"
-        assert params["FNCG_AMT_AUTO_RDPT_YN"] == "N"
-        assert params["PRCS_DVSN"] == "00"

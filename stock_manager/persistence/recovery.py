@@ -6,9 +6,12 @@ BROKER IS SOURCE OF TRUTH - local state is reconciled to match broker.
 """
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from typing import Any
 import logging
+
+from stock_manager.trading.models import Position, PositionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -74,30 +77,22 @@ def startup_reconciliation(
     try:
         # Step 1-2: Get broker positions
         broker_response = inquire_balance_func(client)
-        if str(broker_response.get("rt_cd")) != "0":
-            reason = broker_response.get("msg1") or "unknown error"
+        if broker_response.get("rt_cd") != "0":
             report.result = RecoveryResult.FAILED
-            report.errors.append(f"Failed to query broker balance: {reason}")
+            report.errors.append(
+                f"Failed to query broker: {broker_response.get('msg1')}"
+            )
             return report
 
         broker_positions = broker_response.get("output1", [])
-        if not isinstance(broker_positions, list):
-            broker_positions = []
-        broker_symbols = {
-            symbol for symbol in (_get_broker_symbol(p) for p in broker_positions) if symbol
-        }
+        broker_symbols = {p["pdno"] for p in broker_positions}
         local_symbols = set(local_state.positions.keys())
 
         # Step 3: Find orphans (at broker, not local)
         for symbol in broker_symbols - local_symbols:
             report.orphan_positions.append(symbol)
             broker_qty = _get_broker_qty(broker_positions, symbol)
-            # Add to local state
-            local_state.positions[symbol] = {
-                "symbol": symbol,
-                "quantity": broker_qty,
-                "status": "open_reconciled",
-            }
+            _upsert_local_position(local_state.positions, symbol, broker_qty)
             logger.warning(
                 f"Orphan position found at broker: {symbol} qty={broker_qty}"
             )
@@ -105,17 +100,17 @@ def startup_reconciliation(
         # Step 4: Find missing (local, not at broker)
         for symbol in local_symbols - broker_symbols:
             report.missing_positions.append(symbol)
-            local_state.positions[symbol]["status"] = "stale"
+            _mark_local_position_stale(local_state.positions, symbol)
             logger.warning(f"Missing position at broker: {symbol}")
 
         # Step 5: Check quantity mismatches
         for symbol in broker_symbols & local_symbols:
             broker_qty = _get_broker_qty(broker_positions, symbol)
-            local_qty = local_state.positions[symbol].get("quantity", 0)
+            local_qty = _get_local_qty(local_state.positions[symbol])
             if broker_qty != local_qty:
                 report.quantity_mismatches[symbol] = (local_qty, broker_qty)
                 # BROKER IS SOURCE OF TRUTH
-                local_state.positions[symbol]["quantity"] = broker_qty
+                _set_local_qty(local_state.positions, symbol, broker_qty)
                 logger.warning(
                     f"Quantity mismatch for {symbol}: local={local_qty}, broker={broker_qty}"
                 )
@@ -146,17 +141,56 @@ def startup_reconciliation(
 def _get_broker_qty(broker_positions: list[dict], symbol: str) -> int:
     """Extract quantity for symbol from broker positions."""
     for pos in broker_positions:
-        if _get_broker_symbol(pos) == symbol:
-            qty = pos.get("hldg_qty")
-            if qty is None:
-                qty = pos.get("HLDG_QTY", 0)
-            return int(qty or 0)
+        if pos.get("pdno") == symbol:
+            return int(pos.get("hldg_qty", 0))
     return 0
 
 
-def _get_broker_symbol(position: dict) -> str:
-    """Extract symbol key from broker position dict with key-variant support."""
-    symbol = position.get("pdno")
-    if symbol is None:
-        symbol = position.get("PDNO")
-    return str(symbol) if symbol is not None else ""
+def _get_local_qty(position: Any) -> int:
+    if isinstance(position, Position):
+        return int(position.quantity)
+    if isinstance(position, dict):
+        return int(position.get("quantity", 0))
+    return int(getattr(position, "quantity", 0))
+
+
+def _set_local_qty(positions: dict[str, Any], symbol: str, quantity: int) -> None:
+    position = positions.get(symbol)
+    if isinstance(position, Position):
+        position.quantity = quantity
+        return
+    if isinstance(position, dict):
+        position["quantity"] = quantity
+        return
+    positions[symbol] = {
+        "symbol": symbol,
+        "quantity": quantity,
+        "status": PositionStatus.OPEN_RECONCILED.value,
+    }
+
+
+def _mark_local_position_stale(positions: dict[str, Any], symbol: str) -> None:
+    position = positions.get(symbol)
+    if isinstance(position, Position):
+        position.status = PositionStatus.STALE
+        return
+    if isinstance(position, dict):
+        position["status"] = PositionStatus.STALE.value
+        return
+    positions[symbol] = {
+        "symbol": symbol,
+        "quantity": 0,
+        "status": PositionStatus.STALE.value,
+    }
+
+
+def _upsert_local_position(positions: dict[str, Any], symbol: str, quantity: int) -> None:
+    if symbol in positions:
+        _set_local_qty(positions, symbol, quantity)
+        return
+    positions[symbol] = Position(
+        symbol=symbol,
+        quantity=quantity,
+        entry_price=Decimal("0"),
+        status=PositionStatus.OPEN_RECONCILED,
+    )
