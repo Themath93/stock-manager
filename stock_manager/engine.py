@@ -13,33 +13,48 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 import logging
-from uuid import uuid4
+import threading
+import time
 
 from stock_manager.trading import (
-    Position, TradingConfig,
-    OrderExecutor, OrderResult, PositionManager,
-    PositionStatus, RiskManager, RateLimiter, RiskLimits
+    Position,
+    TradingConfig,
+    OrderExecutor,
+    OrderResult,
+    PositionManager,
+    RiskManager,
+    RiskLimits,
+    RateLimiter,
 )
 from stock_manager.monitoring import PriceMonitor, PositionReconciler
 from stock_manager.persistence import TradingState, save_state_atomic, load_state
-from stock_manager.persistence.recovery import startup_reconciliation, RecoveryReport, RecoveryResult
-from stock_manager.notifications import (
-    NotifierProtocol, NoOpNotifier, NotificationEvent, NotificationLevel
+from stock_manager.persistence.recovery import (
+    startup_reconciliation,
+    RecoveryReport,
+    RecoveryResult,
 )
+from stock_manager.notifications import (
+    NotifierProtocol,
+    NoOpNotifier,
+    NotificationEvent,
+    NotificationLevel,
+)
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class EngineStatus:
     """Trading engine status snapshot."""
+
     running: bool
-    trading_enabled: bool
     position_count: int
     price_monitor_running: bool
     reconciler_running: bool
     rate_limiter_available: int
     state_path: str
     is_paper_trading: bool
+    trading_enabled: bool
     recovery_result: str
     degraded_reason: str | None
 
@@ -88,27 +103,39 @@ class TradingEngine:
     _trading_enabled: bool = field(default=False, init=False)
     _degraded_reason: str | None = field(default=None, init=False)
     _last_recovery_result: RecoveryResult = field(default=RecoveryResult.CLEAN, init=False)
+    _strategy_thread: Optional[threading.Thread] = field(default=None, init=False, repr=False)
+    _strategy_stop_event: threading.Event = field(
+        default_factory=threading.Event, init=False, repr=False
+    )
+    _strategy_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _auto_exit_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _auto_exit_last_trigger: dict[tuple[str, str], float] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self):
         """Initialize all trading components with proper dependencies."""
         # Initialize rate limiter
         self._rate_limiter = RateLimiter(
-            max_requests=self.config.rate_limit_per_sec,
-            window_seconds=1.0
+            max_requests=self.config.rate_limit_per_sec, window_seconds=1.0
         )
 
         # Initialize position manager
         self._position_manager = PositionManager()
 
-        # Initialize risk manager (optional limits)
         self._risk_manager = RiskManager(
             limits=RiskLimits(
-                max_positions=self.config.max_positions,
                 max_position_size_pct=self.config.max_position_size_pct,
+                max_positions=self.config.max_positions,
                 default_stop_loss_pct=self.config.default_stop_loss_pct,
                 default_take_profit_pct=self.config.default_take_profit_pct,
             ),
             portfolio_value=self.config.portfolio_value,
+        )
+
+        self._position_manager.set_callbacks(
+            on_stop_loss=self._handle_stop_loss,
+            on_take_profit=self._handle_take_profit,
         )
 
         # Initialize order executor
@@ -116,47 +143,34 @@ class TradingEngine:
             client=self.client,
             account_number=self.account_number,
             account_product_code=self.account_product_code,
-            is_paper_trading=self.is_paper_trading
+            is_paper_trading=self.is_paper_trading,
         )
 
         # Initialize price monitor
         self._price_monitor = PriceMonitor(
             client=self.client,
             interval=self.config.polling_interval_sec,
-            rate_limiter=self._rate_limiter
+            rate_limiter=self._rate_limiter,
         )
 
         # Initialize position reconciler
         self._reconciler = PositionReconciler(
-            client=self.client,
             position_manager=self._position_manager,
-            account_number=self.account_number,
-            account_product_code=self.account_product_code,
-            is_paper_trading=self.is_paper_trading,
+            inquire_balance_func=self._inquire_balance,
             interval=60.0,  # Check every minute
-            on_discrepancy=self._handle_discrepancy
-        )
-
-        # Connect stop-loss/take-profit callbacks to engine handlers.
-        self._position_manager.set_callbacks(
-            on_stop_loss=self._handle_stop_loss,
-            on_take_profit=self._handle_take_profit,
+            on_discrepancy=self._handle_discrepancy,
         )
 
         # Initialize empty state
-        self._state = TradingState(
-            positions={},
-            last_updated=datetime.now(timezone.utc)
-        )
-        self._trading_enabled = False
+        self._state = TradingState(positions={}, last_updated=datetime.now(timezone.utc))
 
         logger.info(
             "TradingEngine initialized",
             extra={
                 "account": self.account_number,
                 "paper_trading": self.is_paper_trading,
-                "state_path": str(self.state_path)
-            }
+                "state_path": str(self.state_path),
+            },
         )
 
     def start(self) -> RecoveryReport:
@@ -185,14 +199,10 @@ class TradingEngine:
                 self._state = loaded_state
                 # Restore positions to position manager
                 for position in loaded_state.positions.values():
-                    if isinstance(position, Position):
-                        try:
-                            self._position_manager.open_position(position)
-                        except ValueError:
-                            logger.warning("Skipping duplicate position during restore: %s", position.symbol)
+                    self._position_manager.open_position(position)
                 logger.info(
                     f"Loaded {len(loaded_state.positions)} positions from state",
-                    extra={"state_path": str(self.state_path)}
+                    extra={"state_path": str(self.state_path)},
                 )
         except Exception as e:
             logger.warning(f"Failed to load state: {e}. Starting with empty state.")
@@ -203,7 +213,7 @@ class TradingEngine:
             client=self.client,
             inquire_balance_func=self._inquire_balance,
             save_state_func=save_state_atomic,
-            state_path=self.state_path
+            state_path=self.state_path,
         )
         recovery_result = self._coerce_recovery_result(recovery_report.result)
         self._last_recovery_result = recovery_result
@@ -216,11 +226,10 @@ class TradingEngine:
                 "result": recovery_report.result,
                 "errors": len(recovery_report.errors),
                 "orphan_positions": len(recovery_report.orphan_positions),
-                "missing_positions": len(recovery_report.missing_positions)
-            }
+                "missing_positions": len(recovery_report.missing_positions),
+            },
         )
 
-        # Recovery failure handling: block trading unless explicitly overridden.
         if (
             recovery_result == RecoveryResult.FAILED
             and self.config.recovery_mode == "block"
@@ -242,11 +251,15 @@ class TradingEngine:
         self._reconciler.start()
 
         self._running = True
+
+        self._start_strategy_orchestration()
         logger.info("TradingEngine started successfully")
 
         # Notify engine started
         self._notify(
-            "engine.started", NotificationLevel.INFO, "Engine Started",
+            "engine.started",
+            NotificationLevel.INFO,
+            "Engine Started",
             position_count=len(self._position_manager.get_all_positions()),
             recovery_result=recovery_result.value,
             is_paper_trading=self.is_paper_trading,
@@ -257,14 +270,18 @@ class TradingEngine:
         # Notify recovery events
         if recovery_result == RecoveryResult.RECONCILED:
             self._notify(
-                "recovery.reconciled", NotificationLevel.WARNING, "Recovery: Position Reconciled",
+                "recovery.reconciled",
+                NotificationLevel.WARNING,
+                "Recovery: Position Reconciled",
                 orphan_positions=recovery_report.orphan_positions,
                 missing_positions=recovery_report.missing_positions,
                 quantity_mismatches=recovery_report.quantity_mismatches,
             )
         elif recovery_result == RecoveryResult.FAILED:
             self._notify(
-                "recovery.failed", NotificationLevel.CRITICAL, "Recovery Failed",
+                "recovery.failed",
+                NotificationLevel.CRITICAL,
+                "Recovery Failed",
                 errors=recovery_report.errors,
             )
 
@@ -284,6 +301,8 @@ class TradingEngine:
 
         logger.info("Stopping TradingEngine")
 
+        self._stop_strategy_orchestration(timeout=timeout / 2)
+
         # Stop monitoring threads (they handle joining internally)
         self._price_monitor.stop(timeout=timeout / 2)
         self._reconciler.stop(timeout=timeout / 2)
@@ -298,7 +317,9 @@ class TradingEngine:
 
         # Notify engine stopped
         self._notify(
-            "engine.stopped", NotificationLevel.INFO, "Engine Stopped",
+            "engine.stopped",
+            NotificationLevel.INFO,
+            "Engine Stopped",
             position_count=len(self._position_manager.get_all_positions()),
         )
 
@@ -318,7 +339,7 @@ class TradingEngine:
         quantity: int,
         price: int,
         stop_loss: Optional[int] = None,
-        take_profit: Optional[int] = None
+        take_profit: Optional[int] = None,
     ) -> OrderResult:
         """Place a buy order with risk validation.
 
@@ -345,101 +366,79 @@ class TradingEngine:
                 "quantity": quantity,
                 "price": price,
                 "stop_loss": stop_loss,
-                "take_profit": take_profit
-            }
+                "take_profit": take_profit,
+            },
         )
 
-        quantity_to_submit = quantity
-        risk_result = None
-        if self.config.risk_enforcement_mode != "off":
-            self._refresh_risk_context()
-            risk_result = self._risk_manager.validate_order(
-                symbol=symbol,
-                quantity=quantity,
-                price=Decimal(str(price)),
-                side="buy",
-                stop_loss=Decimal(str(stop_loss)) if stop_loss else None,
-                take_profit=Decimal(str(take_profit)) if take_profit else None,
-            )
-            quantity_to_submit = risk_result.adjusted_quantity or quantity
-            if quantity_to_submit <= 0:
-                quantity_to_submit = quantity
-
-            if not risk_result.approved:
-                self._notify(
-                    "risk.warning",
-                    NotificationLevel.WARNING,
-                    "Risk Check Failed",
-                    symbol=symbol,
-                    quantity=quantity,
-                    price=price,
-                    reason=risk_result.reason,
-                    mode=self.config.risk_enforcement_mode,
-                )
-                if self.config.risk_enforcement_mode == "enforce":
-                    return OrderResult(
-                        success=False,
-                        order_id=f"risk-{uuid4()}",
-                        message=risk_result.reason,
-                    )
-
-            elif risk_result.adjusted_quantity is not None:
-                self._notify(
-                    "risk.warning",
-                    NotificationLevel.WARNING,
-                    "Risk Adjusted Quantity",
-                    symbol=symbol,
-                    original_quantity=quantity,
-                    adjusted_quantity=quantity_to_submit,
-                    reason=risk_result.reason,
-                )
-
-        # Execute order through executor (includes risk checks)
-        result = self._executor.buy(
+        self._refresh_risk_state(order_price=price, order_quantity=quantity)
+        risk_result = self._risk_manager.validate_order(
             symbol=symbol,
-            quantity=quantity_to_submit,
-            price=price
+            quantity=quantity,
+            price=Decimal(str(price)),
+            side="buy",
         )
+        if not risk_result.approved:
+            self._notify(
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Order Rejected",
+                symbol=symbol,
+                side="BUY",
+                quantity=quantity,
+                price=price,
+                reason=risk_result.reason,
+            )
+            return OrderResult(success=False, order_id="", message=risk_result.reason)
+
+        order_quantity = risk_result.adjusted_quantity or quantity
+
+        result = self._executor.buy(symbol=symbol, quantity=order_quantity, price=price)
 
         if result.success:
-            position = self._upsert_position_after_buy(symbol, quantity_to_submit, price)
-
             # Set stop-loss and take-profit if specified
             if stop_loss:
+                position = self._position_manager.get_position(symbol)
                 if position:
                     position.stop_loss = Decimal(str(stop_loss))
+                    # Add symbol to price monitoring for stop-loss tracking
+                    self._price_monitor.add_symbol(symbol)
 
             if take_profit:
+                position = self._position_manager.get_position(symbol)
                 if position:
                     position.take_profit = Decimal(str(take_profit))
-
-            # Always monitor held symbols after buy.
-            self._price_monitor.add_symbol(symbol)
+                    # Add symbol to price monitoring for take-profit tracking
+                    self._price_monitor.add_symbol(symbol)
 
             # Persist state after successful order
             self._update_state()
             self._persist_state()
 
             self._notify(
-                "order.filled", NotificationLevel.INFO, "Order Filled",
-                symbol=symbol, side="BUY", quantity=quantity_to_submit,
-                price=price, broker_order_id=result.broker_order_id,
+                "order.filled",
+                NotificationLevel.INFO,
+                "Order Filled",
+                symbol=symbol,
+                side="BUY",
+                quantity=order_quantity,
+                price=price,
+                broker_order_id=result.broker_order_id,
             )
         else:
             self._notify(
-                "order.rejected", NotificationLevel.WARNING, "Order Rejected",
-                symbol=symbol, side="BUY", quantity=quantity,
-                price=price, reason=result.message,
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Order Rejected",
+                symbol=symbol,
+                side="BUY",
+                quantity=order_quantity,
+                price=price,
+                reason=result.message,
             )
 
         return result
 
-    def sell(
-        self,
-        symbol: str,
-        quantity: int,
-        price: int
-    ) -> OrderResult:
+    def sell(self, symbol: str, quantity: int, price: int) -> OrderResult:
         """Place a sell order to exit a position.
 
         Args:
@@ -458,19 +457,16 @@ class TradingEngine:
 
         logger.info(
             f"Sell order requested: {symbol} qty={quantity} price={price}",
-            extra={"symbol": symbol, "quantity": quantity, "price": price}
+            extra={"symbol": symbol, "quantity": quantity, "price": price},
         )
 
         # Execute order through executor
-        result = self._executor.sell(
-            symbol=symbol,
-            quantity=quantity,
-            price=price
-        )
+        result = self._executor.sell(symbol=symbol, quantity=quantity, price=price)
 
         if result.success:
-            position_closed = self._apply_position_after_sell(symbol, quantity, price)
-            if position_closed:
+            # Remove symbol from monitoring if position fully closed
+            position = self._position_manager.get_position(symbol)
+            if not position or position.quantity == 0:
                 self._price_monitor.remove_symbol(symbol)
 
             # Persist state after successful order
@@ -478,15 +474,25 @@ class TradingEngine:
             self._persist_state()
 
             self._notify(
-                "order.filled", NotificationLevel.INFO, "Order Filled",
-                symbol=symbol, side="SELL", quantity=quantity,
-                price=price, broker_order_id=result.broker_order_id,
+                "order.filled",
+                NotificationLevel.INFO,
+                "Order Filled",
+                symbol=symbol,
+                side="SELL",
+                quantity=quantity,
+                price=price,
+                broker_order_id=result.broker_order_id,
             )
         else:
             self._notify(
-                "order.rejected", NotificationLevel.WARNING, "Order Rejected",
-                symbol=symbol, side="SELL", quantity=quantity,
-                price=price, reason=result.message,
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Order Rejected",
+                symbol=symbol,
+                side="SELL",
+                quantity=quantity,
+                price=price,
+                reason=result.message,
             )
 
         return result
@@ -518,19 +524,20 @@ class TradingEngine:
         """
         # Check reconciler status via thread
         reconciler_running = (
-            self._reconciler._thread is not None and
-            self._reconciler._thread.is_alive()
-        ) if self._running else False
+            (self._reconciler._thread is not None and self._reconciler._thread.is_alive())
+            if self._running
+            else False
+        )
 
         return EngineStatus(
             running=self._running,
-            trading_enabled=self._trading_enabled,
             position_count=len(self._position_manager.get_all_positions()),
             price_monitor_running=self._price_monitor.is_running,
             reconciler_running=reconciler_running,
             rate_limiter_available=self._rate_limiter.available,
             state_path=str(self.state_path),
             is_paper_trading=self.is_paper_trading,
+            trading_enabled=self._trading_enabled,
             recovery_result=self._last_recovery_result.value,
             degraded_reason=self._degraded_reason,
         )
@@ -544,10 +551,7 @@ class TradingEngine:
         if not self._running:
             return False
 
-        return (
-            self._price_monitor.is_running and
-            self._rate_limiter.available > 0
-        )
+        return self._price_monitor.is_running and self._rate_limiter.available > 0
 
     # Internal helper methods
 
@@ -583,7 +587,9 @@ class TradingEngine:
 
         position = self._position_manager.get_position(symbol)
         self._notify(
-            "position.stop_loss", NotificationLevel.WARNING, "Stop-Loss Triggered",
+            "position.stop_loss",
+            NotificationLevel.WARNING,
+            "Stop-Loss Triggered",
             symbol=symbol,
             entry_price=str(position.entry_price) if position else None,
             trigger_price=str(position.current_price) if position else None,
@@ -591,15 +597,14 @@ class TradingEngine:
         if not position or position.quantity == 0:
             logger.warning(f"No position found for stop-loss: {symbol}")
             return
+        if not self._should_process_auto_exit(symbol, trigger_type="stop_loss"):
+            logger.info("Skipping duplicate stop-loss auto-exit", extra={"symbol": symbol})
+            return
 
         # Get current price for market order
         try:
             current_price = self._get_current_price(symbol)
-            result = self.sell(
-                symbol=symbol,
-                quantity=position.quantity,
-                price=current_price
-            )
+            result = self.sell(symbol=symbol, quantity=position.quantity, price=current_price)
 
             if result.success:
                 logger.info(f"Stop-loss order executed for {symbol}: {result.order_id}")
@@ -618,7 +623,9 @@ class TradingEngine:
 
         position = self._position_manager.get_position(symbol)
         self._notify(
-            "position.take_profit", NotificationLevel.INFO, "Take-Profit Triggered",
+            "position.take_profit",
+            NotificationLevel.INFO,
+            "Take-Profit Triggered",
             symbol=symbol,
             entry_price=str(position.entry_price) if position else None,
             trigger_price=str(position.current_price) if position else None,
@@ -626,15 +633,14 @@ class TradingEngine:
         if not position or position.quantity == 0:
             logger.warning(f"No position found for take-profit: {symbol}")
             return
+        if not self._should_process_auto_exit(symbol, trigger_type="take_profit"):
+            logger.info("Skipping duplicate take-profit auto-exit", extra={"symbol": symbol})
+            return
 
         # Get current price for limit order
         try:
             current_price = self._get_current_price(symbol)
-            result = self.sell(
-                symbol=symbol,
-                quantity=position.quantity,
-                price=current_price
-            )
+            result = self.sell(symbol=symbol, quantity=position.quantity, price=current_price)
 
             if result.success:
                 logger.info(f"Take-profit order executed for {symbol}: {result.order_id}")
@@ -656,12 +662,14 @@ class TradingEngine:
                 "discrepancies": len(result.discrepancies),
                 "orphan_positions": len(result.orphan_positions),
                 "missing_positions": len(result.missing_positions),
-                "quantity_mismatches": len(result.quantity_mismatches)
-            }
+                "quantity_mismatches": len(result.quantity_mismatches),
+            },
         )
 
         self._notify(
-            "reconciliation.discrepancy", NotificationLevel.WARNING, "Reconciliation Discrepancy",
+            "reconciliation.discrepancy",
+            NotificationLevel.WARNING,
+            "Reconciliation Discrepancy",
             is_clean=result.is_clean,
             discrepancy_count=len(result.discrepancies),
             orphan_positions=result.orphan_positions,
@@ -674,8 +682,12 @@ class TradingEngine:
         if not self._running:
             raise RuntimeError("Engine is not running. Call start() first.")
 
+    def _ensure_trading_allowed(self) -> None:
+        if not self._trading_enabled:
+            reason = self._degraded_reason or "trading_disabled"
+            raise RuntimeError(f"Trading is disabled: {reason}")
+
     def _coerce_recovery_result(self, result: Any) -> RecoveryResult:
-        """Normalize recovery result value from tests/mocks/runtime."""
         if isinstance(result, RecoveryResult):
             return result
         try:
@@ -683,72 +695,154 @@ class TradingEngine:
         except ValueError:
             return RecoveryResult.FAILED
 
-    def _ensure_trading_allowed(self) -> None:
-        """Raise RuntimeError when engine is in degraded no-trade mode."""
-        if not self._trading_enabled:
-            reason = self._degraded_reason or "trading_disabled"
-            raise RuntimeError(f"Trading is disabled: {reason}")
+    def _start_strategy_orchestration(self) -> None:
+        strategy = getattr(self.config, "strategy", None)
+        symbols = list(getattr(self.config, "strategy_symbols", ()))
+        if strategy is None or not symbols:
+            return
 
-    def _refresh_risk_context(self) -> None:
-        """Update risk manager with latest portfolio and exposure context."""
-        positions = self._position_manager.get_all_positions().values()
-        exposure = Decimal("0")
-        for pos in positions:
-            mark = pos.current_price or pos.entry_price
-            exposure += mark * Decimal(str(pos.quantity))
+        try:
+            self._run_strategy_cycle()
+        except Exception:
+            logger.error("Strategy cycle failed", exc_info=True)
+
+        interval = float(getattr(self.config, "strategy_run_interval_sec", 0.0) or 0.0)
+        if interval <= 0.0:
+            return
+
+        if self._strategy_thread and self._strategy_thread.is_alive():
+            return
+
+        self._strategy_stop_event.clear()
+        self._strategy_thread = threading.Thread(
+            target=self._strategy_loop,
+            daemon=True,
+            name="StrategyOrchestrator",
+        )
+        self._strategy_thread.start()
+
+    def _stop_strategy_orchestration(self, *, timeout: float) -> None:
+        try:
+            self._strategy_stop_event.set()
+            thread = self._strategy_thread
+            if thread is None:
+                return
+            thread.join(timeout=timeout)
+        except Exception:
+            logger.debug("Strategy orchestration stop failed", exc_info=True)
+        finally:
+            self._strategy_thread = None
+
+    def _strategy_loop(self) -> None:
+        interval = float(getattr(self.config, "strategy_run_interval_sec", 0.0) or 0.0)
+        if interval <= 0.0:
+            return
+
+        while not self._strategy_stop_event.is_set():
+            if self._strategy_stop_event.wait(interval):
+                break
+
+            try:
+                self._run_strategy_cycle()
+            except Exception:
+                logger.error("Strategy loop error", exc_info=True)
+
+    def _run_strategy_cycle(self) -> None:
+        strategy = getattr(self.config, "strategy", None)
+        if strategy is None:
+            return
+
+        symbols = list(getattr(self.config, "strategy_symbols", ()))
+        if not symbols:
+            return
+
+        max_symbols = int(getattr(self.config, "strategy_max_symbols_per_cycle", 0) or 0)
+        if max_symbols > 0:
+            symbols = symbols[:max_symbols]
+
+        with self._strategy_lock:
+            try:
+                scores = strategy.screen(symbols)
+            except Exception:
+                logger.error("Strategy screen failed", exc_info=True)
+                return
+
+            max_buys = int(getattr(self.config, "strategy_max_buys_per_cycle", 0) or 0)
+            if max_buys <= 0:
+                return
+            qty = int(getattr(self.config, "strategy_order_quantity", 0) or 0)
+            if qty <= 0:
+                return
+
+            submitted = 0
+            for score in scores:
+                if submitted >= max_buys:
+                    break
+                symbol = getattr(score, "symbol", None)
+                if not isinstance(symbol, str) or not symbol.strip():
+                    continue
+                symbol = symbol.strip().upper()
+
+                if self._position_manager.get_position(symbol) is not None:
+                    continue
+
+                try:
+                    price = self._get_current_price(symbol)
+                    self.buy(symbol, qty, price)
+                    submitted += 1
+                except Exception:
+                    logger.error("Buy submission failed", extra={"symbol": symbol}, exc_info=True)
+
+    def _should_process_auto_exit(self, symbol: str, *, trigger_type: str) -> bool:
+        cooldown = float(getattr(self.config, "auto_exit_cooldown_sec", 1.0) or 0.0)
+        if cooldown <= 0:
+            return True
+
+        key = (trigger_type, symbol)
+        now = time.monotonic()
+        with self._auto_exit_lock:
+            last_triggered = self._auto_exit_last_trigger.get(key)
+            if last_triggered is not None and (now - last_triggered) < cooldown:
+                return False
+            self._auto_exit_last_trigger[key] = now
+            return True
+
+    def _refresh_risk_state(self, *, order_price: int, order_quantity: int) -> None:
+        position_count = self._position_manager.position_count
+        current_exposure = Decimal("0")
+        for position in self._position_manager.get_all_positions().values():
+            position_price = position.current_price or position.entry_price
+            current_exposure += position_price * Decimal(position.quantity)
+
+        portfolio_value = Decimal("0")
+        try:
+            balance_response = self._inquire_balance()
+            output2 = balance_response.get("output2")
+            if isinstance(output2, list) and output2:
+                portfolio_value = Decimal(str(output2[0].get("tot_evlu_amt", "0")))
+        except Exception:
+            logger.debug("Failed to refresh risk state from broker balance", exc_info=True)
+
+        if portfolio_value <= 0:
+            order_value = Decimal(str(order_price)) * Decimal(order_quantity)
+            max_position_size_pct = self._risk_manager.limits.max_position_size_pct
+            if max_position_size_pct > 0:
+                portfolio_value = order_value / max_position_size_pct
+            else:
+                portfolio_value = order_value
 
         self._risk_manager.update_portfolio(
-            portfolio_value=self.config.portfolio_value,
-            current_exposure=exposure,
-            position_count=self._position_manager.position_count,
+            portfolio_value=portfolio_value,
+            current_exposure=current_exposure,
+            position_count=position_count,
         )
 
-    def _upsert_position_after_buy(self, symbol: str, quantity: int, price: int) -> Position:
-        """Update or create position on successful buy fill."""
-        price_dec = Decimal(str(price))
-        position = self._position_manager.get_position(symbol)
-        if position:
-            total_quantity = position.quantity + quantity
-            if total_quantity <= 0:
-                total_quantity = quantity
-            weighted_entry = (
-                (position.entry_price * Decimal(position.quantity))
-                + (price_dec * Decimal(quantity))
-            ) / Decimal(total_quantity)
-            position.quantity = total_quantity
-            position.entry_price = weighted_entry
-            position.current_price = price_dec
-            position.status = PositionStatus.OPEN
-            position.unrealized_pnl = (price_dec - position.entry_price) * Decimal(position.quantity)
-            return position
-
-        new_position = Position(
-            symbol=symbol,
-            quantity=quantity,
-            entry_price=price_dec,
-            current_price=price_dec,
-        )
-        self._position_manager.open_position(new_position)
-        return new_position
-
-    def _apply_position_after_sell(self, symbol: str, quantity: int, price: int) -> bool:
-        """Update position state after successful sell fill.
-
-        Returns:
-            True if position is fully closed and removed.
-        """
-        position = self._position_manager.get_position(symbol)
-        if not position:
-            return True
-
-        if quantity >= position.quantity:
-            self._position_manager.close_position(symbol)
-            return True
-
-        price_dec = Decimal(str(price))
-        position.quantity -= quantity
-        position.current_price = price_dec
-        position.unrealized_pnl = (price_dec - position.entry_price) * Decimal(position.quantity)
+    @staticmethod
+    def _is_recovery_result(value: Any, expected: RecoveryResult) -> bool:
+        if isinstance(value, RecoveryResult):
+            return value == expected
+        if isinstance(value, str):
+            return value.lower() == expected.value
         return False
 
     def _notify(self, event_type: str, level: NotificationLevel, title: str, **details) -> None:
@@ -778,13 +872,13 @@ class TradingEngine:
         Raises:
             Exception: If price fetch fails
         """
-        from stock_manager.adapters.broker.kis.apis.domestic_stock.basic import inquire_current_price
+        from stock_manager.adapters.broker.kis.apis.domestic_stock.basic import (
+            inquire_current_price,
+        )
 
         # Call API directly - inquire_current_price makes the request and returns response
         response = inquire_current_price(
-            client=self.client,
-            stock_code=symbol,
-            is_paper_trading=self.is_paper_trading
+            client=self.client, stock_code=symbol, is_paper_trading=self.is_paper_trading
         )
 
         # Extract current price from response
@@ -803,20 +897,23 @@ class TradingEngine:
         Returns:
             Balance response from broker API
         """
-        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import inquire_balance
+        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
+            get_default_inquire_balance_params,
+            inquire_balance,
+        )
 
         # inquire_balance() returns request config, NOT API response
         request_config = inquire_balance(
             cano=self.account_number,
             acnt_prdt_cd=self.account_product_code,
-            is_paper_trading=self.is_paper_trading
+            is_paper_trading=self.is_paper_trading,
+            **get_default_inquire_balance_params(),
         )
 
         # Must use client.make_request() to actually execute
-        request_client = client or self.client
-        return request_client.make_request(
+        return self.client.make_request(
             method="GET",
             path=request_config["url_path"],
             params=request_config["params"],
-            headers={"tr_id": request_config["tr_id"]}
+            headers={"tr_id": request_config["tr_id"]},
         )

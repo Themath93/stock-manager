@@ -11,9 +11,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class RiskLimits:
     """Configurable risk limits."""
+
     max_position_size_pct: Decimal = Decimal("0.10")  # Max 10% of portfolio per position
     max_portfolio_exposure_pct: Decimal = Decimal("0.80")  # Max 80% total exposure
     max_positions: int = 5  # Maximum concurrent positions
@@ -23,21 +25,24 @@ class RiskLimits:
     default_stop_loss_pct: Decimal = Decimal("0.05")  # Default 5% stop-loss
     default_take_profit_pct: Decimal = Decimal("0.10")  # Default 10% take-profit
 
-@dataclass(frozen=True)
+
+@dataclass
 class RiskCheckResult:
     """Result of risk validation."""
+
     approved: bool
     reason: str = ""
     adjusted_quantity: Optional[int] = None
     suggested_stop_loss: Optional[Decimal] = None
     suggested_take_profit: Optional[Decimal] = None
 
+
 def calculate_kelly_position_size(
     portfolio_value: Decimal,
     price: Decimal,
     risk_per_trade_pct: Decimal,
     stop_loss_pct: Decimal,
-    max_position_size_pct: Decimal
+    max_position_size_pct: Decimal,
 ) -> int:
     """Calculate position size using Kelly-inspired sizing.
 
@@ -68,6 +73,7 @@ def calculate_kelly_position_size(
 
     return int(position_value / price)
 
+
 class RiskManager:
     """
     Risk management for trading operations.
@@ -76,9 +82,7 @@ class RiskManager:
     """
 
     def __init__(
-        self,
-        limits: Optional[RiskLimits] = None,
-        portfolio_value: Decimal = Decimal("0")
+        self, limits: Optional[RiskLimits] = None, portfolio_value: Decimal = Decimal("0")
     ):
         self.limits = limits or RiskLimits()
         self.portfolio_value = portfolio_value
@@ -86,10 +90,7 @@ class RiskManager:
         self._position_count = 0
 
     def update_portfolio(
-        self,
-        portfolio_value: Decimal,
-        current_exposure: Decimal,
-        position_count: int
+        self, portfolio_value: Decimal, current_exposure: Decimal, position_count: int
     ) -> None:
         """Update portfolio state for risk calculations."""
         self.portfolio_value = portfolio_value
@@ -103,7 +104,7 @@ class RiskManager:
         price: Decimal,
         side: str,  # "buy" or "sell"
         stop_loss: Optional[Decimal] = None,
-        take_profit: Optional[Decimal] = None
+        take_profit: Optional[Decimal] = None,
     ) -> RiskCheckResult:
         """
         Validate an order against risk limits.
@@ -129,16 +130,12 @@ class RiskManager:
         # Check 1: Position count limit
         if self._position_count >= self.limits.max_positions:
             return RiskCheckResult(
-                approved=False,
-                reason=f"Maximum positions ({self.limits.max_positions}) reached"
+                approved=False, reason=f"Maximum positions ({self.limits.max_positions}) reached"
             )
 
         # Check 2: Portfolio value check
         if self.portfolio_value <= 0:
-            return RiskCheckResult(
-                approved=False,
-                reason="Portfolio value not set"
-            )
+            return RiskCheckResult(approved=False, reason="Portfolio value not set")
 
         # Check 3: Position size limit
         max_position_value = self.portfolio_value * self.limits.max_position_size_pct
@@ -147,12 +144,12 @@ class RiskManager:
             if adjusted_qty <= 0:
                 return RiskCheckResult(
                     approved=False,
-                    reason=f"Order exceeds max position size ({self.limits.max_position_size_pct * 100}%)"
+                    reason=f"Order exceeds max position size ({self.limits.max_position_size_pct * 100}%)",
                 )
             return RiskCheckResult(
                 approved=True,
                 reason=f"Quantity adjusted from {quantity} to {adjusted_qty}",
-                adjusted_quantity=adjusted_qty
+                adjusted_quantity=adjusted_qty,
             )
 
         # Check 4: Portfolio exposure limit
@@ -163,18 +160,15 @@ class RiskManager:
             if available <= 0:
                 return RiskCheckResult(
                     approved=False,
-                    reason=f"Portfolio exposure limit ({self.limits.max_portfolio_exposure_pct * 100}%) reached"
+                    reason=f"Portfolio exposure limit ({self.limits.max_portfolio_exposure_pct * 100}%) reached",
                 )
             adjusted_qty = int(available / price)
             if adjusted_qty <= 0:
-                return RiskCheckResult(
-                    approved=False,
-                    reason="Insufficient exposure capacity"
-                )
+                return RiskCheckResult(approved=False, reason="Insufficient exposure capacity")
             return RiskCheckResult(
                 approved=True,
                 reason=f"Quantity adjusted to {adjusted_qty} due to exposure limit",
-                adjusted_quantity=adjusted_qty
+                adjusted_quantity=adjusted_qty,
             )
 
         # Check 5: Stop-loss validation
@@ -205,7 +199,7 @@ class RiskManager:
         self,
         price: Decimal,
         risk_per_trade_pct: Decimal = Decimal("0.02"),
-        stop_loss_pct: Optional[Decimal] = None
+        stop_loss_pct: Optional[Decimal] = None,
     ) -> int:
         """
         Calculate optimal position size using Kelly-inspired sizing.
@@ -224,5 +218,5 @@ class RiskManager:
             price,
             risk_per_trade_pct,
             sl_pct,
-            self.limits.max_position_size_pct
+            self.limits.max_position_size_pct,
         )

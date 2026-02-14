@@ -248,15 +248,10 @@ class KISConfig(BaseSettings):
         if mock_key and mock_secret:
             return mock_key, mock_secret, "mock"
 
-        if real_key and real_secret:
-            self._fallback_warnings.append(
-                "KIS_USE_MOCK=true but mock credentials are missing; using KIS_APP_KEY/KIS_APP_SECRET fallback."
-            )
-            return real_key, real_secret, "real_fallback"
-
         raise ValueError(
-            "KIS_USE_MOCK=true requires KIS_MOCK_APP_KEY/KIS_MOCK_SECRET "
-            "(fallback KIS_APP_KEY/KIS_APP_SECRET also missing)."
+            "KIS_USE_MOCK=true requires KIS_MOCK_APP_KEY and KIS_MOCK_SECRET. "
+            "Refusing to use KIS_APP_KEY/KIS_APP_SECRET in mock mode. "
+            "Fix: set KIS_MOCK_APP_KEY/KIS_MOCK_SECRET or set KIS_USE_MOCK=false."
         )
 
     def _resolve_mock_account(
@@ -268,13 +263,12 @@ class KISConfig(BaseSettings):
         if mock_account:
             return mock_account, "mock"
 
-        if real_account:
-            self._fallback_warnings.append(
-                "KIS_USE_MOCK=true but KIS_MOCK_ACCOUNT_NUMBER is missing; using KIS_ACCOUNT_NUMBER fallback."
-            )
-            return real_account, "real_fallback"
-
-        return None, "none"
+        raise ValueError(
+            "KIS_USE_MOCK=true requires KIS_MOCK_ACCOUNT_NUMBER. "
+            "Refusing to use KIS_ACCOUNT_NUMBER in mock mode because KIS mock APIs commonly fail with "
+            "OPSQ2000 ERROR : INPUT INVALID_CHECK_ACNO when a real account is used. "
+            "Fix: set KIS_MOCK_ACCOUNT_NUMBER (8 digits) or set KIS_USE_MOCK=false."
+        )
 
 
 @dataclass(frozen=True)
