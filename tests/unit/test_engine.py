@@ -24,6 +24,7 @@ from stock_manager.trading import (
     Position,
     PositionStatus,
     OrderResult,
+    RiskCheckResult,
 )
 from stock_manager.persistence import TradingState
 from stock_manager.persistence.recovery import RecoveryReport, RecoveryResult
@@ -426,6 +427,55 @@ class TestTradingOperations:
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_rejects_when_risk_manager_disapproves(self, mock_reconcile, mock_load, engine):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine._risk_manager.validate_order = MagicMock(
+            return_value=RiskCheckResult(approved=False, reason="risk rejected")
+        )
+        engine._executor.buy = MagicMock(return_value=OrderResult(success=True, order_id="TEST123"))
+
+        result = engine.buy("005930", 10, 70000)
+
+        assert result.success is False
+        assert "risk rejected" in result.message
+        engine._executor.buy.assert_not_called()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_uses_risk_adjusted_quantity(self, mock_reconcile, mock_load, engine):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine._risk_manager.validate_order = MagicMock(
+            return_value=RiskCheckResult(approved=True, reason="adjusted", adjusted_quantity=3)
+        )
+        engine._executor.buy = MagicMock(return_value=OrderResult(success=True, order_id="TEST123"))
+
+        result = engine.buy("005930", 10, 70000)
+
+        assert result.success is True
+        engine._executor.buy.assert_called_once_with(symbol="005930", quantity=3, price=70000)
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
     def test_buy_with_stop_loss(self, mock_reconcile, mock_load, engine, mock_order, mock_position):
         """Test that buy() sets stop-loss alert."""
         mock_load.return_value = None
@@ -633,6 +683,67 @@ class TestInternalHelpers:
         engine._handle_stop_loss("005930")
 
         engine._executor.sell.assert_called_once()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_registers_position_callbacks(self, mock_reconcile, mock_load, engine):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+
+        stop_cb = engine._position_manager._on_stop_loss
+        tp_cb = engine._position_manager._on_take_profit
+        assert stop_cb is not None
+        assert tp_cb is not None
+        assert stop_cb.__self__ is engine
+        assert tp_cb.__self__ is engine
+        assert stop_cb.__func__ is engine._handle_stop_loss.__func__
+        assert tp_cb.__func__ is engine._handle_take_profit.__func__
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_auto_exit_dedupes_stop_loss_within_cooldown(
+        self, mock_reconcile, mock_load, mock_client, tmp_path, mock_position
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        config = TradingConfig(auto_exit_cooldown_sec=60.0)
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+        )
+
+        engine.start()
+        engine._position_manager.open_position(mock_position)
+        engine.sell = MagicMock(
+            return_value=OrderResult(success=False, order_id="FAILED", message="x")
+        )
+        engine._get_current_price = MagicMock(return_value=70000)
+
+        engine._handle_stop_loss("005930")
+        engine._handle_stop_loss("005930")
+
+        engine.sell.assert_called_once_with(symbol="005930", quantity=10, price=70000)
 
     def test_get_current_price_fetches_from_broker(self, engine, mock_client):
         """Test that _get_current_price() fetches price from broker."""

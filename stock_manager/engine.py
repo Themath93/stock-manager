@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 import logging
 import threading
+import time
 
 from stock_manager.trading import (
     Position,
@@ -22,6 +23,7 @@ from stock_manager.trading import (
     OrderResult,
     PositionManager,
     RiskManager,
+    RiskLimits,
     RateLimiter,
 )
 from stock_manager.monitoring import PriceMonitor, PositionReconciler
@@ -100,6 +102,10 @@ class TradingEngine:
         default_factory=threading.Event, init=False, repr=False
     )
     _strategy_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _auto_exit_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _auto_exit_last_trigger: dict[tuple[str, str], float] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self):
         """Initialize all trading components with proper dependencies."""
@@ -111,8 +117,19 @@ class TradingEngine:
         # Initialize position manager
         self._position_manager = PositionManager()
 
-        # Initialize risk manager (optional limits)
-        self._risk_manager = RiskManager()
+        self._risk_manager = RiskManager(
+            limits=RiskLimits(
+                max_position_size_pct=self.config.max_position_size_pct,
+                max_positions=self.config.max_positions,
+                default_stop_loss_pct=self.config.default_stop_loss_pct,
+                default_take_profit_pct=self.config.default_take_profit_pct,
+            )
+        )
+
+        self._position_manager.set_callbacks(
+            on_stop_loss=self._handle_stop_loss,
+            on_take_profit=self._handle_take_profit,
+        )
 
         # Initialize order executor
         self._executor = OrderExecutor(
@@ -335,8 +352,29 @@ class TradingEngine:
             },
         )
 
-        # Execute order through executor (includes risk checks)
-        result = self._executor.buy(symbol=symbol, quantity=quantity, price=price)
+        self._refresh_risk_state(order_price=price, order_quantity=quantity)
+        risk_result = self._risk_manager.validate_order(
+            symbol=symbol,
+            quantity=quantity,
+            price=Decimal(str(price)),
+            side="buy",
+        )
+        if not risk_result.approved:
+            self._notify(
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Order Rejected",
+                symbol=symbol,
+                side="BUY",
+                quantity=quantity,
+                price=price,
+                reason=risk_result.reason,
+            )
+            return OrderResult(success=False, order_id="", message=risk_result.reason)
+
+        order_quantity = risk_result.adjusted_quantity or quantity
+
+        result = self._executor.buy(symbol=symbol, quantity=order_quantity, price=price)
 
         if result.success:
             # Set stop-loss and take-profit if specified
@@ -364,7 +402,7 @@ class TradingEngine:
                 "Order Filled",
                 symbol=symbol,
                 side="BUY",
-                quantity=quantity,
+                quantity=order_quantity,
                 price=price,
                 broker_order_id=result.broker_order_id,
             )
@@ -375,7 +413,7 @@ class TradingEngine:
                 "Order Rejected",
                 symbol=symbol,
                 side="BUY",
-                quantity=quantity,
+                quantity=order_quantity,
                 price=price,
                 reason=result.message,
             )
@@ -537,6 +575,9 @@ class TradingEngine:
         if not position or position.quantity == 0:
             logger.warning(f"No position found for stop-loss: {symbol}")
             return
+        if not self._should_process_auto_exit(symbol, trigger_type="stop_loss"):
+            logger.info("Skipping duplicate stop-loss auto-exit", extra={"symbol": symbol})
+            return
 
         # Get current price for market order
         try:
@@ -569,6 +610,9 @@ class TradingEngine:
         )
         if not position or position.quantity == 0:
             logger.warning(f"No position found for take-profit: {symbol}")
+            return
+        if not self._should_process_auto_exit(symbol, trigger_type="take_profit"):
+            logger.info("Skipping duplicate take-profit auto-exit", extra={"symbol": symbol})
             return
 
         # Get current price for limit order
@@ -713,6 +757,50 @@ class TradingEngine:
                     submitted += 1
                 except Exception:
                     logger.error("Buy submission failed", extra={"symbol": symbol}, exc_info=True)
+
+    def _should_process_auto_exit(self, symbol: str, *, trigger_type: str) -> bool:
+        cooldown = float(getattr(self.config, "auto_exit_cooldown_sec", 1.0) or 0.0)
+        if cooldown <= 0:
+            return True
+
+        key = (trigger_type, symbol)
+        now = time.monotonic()
+        with self._auto_exit_lock:
+            last_triggered = self._auto_exit_last_trigger.get(key)
+            if last_triggered is not None and (now - last_triggered) < cooldown:
+                return False
+            self._auto_exit_last_trigger[key] = now
+            return True
+
+    def _refresh_risk_state(self, *, order_price: int, order_quantity: int) -> None:
+        position_count = self._position_manager.position_count
+        current_exposure = Decimal("0")
+        for position in self._position_manager.get_all_positions().values():
+            position_price = position.current_price or position.entry_price
+            current_exposure += position_price * Decimal(position.quantity)
+
+        portfolio_value = Decimal("0")
+        try:
+            balance_response = self._inquire_balance()
+            output2 = balance_response.get("output2")
+            if isinstance(output2, list) and output2:
+                portfolio_value = Decimal(str(output2[0].get("tot_evlu_amt", "0")))
+        except Exception:
+            logger.debug("Failed to refresh risk state from broker balance", exc_info=True)
+
+        if portfolio_value <= 0:
+            order_value = Decimal(str(order_price)) * Decimal(order_quantity)
+            max_position_size_pct = self._risk_manager.limits.max_position_size_pct
+            if max_position_size_pct > 0:
+                portfolio_value = order_value / max_position_size_pct
+            else:
+                portfolio_value = order_value
+
+        self._risk_manager.update_portfolio(
+            portfolio_value=portfolio_value,
+            current_exposure=current_exposure,
+            position_count=position_count,
+        )
 
     @staticmethod
     def _is_recovery_result(value: Any, expected: RecoveryResult) -> bool:
