@@ -103,6 +103,12 @@ class TradingEngine:
     _trading_enabled: bool = field(default=False, init=False)
     _degraded_reason: str | None = field(default=None, init=False)
     _last_recovery_result: RecoveryResult = field(default=RecoveryResult.CLEAN, init=False)
+    _daily_kill_switch_active: bool = field(default=False, init=False)
+    _daily_kill_switch_triggered_at: datetime | None = field(default=None, init=False)
+    _daily_pnl_date: str | None = field(default=None, init=False)
+    _daily_baseline_equity: Decimal | None = field(default=None, init=False)
+    _daily_realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"), init=False)
+    _daily_unrealized_pnl: Decimal = field(default_factory=lambda: Decimal("0"), init=False)
     _strategy_thread: Optional[threading.Thread] = field(default=None, init=False, repr=False)
     _strategy_stop_event: threading.Event = field(
         default_factory=threading.Event, init=False, repr=False
@@ -206,6 +212,8 @@ class TradingEngine:
                 )
         except Exception as e:
             logger.warning(f"Failed to load state: {e}. Starting with empty state.")
+
+        self._restore_risk_controls()
 
         # Run startup reconciliation
         recovery_report = startup_reconciliation(
@@ -370,7 +378,13 @@ class TradingEngine:
             },
         )
 
+        if self._daily_kill_switch_active:
+            return self._build_kill_switch_rejection(symbol=symbol, quantity=quantity, price=price)
+
         self._refresh_risk_state(order_price=price, order_quantity=quantity)
+        if self._daily_kill_switch_active:
+            return self._build_kill_switch_rejection(symbol=symbol, quantity=quantity, price=price)
+
         risk_result = self._risk_manager.validate_order(
             symbol=symbol,
             quantity=quantity,
@@ -461,9 +475,15 @@ class TradingEngine:
         )
 
         # Execute order through executor
+        position_before_sell = self._position_manager.get_position(symbol)
         result = self._executor.sell(symbol=symbol, quantity=quantity, price=price)
 
         if result.success:
+            self._record_realized_pnl(
+                position=position_before_sell,
+                sold_quantity=quantity,
+                sold_price=price,
+            )
             # Remove symbol from monitoring if position fully closed
             position = self._position_manager.get_position(symbol)
             if not position or position.quantity == 0:
@@ -575,7 +595,143 @@ class TradingEngine:
     def _update_state(self):
         """Sync positions from position manager to state."""
         self._state.positions = self._position_manager.get_all_positions()
+        self._state.risk_controls = self._export_risk_controls()
         self._state.last_updated = datetime.now(timezone.utc)
+
+    def _restore_risk_controls(self) -> None:
+        controls = self._state.risk_controls if isinstance(self._state.risk_controls, dict) else {}
+
+        self._daily_kill_switch_active = bool(controls.get("daily_kill_switch_active", False))
+        self._daily_pnl_date = controls.get("daily_pnl_date")
+
+        baseline = controls.get("daily_baseline_equity")
+        self._daily_baseline_equity = None
+        if baseline not in (None, ""):
+            try:
+                self._daily_baseline_equity = Decimal(str(baseline))
+            except Exception:
+                self._daily_baseline_equity = None
+
+        realized = controls.get("daily_realized_pnl", "0")
+        unrealized = controls.get("daily_unrealized_pnl", "0")
+        try:
+            self._daily_realized_pnl = Decimal(str(realized))
+        except Exception:
+            self._daily_realized_pnl = Decimal("0")
+        try:
+            self._daily_unrealized_pnl = Decimal(str(unrealized))
+        except Exception:
+            self._daily_unrealized_pnl = Decimal("0")
+
+        triggered_at_raw = controls.get("daily_kill_switch_triggered_at")
+        self._daily_kill_switch_triggered_at = None
+        if triggered_at_raw:
+            try:
+                self._daily_kill_switch_triggered_at = datetime.fromisoformat(str(triggered_at_raw))
+            except Exception:
+                self._daily_kill_switch_triggered_at = None
+
+        if self._daily_kill_switch_active and self._degraded_reason is None:
+            self._degraded_reason = "daily_loss_killswitch"
+
+    def _export_risk_controls(self) -> dict[str, Any]:
+        return {
+            "daily_kill_switch_active": self._daily_kill_switch_active,
+            "daily_kill_switch_triggered_at": (
+                self._daily_kill_switch_triggered_at.isoformat()
+                if self._daily_kill_switch_triggered_at
+                else None
+            ),
+            "daily_pnl_date": self._daily_pnl_date,
+            "daily_baseline_equity": (
+                str(self._daily_baseline_equity)
+                if self._daily_baseline_equity is not None
+                else None
+            ),
+            "daily_realized_pnl": str(self._daily_realized_pnl),
+            "daily_unrealized_pnl": str(self._daily_unrealized_pnl),
+        }
+
+    def _build_kill_switch_rejection(
+        self, *, symbol: str, quantity: int, price: int
+    ) -> OrderResult:
+        reason = "daily_loss_killswitch"
+        self._notify(
+            "order.rejected",
+            NotificationLevel.WARNING,
+            "Order Rejected",
+            symbol=symbol,
+            side="BUY",
+            quantity=quantity,
+            price=price,
+            reason=reason,
+        )
+        return OrderResult(success=False, order_id="", message=reason)
+
+    def _rollover_daily_metrics_if_needed(self, *, now: datetime) -> None:
+        current_day = now.date().isoformat()
+        if self._daily_pnl_date == current_day:
+            return
+
+        self._daily_pnl_date = current_day
+        self._daily_baseline_equity = None
+        self._daily_realized_pnl = Decimal("0")
+        self._daily_unrealized_pnl = Decimal("0")
+        self._daily_kill_switch_active = False
+        self._daily_kill_switch_triggered_at = None
+        if self._degraded_reason == "daily_loss_killswitch":
+            self._degraded_reason = None
+
+    def _compute_unrealized_pnl(self) -> Decimal:
+        unrealized = Decimal("0")
+        for position in self._position_manager.get_all_positions().values():
+            current_price = position.current_price or position.entry_price
+            unrealized += (current_price - position.entry_price) * Decimal(position.quantity)
+        return unrealized
+
+    def _evaluate_daily_loss_killswitch(self, *, unrealized_pnl: Decimal) -> None:
+        self._daily_unrealized_pnl = unrealized_pnl
+        baseline = self._daily_baseline_equity
+        if baseline is None or baseline <= 0:
+            return
+
+        daily_pnl = self._daily_realized_pnl + unrealized_pnl
+        daily_pnl_pct = daily_pnl / baseline
+        threshold_pct = Decimal(str(self.config.daily_loss_limit_pct))
+
+        if daily_pnl_pct > -threshold_pct or self._daily_kill_switch_active:
+            return
+
+        self._daily_kill_switch_active = True
+        self._daily_kill_switch_triggered_at = datetime.now(timezone.utc)
+        self._degraded_reason = "daily_loss_killswitch"
+        self._notify(
+            "risk.killswitch.triggered",
+            NotificationLevel.CRITICAL,
+            "Daily Loss Kill-Switch Triggered",
+            threshold_pct=str(threshold_pct),
+            baseline_equity=str(baseline),
+            daily_pnl=str(daily_pnl),
+            daily_pnl_pct=str(daily_pnl_pct),
+            realized_pnl=str(self._daily_realized_pnl),
+            unrealized_pnl=str(unrealized_pnl),
+        )
+
+    def _record_realized_pnl(
+        self, *, position: Position | None, sold_quantity: int, sold_price: int
+    ) -> None:
+        if position is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        self._rollover_daily_metrics_if_needed(now=now)
+
+        effective_qty = min(max(int(sold_quantity), 0), int(position.quantity))
+        if effective_qty <= 0:
+            return
+
+        realized = (Decimal(str(sold_price)) - position.entry_price) * Decimal(effective_qty)
+        self._daily_realized_pnl += realized
 
     def _handle_stop_loss(self, symbol: str):
         """Auto-sell position when stop-loss is triggered.
@@ -808,11 +964,16 @@ class TradingEngine:
             return True
 
     def _refresh_risk_state(self, *, order_price: int, order_quantity: int) -> None:
+        self._rollover_daily_metrics_if_needed(now=datetime.now(timezone.utc))
+
         position_count = self._position_manager.position_count
         current_exposure = Decimal("0")
         for position in self._position_manager.get_all_positions().values():
             position_price = position.current_price or position.entry_price
             current_exposure += position_price * Decimal(position.quantity)
+
+        unrealized_pnl = self._compute_unrealized_pnl()
+        self._daily_unrealized_pnl = unrealized_pnl
 
         portfolio_value = Decimal("0")
         try:
@@ -830,6 +991,11 @@ class TradingEngine:
                 portfolio_value = order_value / max_position_size_pct
             else:
                 portfolio_value = order_value
+
+        if self._daily_baseline_equity is None and portfolio_value > 0:
+            self._daily_baseline_equity = portfolio_value
+
+        self._evaluate_daily_loss_killswitch(unrealized_pnl=unrealized_pnl)
 
         self._risk_manager.update_portfolio(
             portfolio_value=portfolio_value,

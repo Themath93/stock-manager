@@ -124,6 +124,22 @@ class TestTradingState:
         assert "005930" not in state.positions
         assert "000660" in state.positions
 
+    def test_risk_controls_round_trip(self):
+        state = TradingState(
+            risk_controls={
+                "daily_kill_switch_active": True,
+                "daily_pnl_date": "2026-02-15",
+                "daily_baseline_equity": "1000000",
+            }
+        )
+
+        data = state.to_dict()
+        restored = TradingState.from_dict(data)
+
+        assert restored.risk_controls["daily_kill_switch_active"] is True
+        assert restored.risk_controls["daily_pnl_date"] == "2026-02-15"
+        assert restored.risk_controls["daily_baseline_equity"] == "1000000"
+
 
 class TestStatePersistence:
     """Test atomic state persistence."""
@@ -198,7 +214,9 @@ class TestStatePersistence:
     def test_save_preserves_json_format(self, tmp_path):
         """Test that saved state is valid JSON."""
         state = TradingState(
-            positions={"005930": Position(symbol="005930", quantity=10, entry_price=Decimal("50000"))}
+            positions={
+                "005930": Position(symbol="005930", quantity=10, entry_price=Decimal("50000"))
+            }
         )
         path = tmp_path / "state.json"
         save_state_atomic(state, path)
@@ -225,7 +243,9 @@ class TestStatePersistence:
     def test_path_as_string(self, tmp_path):
         """Test that save/load work with string paths."""
         state = TradingState(
-            positions={"005930": Position(symbol="005930", quantity=10, entry_price=Decimal("50000"))}
+            positions={
+                "005930": Position(symbol="005930", quantity=10, entry_price=Decimal("50000"))
+            }
         )
         path_str = str(tmp_path / "state.json")
         save_state_atomic(state, path_str)
@@ -241,7 +261,9 @@ class TestStatePersistence:
             json.dumps(
                 {
                     "version": 1,
-                    "positions": {"005930": {"symbol": "005930", "quantity": 10, "entry_price": "50000"}},
+                    "positions": {
+                        "005930": {"symbol": "005930", "quantity": 10, "entry_price": "50000"}
+                    },
                     "pending_orders": {},
                     "last_updated": datetime.now(timezone.utc).isoformat(),
                 }
