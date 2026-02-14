@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -136,6 +136,10 @@ class TradingConfig:
     max_position_size_pct: Decimal = Decimal("0.10")
     default_stop_loss_pct: Decimal = Decimal("0.05")
     default_take_profit_pct: Decimal = Decimal("0.10")
+    recovery_mode: Literal["warn", "block"] = "block"
+    allow_unsafe_trading: bool = False
+    risk_enforcement_mode: Literal["off", "warn", "enforce"] = "warn"
+    portfolio_value: Decimal = Decimal("0")
 
     strategy: "Strategy | None" = None
     strategy_symbols: tuple[str, ...] = ()

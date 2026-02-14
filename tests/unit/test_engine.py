@@ -246,8 +246,9 @@ class TestEngineLifecycle:
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
-    def test_start_fails_fast_when_recovery_failed(self, mock_reconcile, mock_load, engine):
-        """Test that start() raises and keeps engine stopped on recovery failure."""
+    def test_start_enters_degraded_mode_when_recovery_failed(
+        self, mock_reconcile, mock_load, engine
+    ):
         mock_load.return_value = None
         mock_reconcile.return_value = RecoveryReport(
             result=RecoveryResult.FAILED,
@@ -260,12 +261,13 @@ class TestEngineLifecycle:
 
         with patch.object(engine._price_monitor, "start") as mock_price_start:
             with patch.object(engine._reconciler, "start") as mock_reconciler_start:
-                with pytest.raises(RuntimeError, match="Startup reconciliation failed"):
-                    engine.start()
+                engine.start()
 
-        assert engine._running is False
+        assert engine._running is True
+        assert engine._trading_enabled is False
+        assert engine._degraded_reason == "startup_recovery_failed"
         mock_price_start.assert_not_called()
-        mock_reconciler_start.assert_not_called()
+        mock_reconciler_start.assert_called_once()
 
 
 @dataclass

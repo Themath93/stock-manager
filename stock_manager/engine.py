@@ -54,6 +54,9 @@ class EngineStatus:
     rate_limiter_available: int
     state_path: str
     is_paper_trading: bool
+    trading_enabled: bool
+    recovery_result: str
+    degraded_reason: str | None
 
 
 @dataclass
@@ -97,6 +100,9 @@ class TradingEngine:
     _reconciler: PositionReconciler = field(init=False)
     _state: TradingState = field(init=False)
     _running: bool = field(default=False, init=False)
+    _trading_enabled: bool = field(default=False, init=False)
+    _degraded_reason: str | None = field(default=None, init=False)
+    _last_recovery_result: RecoveryResult = field(default=RecoveryResult.CLEAN, init=False)
     _strategy_thread: Optional[threading.Thread] = field(default=None, init=False, repr=False)
     _strategy_stop_event: threading.Event = field(
         default_factory=threading.Event, init=False, repr=False
@@ -123,7 +129,8 @@ class TradingEngine:
                 max_positions=self.config.max_positions,
                 default_stop_loss_pct=self.config.default_stop_loss_pct,
                 default_take_profit_pct=self.config.default_take_profit_pct,
-            )
+            ),
+            portfolio_value=self.config.portfolio_value,
         )
 
         self._position_manager.set_callbacks(
@@ -208,6 +215,9 @@ class TradingEngine:
             save_state_func=save_state_atomic,
             state_path=self.state_path,
         )
+        recovery_result = self._coerce_recovery_result(recovery_report.result)
+        self._last_recovery_result = recovery_result
+        self._degraded_reason = None
 
         # Log recovery results
         logger.info(
@@ -220,18 +230,15 @@ class TradingEngine:
             },
         )
 
-        # Fail-fast on reconciliation failure
-        if self._is_recovery_result(recovery_report.result, RecoveryResult.FAILED):
-            error_message = (
-                "; ".join(recovery_report.errors) if recovery_report.errors else "unknown error"
-            )
-            self._notify(
-                "recovery.failed",
-                NotificationLevel.CRITICAL,
-                "Recovery Failed",
-                errors=recovery_report.errors,
-            )
-            raise RuntimeError(f"Startup reconciliation failed: {error_message}")
+        if (
+            recovery_result == RecoveryResult.FAILED
+            and self.config.recovery_mode == "block"
+            and not self.config.allow_unsafe_trading
+        ):
+            self._trading_enabled = False
+            self._degraded_reason = "startup_recovery_failed"
+        else:
+            self._trading_enabled = True
 
         # Update state after reconciliation
         self._update_state()
@@ -254,12 +261,14 @@ class TradingEngine:
             NotificationLevel.INFO,
             "Engine Started",
             position_count=len(self._position_manager.get_all_positions()),
-            recovery_result=recovery_report.result,
+            recovery_result=recovery_result.value,
             is_paper_trading=self.is_paper_trading,
+            trading_enabled=self._trading_enabled,
+            degraded_reason=self._degraded_reason,
         )
 
         # Notify recovery events
-        if self._is_recovery_result(recovery_report.result, RecoveryResult.RECONCILED):
+        if recovery_result == RecoveryResult.RECONCILED:
             self._notify(
                 "recovery.reconciled",
                 NotificationLevel.WARNING,
@@ -267,6 +276,13 @@ class TradingEngine:
                 orphan_positions=recovery_report.orphan_positions,
                 missing_positions=recovery_report.missing_positions,
                 quantity_mismatches=recovery_report.quantity_mismatches,
+            )
+        elif recovery_result == RecoveryResult.FAILED:
+            self._notify(
+                "recovery.failed",
+                NotificationLevel.CRITICAL,
+                "Recovery Failed",
+                errors=recovery_report.errors,
             )
 
         return recovery_report
@@ -296,6 +312,7 @@ class TradingEngine:
         self._persist_state()
 
         self._running = False
+        self._trading_enabled = False
         logger.info("TradingEngine stopped")
 
         # Notify engine stopped
@@ -340,6 +357,7 @@ class TradingEngine:
             RuntimeError: If engine is not running
         """
         self._ensure_running()
+        self._ensure_trading_allowed()
 
         logger.info(
             f"Buy order requested: {symbol} qty={quantity} price={price}",
@@ -435,6 +453,7 @@ class TradingEngine:
             RuntimeError: If engine is not running
         """
         self._ensure_running()
+        self._ensure_trading_allowed()
 
         logger.info(
             f"Sell order requested: {symbol} qty={quantity} price={price}",
@@ -518,6 +537,9 @@ class TradingEngine:
             rate_limiter_available=self._rate_limiter.available,
             state_path=str(self.state_path),
             is_paper_trading=self.is_paper_trading,
+            trading_enabled=self._trading_enabled,
+            recovery_result=self._last_recovery_result.value,
+            degraded_reason=self._degraded_reason,
         )
 
     def is_healthy(self) -> bool:
@@ -659,6 +681,19 @@ class TradingEngine:
         """Raise RuntimeError if engine is not running."""
         if not self._running:
             raise RuntimeError("Engine is not running. Call start() first.")
+
+    def _ensure_trading_allowed(self) -> None:
+        if not self._trading_enabled:
+            reason = self._degraded_reason or "trading_disabled"
+            raise RuntimeError(f"Trading is disabled: {reason}")
+
+    def _coerce_recovery_result(self, result: Any) -> RecoveryResult:
+        if isinstance(result, RecoveryResult):
+            return result
+        try:
+            return RecoveryResult(str(result).lower())
+        except ValueError:
+            return RecoveryResult.FAILED
 
     def _start_strategy_orchestration(self) -> None:
         strategy = getattr(self.config, "strategy", None)
