@@ -33,21 +33,40 @@ class RuntimeContext:
     account_product_code: str
 
 
+def _normalize_account_settings(account_number: str, account_product_code: str) -> tuple[str, str]:
+    account_number = (account_number or "").strip()
+    account_product_code = (account_product_code or "").strip()
+
+    if not account_product_code:
+        if "-" in account_number:
+            base, _, product = account_number.partition("-")
+            account_number = base.strip()
+            account_product_code = product.strip()
+        elif account_number.isdigit() and len(account_number) == 10:
+            account_product_code = account_number[-2:]
+            account_number = account_number[:8]
+
+    return account_number, account_product_code
+
+
 def _validate_account_settings(account_number: str, account_product_code: str) -> None:
     if not _ACCOUNT_NUMBER_PATTERN.fullmatch(account_number):
-        raise ValueError(
-            "KIS_ACCOUNT_NUMBER must be exactly 8 digits (example: 12345678)."
-        )
+        raise ValueError("KIS_ACCOUNT_NUMBER must be exactly 8 digits (example: 12345678).")
     if not _ACCOUNT_PRODUCT_CODE_PATTERN.fullmatch(account_product_code):
-        raise ValueError(
-            "KIS_ACCOUNT_PRODUCT_CODE must be exactly 2 digits (example: 01)."
-        )
+        raise ValueError("KIS_ACCOUNT_PRODUCT_CODE must be exactly 2 digits (example: 01).")
+
+
+def _looks_like_opsq2000_error(message: str) -> bool:
+    upper = message.upper()
+    return "OPSQ2000" in upper or "INVALID_CHECK_ACNO" in upper
 
 
 def _build_runtime_context() -> RuntimeContext:
     config = KISConfig()
-    account_number = (config.account_number or "").strip()
-    account_product_code = (config.account_product_code or "").strip()
+    account_number, account_product_code = _normalize_account_settings(
+        config.account_number or "",
+        config.account_product_code or "",
+    )
     _validate_account_settings(account_number, account_product_code)
 
     return RuntimeContext(
@@ -63,6 +82,7 @@ def run_command(*, duration_sec: int, skip_auth: bool) -> None:
         typer.echo("--duration-sec must be 0 or a positive integer.")
         raise typer.Exit(code=1)
 
+    runtime: RuntimeContext | None = None
     try:
         runtime = _build_runtime_context()
         if not skip_auth:
@@ -106,6 +126,11 @@ def run_command(*, duration_sec: int, skip_auth: bool) -> None:
                 typer.echo("Engine stopped.")
     except Exception as e:
         typer.echo(f"Run failed: {e}")
+        if runtime is not None and runtime.config.use_mock and _looks_like_opsq2000_error(str(e)):
+            typer.echo(
+                "Hint: mock-mode account validation failed. Verify KIS_MOCK_ACCOUNT_NUMBER is set "
+                "to your 8-digit virtual account and KIS_ACCOUNT_PRODUCT_CODE matches your mock account."
+            )
         raise typer.Exit(code=1)
 
 
@@ -129,6 +154,7 @@ def _execute_trade(
         typer.echo("--price must be a positive integer.")
         raise typer.Exit(code=1)
 
+    runtime: RuntimeContext | None = None
     try:
         runtime = _build_runtime_context()
     except Exception as e:
@@ -161,6 +187,11 @@ def _execute_trade(
             result = executor.sell(symbol=symbol, quantity=qty, price=price)
     except Exception as e:
         typer.echo(f"Trade execution failed: {e}")
+        if runtime is not None and runtime.config.use_mock and _looks_like_opsq2000_error(str(e)):
+            typer.echo(
+                "Hint: mock-mode account validation failed. Verify KIS_MOCK_ACCOUNT_NUMBER is set "
+                "to your 8-digit virtual account and KIS_ACCOUNT_PRODUCT_CODE matches your mock account."
+            )
         raise typer.Exit(code=1)
 
     if result.success:
@@ -174,6 +205,7 @@ def _execute_trade(
 
 
 def smoke_command() -> None:
+    runtime: RuntimeContext | None = None
     try:
         runtime = _build_runtime_context()
         runtime.client.authenticate()
@@ -184,9 +216,7 @@ def smoke_command() -> None:
             is_paper_trading=runtime.config.use_mock,
         )
         if str(price_response.get("rt_cd")) != "0":
-            raise RuntimeError(
-                f"price check failed: {price_response.get('msg1', 'unknown error')}"
-            )
+            raise RuntimeError(f"price check failed: {price_response.get('msg1', 'unknown error')}")
 
         balance_request = inquire_balance(
             cano=runtime.account_number,
@@ -220,6 +250,11 @@ def smoke_command() -> None:
         )
     except Exception as e:
         typer.echo(f"Smoke failed: {e}")
+        if runtime is not None and runtime.config.use_mock and _looks_like_opsq2000_error(str(e)):
+            typer.echo(
+                "Hint: mock-mode account validation failed. Verify KIS_MOCK_ACCOUNT_NUMBER is set "
+                "to your 8-digit virtual account and KIS_ACCOUNT_PRODUCT_CODE matches your mock account."
+            )
         raise typer.Exit(code=1)
 
 

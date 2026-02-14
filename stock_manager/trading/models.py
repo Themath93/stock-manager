@@ -10,11 +10,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
+from typing import TYPE_CHECKING
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from stock_manager.trading.strategies.base import Strategy
 
 
 class OrderStatus(Enum):
     """Order lifecycle states."""
+
     CREATED = "created"
     VALIDATING = "validating"
     SUBMITTED = "submitted"
@@ -28,6 +33,7 @@ class OrderStatus(Enum):
 
 class PositionStatus(Enum):
     """Position lifecycle states."""
+
     OPEN = "open"
     OPEN_RECONCILED = "open_reconciled"
     CLOSED = "closed"
@@ -54,6 +60,7 @@ class Order:
         submitted_at: Broker submission timestamp
         filled_at: Order fill timestamp
     """
+
     order_id: str = field(default_factory=lambda: str(uuid4()))
     idempotency_key: str = field(default_factory=lambda: str(uuid4()))
     symbol: str = ""
@@ -76,8 +83,8 @@ class Order:
             True if order is eligible for retry
         """
         return (
-            self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED] and
-            self.submission_attempts < self.max_attempts
+            self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED]
+            and self.submission_attempts < self.max_attempts
         )
 
 
@@ -97,6 +104,7 @@ class Position:
         opened_at: Position open timestamp
         closed_at: Position close timestamp
     """
+
     symbol: str
     quantity: int
     entry_price: Decimal
@@ -121,9 +129,17 @@ class TradingConfig:
         default_stop_loss_pct: Default stop loss percentage
         default_take_profit_pct: Default take profit percentage
     """
+
     max_positions: int = 1
     polling_interval_sec: float = 2.0
     rate_limit_per_sec: int = 20
     max_position_size_pct: Decimal = Decimal("0.10")
     default_stop_loss_pct: Decimal = Decimal("0.05")
     default_take_profit_pct: Decimal = Decimal("0.10")
+
+    strategy: "Strategy | None" = None
+    strategy_symbols: tuple[str, ...] = ()
+    strategy_order_quantity: int = 1
+    strategy_max_symbols_per_cycle: int = 50
+    strategy_max_buys_per_cycle: int = 1
+    strategy_run_interval_sec: float = 60.0
