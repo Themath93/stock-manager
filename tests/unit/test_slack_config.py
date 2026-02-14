@@ -17,6 +17,8 @@ class TestSlackConfigDefaults:
         assert config.order_channel == ""
         assert config.alert_channel == ""
         assert config.min_level == "INFO"
+        assert config.async_enabled is False
+        assert config.queue_maxsize == 1000
 
 
 class TestSlackConfigEnvLoading:
@@ -30,6 +32,8 @@ class TestSlackConfigEnvLoading:
         monkeypatch.setenv("SLACK_ORDER_CHANNEL", "#orders")
         monkeypatch.setenv("SLACK_ALERT_CHANNEL", "#alerts")
         monkeypatch.setenv("SLACK_MIN_LEVEL", "WARNING")
+        monkeypatch.setenv("SLACK_ASYNC_ENABLED", "true")
+        monkeypatch.setenv("SLACK_QUEUE_MAXSIZE", "200")
 
         config = SlackConfig(_env_file=None)
         assert config.enabled is True
@@ -38,6 +42,8 @@ class TestSlackConfigEnvLoading:
         assert config.order_channel == "#orders"
         assert config.alert_channel == "#alerts"
         assert config.min_level == "WARNING"
+        assert config.async_enabled is True
+        assert config.queue_maxsize == 200
 
 
 class TestGetMinLevel:

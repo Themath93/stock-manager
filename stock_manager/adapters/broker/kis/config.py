@@ -74,6 +74,12 @@ class KISConfig(BaseSettings):
     # Token caching (strongly recommended to avoid KIS OAuth rate limits)
     token_cache_enabled: bool = True
     token_cache_path: str | None = None
+    # Request stabilization controls
+    request_retry_enabled: bool = True
+    request_max_attempts: int = 3
+    request_initial_backoff_ms: int = 200
+    request_backoff_multiplier: float = 2.0
+    auto_reauth_enabled: bool = True
 
     _effective_app_key: SecretStr = PrivateAttr(default=SecretStr(""))
     _effective_app_secret: SecretStr = PrivateAttr(default=SecretStr(""))

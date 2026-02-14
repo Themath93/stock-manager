@@ -1,10 +1,12 @@
 """Thread safety tests for PositionManager."""
 import threading
 from decimal import Decimal
+from unittest.mock import MagicMock
 
 
+from stock_manager.engine import TradingEngine
 from stock_manager.trading.positions import PositionManager
-from stock_manager.trading.models import Position
+from stock_manager.trading.models import Position, TradingConfig
 
 
 class TestPositionManagerThreadSafety:
@@ -68,3 +70,16 @@ class TestPositionManagerThreadSafety:
         t2.join()
 
         assert completed, "Update was blocked by callback execution"
+
+    def test_engine_wires_position_callbacks(self, tmp_path):
+        """TradingEngine should wire stop-loss/take-profit callbacks on init."""
+        engine = TradingEngine(
+            client=MagicMock(),
+            config=TradingConfig(),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+
+        assert engine._position_manager._on_stop_loss is not None
+        assert engine._position_manager._on_take_profit is not None

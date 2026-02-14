@@ -276,3 +276,111 @@ class TestFaultTolerance:
             )
             # Should not raise exception
             notifier.notify(event)
+
+
+class TestAsyncQueueMode:
+    """Test async queue mode behavior."""
+
+    def test_async_mode_enqueues_event(self):
+        """When async is enabled, notify should enqueue and worker should send."""
+        config = SlackConfig(
+            enabled=True,
+            bot_token="test-bot-token",
+            default_channel="#trading",
+            async_enabled=True,
+            queue_maxsize=10,
+            _env_file=None,
+        )
+        with patch("slack_sdk.WebClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client_class.return_value = mock_client
+            notifier = SlackNotifier(config)
+
+            event = NotificationEvent(
+                event_type="order.filled",
+                level=NotificationLevel.INFO,
+                title="Order Filled",
+                details={},
+            )
+            notifier.notify(event)
+
+            # Wait briefly for worker thread.
+            import time
+            time.sleep(0.05)
+
+            mock_client.chat_postMessage.assert_called()
+            notifier.close()
+
+    def test_queue_full_drops_low_priority(self):
+        """INFO/WARNING events should be dropped when queue is full."""
+        config = SlackConfig(
+            enabled=True,
+            bot_token="test-bot-token",
+            default_channel="#trading",
+            async_enabled=True,
+            queue_maxsize=1,
+            _env_file=None,
+        )
+        with patch("slack_sdk.WebClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client_class.return_value = mock_client
+            notifier = SlackNotifier(config)
+
+            # Stop worker so queue stays full deterministically.
+            notifier._stop_event.set()
+            notifier._queue.put_nowait(
+                NotificationEvent(
+                    event_type="test.prefill",
+                    level=NotificationLevel.INFO,
+                    title="Prefill",
+                    details={},
+                )
+            )
+
+            event = NotificationEvent(
+                event_type="test.info",
+                level=NotificationLevel.INFO,
+                title="Info Event",
+                details={},
+            )
+            notifier.notify(event)
+
+            mock_client.chat_postMessage.assert_not_called()
+            notifier.close()
+
+    def test_queue_full_fallback_for_error(self):
+        """ERROR+ events should use synchronous fallback when queue is full."""
+        config = SlackConfig(
+            enabled=True,
+            bot_token="test-bot-token",
+            default_channel="#trading",
+            async_enabled=True,
+            queue_maxsize=1,
+            _env_file=None,
+        )
+        with patch("slack_sdk.WebClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client_class.return_value = mock_client
+            notifier = SlackNotifier(config)
+
+            # Stop worker so queue stays full deterministically.
+            notifier._stop_event.set()
+            notifier._queue.put_nowait(
+                NotificationEvent(
+                    event_type="test.prefill",
+                    level=NotificationLevel.INFO,
+                    title="Prefill",
+                    details={},
+                )
+            )
+
+            event = NotificationEvent(
+                event_type="test.error",
+                level=NotificationLevel.ERROR,
+                title="Error Event",
+                details={},
+            )
+            notifier.notify(event)
+
+            mock_client.chat_postMessage.assert_called()
+            notifier.close()

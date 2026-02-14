@@ -1,6 +1,8 @@
 """Thread safety tests for PriceMonitor."""
 import threading
+import time
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
 
 from stock_manager.monitoring.price_monitor import PriceMonitor
@@ -45,3 +47,27 @@ class TestPriceMonitorThreadSafety:
 
         # Then - no exceptions should have occurred
         assert len(errors) == 0, f"Errors during concurrent access: {errors}"
+
+    def test_polling_with_concurrent_symbol_updates(self):
+        """Polling loop should tolerate concurrent symbol add/remove updates."""
+        monitor = PriceMonitor(client=MagicMock(), interval=0.01)
+        callback_count = 0
+        callback_lock = threading.Lock()
+
+        def on_price(symbol, price):
+            nonlocal callback_count
+            with callback_lock:
+                callback_count += 1
+
+        with patch(
+            "stock_manager.adapters.broker.kis.apis.domestic_stock.basic.inquire_current_price",
+            return_value={"rt_cd": "0", "output": {"stck_prpr": "70000"}},
+        ):
+            monitor.start(["005930"], on_price)
+            for i in range(20):
+                monitor.add_symbol(f"SYM{i:03d}")
+                monitor.remove_symbol(f"SYM{i:03d}")
+            time.sleep(0.05)
+            monitor.stop()
+
+        assert callback_count >= 1

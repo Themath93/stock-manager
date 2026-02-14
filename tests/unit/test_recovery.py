@@ -4,6 +4,7 @@ from stock_manager.persistence.recovery import (
     startup_reconciliation, RecoveryResult, RecoveryReport
 )
 from stock_manager.persistence.state import TradingState
+from stock_manager.trading.models import Position, PositionStatus
 
 
 class TestRecoveryReport:
@@ -87,8 +88,10 @@ class TestStartupReconciliation:
 
         # Verify orphan was added to local state
         assert "005930" in local_state.positions
-        assert local_state.positions["005930"]["quantity"] == 10
-        assert local_state.positions["005930"]["status"] == "open_reconciled"
+        position = local_state.positions["005930"]
+        assert isinstance(position, Position)
+        assert position.quantity == 10
+        assert position.status == PositionStatus.OPEN_RECONCILED
 
     def test_reconciled_when_multiple_orphans(self):
         """Test reconciliation with multiple orphan positions."""
@@ -322,4 +325,6 @@ class TestStartupReconciliation:
         # Should handle gracefully, treating as 0
         assert report.result == RecoveryResult.RECONCILED
         assert "005930" in local_state.positions
-        assert local_state.positions["005930"]["quantity"] == 0
+        position = local_state.positions["005930"]
+        assert isinstance(position, Position)
+        assert position.quantity == 0

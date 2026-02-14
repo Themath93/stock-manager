@@ -5,6 +5,7 @@ including authentication, request handling, and response processing.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
@@ -265,69 +266,104 @@ class KISRestClient:
             ... )
             >>> print(response["output"])
         """
-        # Prepare headers
-        request_headers = self._get_default_headers()
-        if require_auth:
-            auth_headers = self._get_auth_headers()
-            request_headers.update(auth_headers)
-        if headers:
-            request_headers.update(headers)
+        max_attempts = max(1, self.config.request_max_attempts) if self.config.request_retry_enabled else 1
+        reauth_attempted = False
 
-        # Add API version header if not present
-        if "tr_id" not in request_headers:
-            # Some endpoints require tr_id, others don't
-            # This is a placeholder for future TR ID management
-            pass
+        for attempt in range(1, max_attempts + 1):
+            # Prepare headers per-attempt to include refreshed token after reauth.
+            request_headers = self._get_default_headers()
+            if require_auth:
+                auth_headers = self._get_auth_headers()
+                request_headers.update(auth_headers)
+            if headers:
+                request_headers.update(headers)
 
-        # Add personal account header if available
-        if self.config.account_number:
-            request_headers["hashkey"] = self.config.account_number
+            # Add personal account header if available
+            if self.config.account_number:
+                request_headers["hashkey"] = self.config.account_number
 
-        try:
-            # Make the request
-            response = self._http_client.request(
-                method=method,
-                url=path,
-                params=params,
-                json=json_data,
-                headers=request_headers,
-            )
-
-            # Handle rate limiting
-            if response.status_code == 429:
-                raise KISRateLimitError(
-                    "API rate limit exceeded. Please retry later.",
-                    status_code=429,
+            try:
+                response = self._http_client.request(
+                    method=method,
+                    url=path,
+                    params=params,
+                    json=json_data,
+                    headers=request_headers,
                 )
 
-            # Raise for other HTTP errors
-            response.raise_for_status()
+                if response.status_code in (401, 403):
+                    if (
+                        require_auth
+                        and self.config.auto_reauth_enabled
+                        and not reauth_attempted
+                    ):
+                        reauth_attempted = True
+                        self.authenticate()
+                        continue
 
-            # Parse and return response
-            data = response.json()
+                if response.status_code == 429:
+                    raise KISRateLimitError(
+                        "API rate limit exceeded. Please retry later.",
+                        status_code=429,
+                    )
 
-            # Check for KIS-specific error codes in response body
-            # KIS API may return 200 OK with error codes in response body
-            if self._is_error_response(data):
-                raise self._create_api_error_from_response(data)
+                response.raise_for_status()
+                data = response.json()
 
-            return data
+                if self._is_error_response(data):
+                    if (
+                        require_auth
+                        and self.config.auto_reauth_enabled
+                        and not reauth_attempted
+                        and self._is_auth_error_response(data)
+                    ):
+                        reauth_attempted = True
+                        self.authenticate()
+                        continue
+                    raise self._create_api_error_from_response(data)
 
-        except httpx.HTTPStatusError as e:
-            # Try to extract error information from response
-            error_data = None
-            try:
-                error_data = e.response.json()
-            except Exception:
-                pass
+                return data
 
-            raise KISAPIError(
-                f"API request failed: {e.response.status_code} {e.response.reason_phrase}",
-                status_code=e.response.status_code,
-                response_data=error_data,
-            ) from e
-        except httpx.RequestError as e:
-            raise KISAPIError(f"Network error during API request: {e}") from e
+            except KISRateLimitError:
+                if self._should_retry_status(429, attempt, max_attempts):
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code
+
+                if (
+                    status_code in (401, 403)
+                    and require_auth
+                    and self.config.auto_reauth_enabled
+                    and not reauth_attempted
+                ):
+                    reauth_attempted = True
+                    self.authenticate()
+                    continue
+
+                if self._should_retry_status(status_code, attempt, max_attempts):
+                    self._sleep_before_retry(attempt)
+                    continue
+
+                error_data = None
+                try:
+                    error_data = e.response.json()
+                except Exception:
+                    pass
+
+                raise KISAPIError(
+                    f"API request failed: {e.response.status_code} {e.response.reason_phrase}",
+                    status_code=e.response.status_code,
+                    response_data=error_data,
+                ) from e
+            except httpx.RequestError as e:
+                if self._should_retry_network(attempt, max_attempts):
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise KISAPIError(f"Network error during API request: {e}") from e
+
+        raise KISAPIError("API request failed after maximum retry attempts")
 
     def _is_error_response(self, data: dict[str, Any]) -> bool:
         """Check if API response contains an error.
@@ -375,6 +411,30 @@ class KISRestClient:
             error_code=error_code,
             response_data=data,
         )
+
+    def _is_auth_error_response(self, data: dict[str, Any]) -> bool:
+        """Best-effort check for authentication error payloads."""
+        msg = " ".join(
+            str(data.get(key, ""))
+            for key in ("msg1", "error", "error_description", "message")
+        ).lower()
+        return any(keyword in msg for keyword in ("token", "auth", "인증"))
+
+    def _should_retry_status(self, status_code: int, attempt: int, max_attempts: int) -> bool:
+        if not self.config.request_retry_enabled:
+            return False
+        if attempt >= max_attempts:
+            return False
+        return status_code == 429 or 500 <= status_code <= 599
+
+    def _should_retry_network(self, attempt: int, max_attempts: int) -> bool:
+        return self.config.request_retry_enabled and attempt < max_attempts
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        base = max(1, self.config.request_initial_backoff_ms) / 1000.0
+        multiplier = max(1.0, self.config.request_backoff_multiplier)
+        delay = base * (multiplier ** max(0, attempt - 1))
+        time.sleep(delay)
 
     def close(self) -> None:
         """Close the HTTP client and release resources.
