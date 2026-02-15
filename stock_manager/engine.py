@@ -673,6 +673,8 @@ class TradingEngine:
         if self._daily_pnl_date == current_day:
             return
 
+        previous_day = self._daily_pnl_date
+        had_active_kill_switch = self._daily_kill_switch_active
         self._daily_pnl_date = current_day
         self._daily_baseline_equity = None
         self._daily_realized_pnl = Decimal("0")
@@ -681,6 +683,15 @@ class TradingEngine:
         self._daily_kill_switch_triggered_at = None
         if self._degraded_reason == "daily_loss_killswitch":
             self._degraded_reason = None
+
+        if had_active_kill_switch:
+            self._notify(
+                "risk.killswitch.cleared",
+                NotificationLevel.INFO,
+                "Daily Loss Kill-Switch Cleared",
+                previous_day=previous_day,
+                reset_at=now.isoformat(),
+            )
 
     def _compute_unrealized_pnl(self) -> Decimal:
         unrealized = Decimal("0")

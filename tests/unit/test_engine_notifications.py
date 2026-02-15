@@ -1,6 +1,7 @@
 """Unit tests for trading engine notifications integration."""
 
 from datetime import datetime
+from decimal import Decimal
 from unittest.mock import Mock, patch
 import pytest
 
@@ -55,7 +56,9 @@ class TestEngineStartNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
                 # Verify engine.started notification was sent
@@ -80,7 +83,9 @@ class TestEngineStopNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         # Reset mock to check stop notifications only
@@ -109,7 +114,9 @@ class TestOrderFilledNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         mock_notifier.reset_mock()
@@ -134,7 +141,9 @@ class TestOrderFilledNotification:
 class TestOrderRejectedNotification:
     """Test order.rejected notification."""
 
-    def test_order_rejected_notification_on_failed_buy(self, trading_engine, mock_client, mock_notifier):
+    def test_order_rejected_notification_on_failed_buy(
+        self, trading_engine, mock_client, mock_notifier
+    ):
         """Test that order.rejected notification is sent on failed buy."""
         # Setup engine
         mock_recovery_report = Mock()
@@ -144,7 +153,9 @@ class TestOrderRejectedNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         mock_notifier.reset_mock()
@@ -177,7 +188,9 @@ class TestPositionStopLossNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         mock_notifier.reset_mock()
@@ -210,7 +223,9 @@ class TestPositionTakeProfitNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         mock_notifier.reset_mock()
@@ -233,7 +248,9 @@ class TestPositionTakeProfitNotification:
 class TestReconciliationDiscrepancyNotification:
     """Test reconciliation.discrepancy notification."""
 
-    def test_reconciliation_discrepancy_notification(self, trading_engine, mock_client, mock_notifier):
+    def test_reconciliation_discrepancy_notification(
+        self, trading_engine, mock_client, mock_notifier
+    ):
         """Test that reconciliation.discrepancy notification is sent."""
         # Setup engine
         mock_recovery_report = Mock()
@@ -243,7 +260,9 @@ class TestReconciliationDiscrepancyNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         mock_notifier.reset_mock()
@@ -278,7 +297,9 @@ class TestRecoveryReconciledNotification:
         mock_recovery_report.quantity_mismatches = {}
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         # Verify recovery.reconciled notification was sent
@@ -301,7 +322,9 @@ class TestRecoveryFailedNotification:
         mock_recovery_report.quantity_mismatches = {}
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         # Verify recovery.failed notification was sent
@@ -322,7 +345,9 @@ class TestRecoveryFailedNotification:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         calls = mock_notifier.notify.call_args_list
@@ -333,11 +358,66 @@ class TestRecoveryFailedNotification:
         assert started.details.get("degraded_reason") == "startup_recovery_failed"
 
 
+class TestKillSwitchNotifications:
+    def test_killswitch_triggered_notification(self, trading_engine, mock_client, mock_notifier):
+        mock_recovery_report = Mock()
+        mock_recovery_report.result = RecoveryResult.CLEAN
+        mock_recovery_report.errors = []
+        mock_recovery_report.orphan_positions = []
+        mock_recovery_report.missing_positions = []
+
+        with patch("stock_manager.engine.load_state", return_value=None):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
+                trading_engine.start()
+
+        mock_notifier.reset_mock()
+        trading_engine._daily_pnl_date = datetime.now().date().isoformat()
+        trading_engine._daily_baseline_equity = Decimal("1000000")
+        trading_engine._daily_realized_pnl = Decimal("-6000")
+
+        trading_engine._evaluate_daily_loss_killswitch(unrealized_pnl=Decimal("-5000"))
+
+        calls = mock_notifier.notify.call_args_list
+        events = [call[0][0] for call in calls]
+        assert any(e.event_type == "risk.killswitch.triggered" for e in events)
+        event = next(e for e in events if e.event_type == "risk.killswitch.triggered")
+        assert event.level == NotificationLevel.CRITICAL
+
+    def test_killswitch_cleared_notification_on_rollover(
+        self, trading_engine, mock_client, mock_notifier
+    ):
+        mock_recovery_report = Mock()
+        mock_recovery_report.result = RecoveryResult.CLEAN
+        mock_recovery_report.errors = []
+        mock_recovery_report.orphan_positions = []
+        mock_recovery_report.missing_positions = []
+
+        with patch("stock_manager.engine.load_state", return_value=None):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
+                trading_engine.start()
+
+        trading_engine._daily_kill_switch_active = True
+        trading_engine._daily_pnl_date = "2000-01-01"
+        trading_engine._degraded_reason = "daily_loss_killswitch"
+        mock_notifier.reset_mock()
+
+        trading_engine._rollover_daily_metrics_if_needed(now=datetime.now())
+
+        calls = mock_notifier.notify.call_args_list
+        events = [call[0][0] for call in calls]
+        assert any(e.event_type == "risk.killswitch.cleared" for e in events)
+        event = next(e for e in events if e.event_type == "risk.killswitch.cleared")
+        assert event.level == NotificationLevel.INFO
+
+
 class TestAllNotificationTypesComplete:
     """Test that all 9 notification event types can be triggered."""
 
-    def test_all_9_notification_types_present(self):
-        """Verify all 9 event types are defined."""
+    def test_all_11_notification_types_present(self):
         event_types = {
             "engine.started",
             "engine.stopped",
@@ -348,8 +428,10 @@ class TestAllNotificationTypesComplete:
             "reconciliation.discrepancy",
             "recovery.reconciled",
             "recovery.failed",
+            "risk.killswitch.triggered",
+            "risk.killswitch.cleared",
         }
-        assert len(event_types) == 9
+        assert len(event_types) == 11
 
 
 class TestNotificationEventAttributes:
@@ -383,7 +465,9 @@ class TestNotificationFilteringByLevel:
         mock_recovery_report.missing_positions = []
 
         with patch("stock_manager.engine.load_state", return_value=None):
-            with patch("stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
                 trading_engine.start()
 
         # Check that some notifications were sent
