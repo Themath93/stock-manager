@@ -560,6 +560,116 @@ class TestTradingOperations:
         with pytest.raises(RuntimeError, match="not running"):
             engine.sell("005930", 10, 75000)
 
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_rejected_when_daily_loss_killswitch_active(
+        self, mock_reconcile, mock_load, engine
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine._daily_kill_switch_active = True
+        engine._executor.buy = MagicMock(return_value=OrderResult(success=True, order_id="TEST123"))
+
+        result = engine.buy("005930", 10, 70000)
+
+        assert result.success is False
+        assert "daily_loss_killswitch" in result.message
+        engine._executor.buy.assert_not_called()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_sell_allowed_when_daily_loss_killswitch_active(
+        self, mock_reconcile, mock_load, engine
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine._daily_kill_switch_active = True
+        engine._executor.sell = MagicMock(
+            return_value=OrderResult(success=True, order_id="SELL123")
+        )
+
+        result = engine.sell("005930", 10, 70000)
+
+        assert result.success is True
+        engine._executor.sell.assert_called_once_with(symbol="005930", quantity=10, price=70000)
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_daily_loss_killswitch_triggers_and_emits_critical_notification(
+        self, mock_reconcile, mock_load, engine
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine.notifier = MagicMock()
+        engine._daily_pnl_date = datetime.now(timezone.utc).date().isoformat()
+        engine._daily_baseline_equity = Decimal("1000000")
+        engine._daily_realized_pnl = Decimal("-6000")
+
+        engine._evaluate_daily_loss_killswitch(unrealized_pnl=Decimal("-5000"))
+
+        assert engine._daily_kill_switch_active is True
+        calls = engine.notifier.notify.call_args_list
+        events = [
+            call[0][0] for call in calls if call[0][0].event_type == "risk.killswitch.triggered"
+        ]
+        assert len(events) == 1
+        event = events[0]
+        assert event.level.name == "CRITICAL"
+        assert event.details.get("threshold_pct") == "0.01"
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_daily_loss_killswitch_resets_on_day_rollover(self, mock_reconcile, mock_load, engine):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine._daily_kill_switch_active = True
+        engine._daily_pnl_date = "2000-01-01"
+        engine._daily_baseline_equity = Decimal("1000000")
+        engine._daily_realized_pnl = Decimal("-5000")
+        engine._degraded_reason = "daily_loss_killswitch"
+
+        engine._rollover_daily_metrics_if_needed(now=datetime.now(timezone.utc))
+
+        assert engine._daily_kill_switch_active is False
+        assert engine._daily_realized_pnl == Decimal("0")
+        assert engine._degraded_reason is None
+
 
 # =============================================================================
 # Position Query Tests

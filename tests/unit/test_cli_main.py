@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+import json
 
 import pytest
 from typer.testing import CliRunner
@@ -59,6 +60,85 @@ def test_trade_execute_blocks_live_without_confirm_live(monkeypatch) -> None:
     assert result.exit_code == 1
     assert "--confirm-live" in result.stdout
     client.authenticate.assert_not_called()
+
+
+def test_trade_execute_blocks_live_without_promotion_gate_even_with_confirm_live(
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    client = MagicMock()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=False),
+        client=client,
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "trade",
+            "buy",
+            "005930",
+            "10",
+            "--price",
+            "70000",
+            "--execute",
+            "--confirm-live",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "promotion gate" in result.stdout.lower()
+    client.authenticate.assert_not_called()
+
+
+def test_trade_execute_live_with_valid_promotion_gate(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    client = MagicMock()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=False),
+        client=client,
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    gate_path = tmp_path / ".sisyphus" / "evidence" / "mock-promotion-gate.json"
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_path.write_text(json.dumps({"mode": "mock", "pass": True}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    class FakeExecutor:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        def buy(self, **kwargs):
+            return SimpleNamespace(success=True, broker_order_id="OID123", message="")
+
+        def sell(self, **kwargs):
+            return SimpleNamespace(success=True, broker_order_id="OID124", message="")
+
+    monkeypatch.setattr(trading_commands, "OrderExecutor", FakeExecutor)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "trade",
+            "buy",
+            "005930",
+            "10",
+            "--price",
+            "70000",
+            "--execute",
+            "--confirm-live",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "ORDER OK BUY" in result.stdout
+    client.authenticate.assert_called_once()
 
 
 def test_trade_requires_price_option() -> None:
@@ -191,6 +271,70 @@ def test_run_returns_nonzero_when_engine_start_fails(monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "Run failed:" in result.stdout
+
+
+def test_run_blocks_live_without_promotion_gate(monkeypatch) -> None:
+    runner = CliRunner()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=False),
+        client=MagicMock(),
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    class ForbiddenEngine:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("engine_started_before_live_gate")
+
+    monkeypatch.setattr(trading_commands, "TradingEngine", ForbiddenEngine)
+
+    result = runner.invoke(build_app(), ["run", "--duration-sec", "1", "--skip-auth"])
+
+    assert result.exit_code == 1
+    assert "promotion gate" in result.stdout.lower()
+
+
+def test_run_live_with_valid_promotion_gate(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=False),
+        client=MagicMock(),
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    gate_path = tmp_path / ".sisyphus" / "evidence" / "mock-promotion-gate.json"
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_path.write_text(json.dumps({"mode": "mock", "pass": True}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    started = {"value": False}
+    stopped = {"value": False}
+
+    class FakeEngine:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        def start(self):
+            started["value"] = True
+
+        def stop(self):
+            stopped["value"] = True
+
+    monotonic_values = iter([0.0, 1.5])
+    monkeypatch.setattr(trading_commands, "TradingEngine", FakeEngine)
+    monkeypatch.setattr(trading_commands.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(trading_commands.time, "sleep", lambda _: None)
+    monkeypatch.setattr(trading_commands.signal, "getsignal", lambda *_: None)
+    monkeypatch.setattr(trading_commands.signal, "signal", lambda *_: None)
+
+    result = runner.invoke(build_app(), ["run", "--duration-sec", "1", "--skip-auth"])
+
+    assert result.exit_code == 0
+    assert started["value"] is True
+    assert stopped["value"] is True
 
 
 def test_runtime_context_mock_mode_uses_mock_account_when_present(monkeypatch) -> None:

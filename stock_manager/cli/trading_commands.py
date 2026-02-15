@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 import signal
 import time
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from types import FrameType
 from typing import Literal
 
@@ -20,6 +22,7 @@ from stock_manager.engine import TradingEngine
 from stock_manager.trading import OrderExecutor, TradingConfig
 
 DEFAULT_SMOKE_SYMBOL = "005930"
+PROMOTION_GATE_PATH = Path(".sisyphus/evidence/mock-promotion-gate.json")
 
 _ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8}$")
 _ACCOUNT_PRODUCT_CODE_PATTERN = re.compile(r"^\d{2}$")
@@ -61,6 +64,52 @@ def _looks_like_opsq2000_error(message: str) -> bool:
     return "OPSQ2000" in upper or "INVALID_CHECK_ACNO" in upper
 
 
+def _validate_promotion_gate(path: Path = PROMOTION_GATE_PATH) -> tuple[bool, str]:
+    if not path.exists():
+        return False, f"missing artifact at {path}"
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return False, f"artifact is unreadable: {e}"
+
+    if not isinstance(payload, dict):
+        return False, "artifact must be a JSON object"
+
+    mode = str(payload.get("mode", "")).strip().lower()
+    if mode and mode != "mock":
+        return False, f"artifact mode must be mock, got {mode}"
+
+    gate_passed = payload.get("pass") is True or payload.get("passed") is True
+    if not gate_passed:
+        return False, "artifact does not indicate pass=true"
+
+    checks = payload.get("checks")
+    if isinstance(checks, list):
+        failed_critical = [
+            check
+            for check in checks
+            if isinstance(check, dict)
+            and bool(check.get("critical"))
+            and check.get("passed") is False
+        ]
+        if failed_critical:
+            return False, "artifact contains failed critical checks"
+
+    return True, ""
+
+
+def _enforce_live_promotion_gate(*, use_mock: bool) -> None:
+    if use_mock:
+        return
+
+    passed, reason = _validate_promotion_gate()
+    if passed:
+        return
+
+    raise ValueError(f"Live trading is blocked by promotion gate: {reason}")
+
+
 def _build_runtime_context() -> RuntimeContext:
     config = KISConfig()
     account_number, account_product_code = _normalize_account_settings(
@@ -85,6 +134,7 @@ def run_command(*, duration_sec: int, skip_auth: bool) -> None:
     runtime: RuntimeContext | None = None
     try:
         runtime = _build_runtime_context()
+        _enforce_live_promotion_gate(use_mock=runtime.config.use_mock)
         if not skip_auth:
             runtime.client.authenticate()
 
@@ -174,6 +224,7 @@ def _execute_trade(
         raise typer.Exit(code=1)
 
     try:
+        _enforce_live_promotion_gate(use_mock=runtime.config.use_mock)
         runtime.client.authenticate()
         executor = OrderExecutor(
             client=runtime.client,

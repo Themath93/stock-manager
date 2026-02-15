@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TradingState:
     """Complete trading state for persistence."""
+
     positions: dict[str, Any] = field(default_factory=dict)  # symbol -> Position dict
     pending_orders: dict[str, Any] = field(default_factory=dict)  # order_id -> Order dict
+    risk_controls: dict[str, Any] = field(default_factory=dict)
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     version: int = 2
 
@@ -34,13 +36,13 @@ class TradingState:
         """Convert to JSON-serializable dict."""
         return {
             "positions": {
-                symbol: _serialize_position(symbol, pos)
-                for symbol, pos in self.positions.items()
+                symbol: _serialize_position(symbol, pos) for symbol, pos in self.positions.items()
             },
             "pending_orders": {
                 order_id: _serialize_order(order_id, order)
                 for order_id, order in self.pending_orders.items()
             },
+            "risk_controls": dict(self.risk_controls),
             "last_updated": self.last_updated.isoformat(),
             "version": 2,
         }
@@ -50,6 +52,7 @@ class TradingState:
         """Create from dict."""
         raw_positions = data.get("positions", {})
         raw_orders = data.get("pending_orders", {})
+        raw_risk_controls = data.get("risk_controls", {})
 
         positions: dict[str, Position] = {}
         for symbol, raw in raw_positions.items():
@@ -66,6 +69,7 @@ class TradingState:
         return cls(
             positions=positions,
             pending_orders=pending_orders,
+            risk_controls=raw_risk_controls if isinstance(raw_risk_controls, dict) else {},
             last_updated=_parse_dt(data.get("last_updated")) or datetime.now(timezone.utc),
             version=int(data.get("version", 1)),
         )
@@ -82,7 +86,7 @@ def save_state_atomic(state: TradingState, path: Path) -> None:
     tmp_path = path.parent / f".{path.name}.tmp"
 
     # Step 1: Write to temp file
-    with open(tmp_path, 'w') as f:
+    with open(tmp_path, "w") as f:
         json.dump(state.to_dict(), f, indent=2)
         # Step 2: Force to disk (CRITICAL)
         f.flush()
@@ -104,7 +108,7 @@ def load_state(path: Path) -> TradingState | None:
     path = Path(path)
     if not path.exists():
         return None
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         data = json.load(f)
     return TradingState.from_dict(data)
 
@@ -136,7 +140,9 @@ def _serialize_position(symbol: str, position: Any) -> dict[str, Any]:
             "symbol": position.symbol,
             "quantity": int(position.quantity),
             "entry_price": str(position.entry_price),
-            "current_price": str(position.current_price) if position.current_price is not None else None,
+            "current_price": str(position.current_price)
+            if position.current_price is not None
+            else None,
             "stop_loss": str(position.stop_loss) if position.stop_loss is not None else None,
             "take_profit": str(position.take_profit) if position.take_profit is not None else None,
             "unrealized_pnl": str(position.unrealized_pnl),
@@ -151,13 +157,21 @@ def _serialize_position(symbol: str, position: Any) -> dict[str, Any]:
             "symbol": str(position.get("symbol", symbol)),
             "quantity": int(position.get("quantity", 0)),
             "entry_price": str(position.get("entry_price", "0")),
-            "current_price": str(position.get("current_price")) if position.get("current_price") is not None else None,
-            "stop_loss": str(position.get("stop_loss")) if position.get("stop_loss") is not None else None,
-            "take_profit": str(position.get("take_profit")) if position.get("take_profit") is not None else None,
+            "current_price": str(position.get("current_price"))
+            if position.get("current_price") is not None
+            else None,
+            "stop_loss": str(position.get("stop_loss"))
+            if position.get("stop_loss") is not None
+            else None,
+            "take_profit": str(position.get("take_profit"))
+            if position.get("take_profit") is not None
+            else None,
             "unrealized_pnl": str(position.get("unrealized_pnl", "0")),
             "status": str(position.get("status", PositionStatus.OPEN.value)),
             "opened_at": str(position.get("opened_at", datetime.now(timezone.utc).isoformat())),
-            "closed_at": str(position.get("closed_at")) if position.get("closed_at") is not None else None,
+            "closed_at": str(position.get("closed_at"))
+            if position.get("closed_at") is not None
+            else None,
         }
 
     raise TypeError(f"Unsupported position type for {symbol}: {type(position)}")
