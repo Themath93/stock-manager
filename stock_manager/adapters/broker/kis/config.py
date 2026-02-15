@@ -191,6 +191,8 @@ class KISConfig(BaseSettings):
 
         self._fallback_warnings.clear()
 
+        credential_source: Literal["mock", "real", "real_fallback"]
+        account_source: Literal["mock", "real", "real_fallback", "none"]
         if self.use_mock:
             selected_key, selected_secret, credential_source = self._resolve_mock_credentials(
                 mock_key=mock_key,

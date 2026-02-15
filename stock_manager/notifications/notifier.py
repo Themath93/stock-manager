@@ -9,12 +9,21 @@ Uses slack_sdk.WebClient for message posting with:
 import logging
 import queue
 import threading
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from stock_manager.notifications.config import SlackConfig
 from stock_manager.notifications.formatters import format_notification
 from stock_manager.notifications.models import NotificationEvent, NotificationLevel
 
 logger = logging.getLogger(__name__)
+
+
+if TYPE_CHECKING:
+    from slack_sdk import WebClient
+
+
+class _SlackClient(Protocol):
+    def chat_postMessage(self, **kwargs: Any) -> Any: ...
 
 
 class SlackNotifier:
@@ -34,7 +43,7 @@ class SlackNotifier:
 
     def __init__(self, config: SlackConfig) -> None:
         self._config = config
-        self._client = None
+        self._client: _SlackClient | None = None
         self._lock = threading.Lock()
         self._min_level = config.get_min_level()
         self._async_enabled = False
@@ -45,7 +54,10 @@ class SlackNotifier:
         if config.enabled and config.bot_token:
             try:
                 from slack_sdk import WebClient
-                self._client = WebClient(token=config.bot_token.get_secret_value())
+
+                self._client = cast(
+                    _SlackClient, WebClient(token=config.bot_token.get_secret_value())
+                )
                 logger.info("SlackNotifier initialized with WebClient")
                 self._async_enabled = config.async_enabled
                 if self._async_enabled:
@@ -158,18 +170,23 @@ class SlackNotifier:
 
     def _send_sync(self, event: NotificationEvent) -> None:
         """Synchronous send path shared by direct and async worker modes."""
+        client = self._client
+        if client is None:
+            return
         try:
             formatted = format_notification(event)
             channel = self._resolve_channel(event)
 
             with self._lock:
-                self._client.chat_postMessage(
+                client.chat_postMessage(
                     channel=channel,
                     text=formatted["text"],
-                    attachments=[{
-                        "color": formatted["color"],
-                        "blocks": formatted["blocks"],
-                    }],
+                    attachments=[
+                        {
+                            "color": formatted["color"],
+                            "blocks": formatted["blocks"],
+                        }
+                    ],
                 )
             logger.debug(f"Slack notification sent: {event.event_type}")
         except Exception as e:

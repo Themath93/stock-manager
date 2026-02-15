@@ -21,6 +21,7 @@ from stock_manager.adapters.broker.kis.config import KISConfig
 from stock_manager.adapters.broker.kis.exceptions import KISAPIError
 from stock_manager.engine import TradingEngine
 from stock_manager.trading import OrderExecutor, TradingConfig
+from stock_manager.trading.strategies import resolve_strategy
 
 DEFAULT_SMOKE_SYMBOL = "005930"
 PROMOTION_GATE_PATH = Path(".sisyphus/evidence/mock-promotion-gate.json")
@@ -202,7 +203,40 @@ def _build_runtime_context() -> RuntimeContext:
     )
 
 
-def run_command(*, duration_sec: int, skip_auth: bool) -> None:
+def _parse_strategy_symbols(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+
+    return tuple(symbol.strip().upper() for symbol in value.split(",") if symbol.strip())
+
+
+def _resolve_strategy_config(
+    *,
+    strategy: str | None,
+    strategy_symbols: str | None,
+    client: KISRestClient,
+) -> tuple[Any | None, tuple[str, ...]]:
+    symbols = _parse_strategy_symbols(strategy_symbols)
+
+    if strategy is None:
+        if symbols:
+            raise ValueError("--strategy-symbols requires --strategy.")
+        return None, ()
+
+    return resolve_strategy(strategy_name=strategy, client=client), symbols
+
+
+def run_command(
+    *,
+    duration_sec: int,
+    skip_auth: bool,
+    strategy: str | None,
+    strategy_symbols: str | None,
+    strategy_order_quantity: int,
+    strategy_max_symbols_per_cycle: int,
+    strategy_max_buys_per_cycle: int,
+    strategy_run_interval_sec: float,
+) -> None:
     if duration_sec < 0:
         typer.echo("--duration-sec must be 0 or a positive integer.")
         raise typer.Exit(code=1)
@@ -210,13 +244,25 @@ def run_command(*, duration_sec: int, skip_auth: bool) -> None:
     runtime: RuntimeContext | None = None
     try:
         runtime = _build_runtime_context()
+        resolved_strategy, resolved_symbols = _resolve_strategy_config(
+            strategy=strategy,
+            strategy_symbols=strategy_symbols,
+            client=runtime.client,
+        )
         _enforce_live_promotion_gate(use_mock=runtime.config.use_mock)
         if not skip_auth:
             runtime.client.authenticate()
 
         engine = TradingEngine(
             client=runtime.client,
-            config=TradingConfig(),
+            config=TradingConfig(
+                strategy=resolved_strategy,
+                strategy_symbols=resolved_symbols,
+                strategy_order_quantity=strategy_order_quantity,
+                strategy_max_symbols_per_cycle=strategy_max_symbols_per_cycle,
+                strategy_max_buys_per_cycle=strategy_max_buys_per_cycle,
+                strategy_run_interval_sec=strategy_run_interval_sec,
+            ),
             account_number=runtime.account_number,
             account_product_code=runtime.account_product_code,
             is_paper_trading=runtime.config.use_mock,

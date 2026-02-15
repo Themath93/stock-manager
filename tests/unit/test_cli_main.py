@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from typing import Any
 import json
 
 import pytest
@@ -244,6 +245,280 @@ def test_run_starts_and_stops_engine_with_duration(monkeypatch) -> None:
     assert result.exit_code == 0
     assert started["value"] is True
     assert stopped["value"] is True
+
+
+def test_run_wires_strategy_options_into_trading_config(monkeypatch) -> None:
+    runner = CliRunner()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=True),
+        client=MagicMock(),
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    captured: dict[str, Any] = {}
+    strategy_name = "graham"
+    strategy_symbols = " 005930, 000660 "
+
+    def fake_resolve_strategy(*, client, strategy_name: str):
+        captured["strategy_name"] = strategy_name
+        return "fake-strategy"
+
+    captured["config"] = None
+
+    class FakeEngine:
+        def __init__(self, **kwargs) -> None:
+            captured["config"] = kwargs["config"]
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    class FakeStrategy:
+        pass
+
+    # Intentionally keep this import-compatible with positional client argument in _resolve_strategy_config.
+    def fake_resolve_strategy_function(strategy_name: str, *, client):
+        return fake_resolve_strategy(client=client, strategy_name=strategy_name)
+
+    monkeypatch.setattr(trading_commands, "resolve_strategy", fake_resolve_strategy_function)
+    monkeypatch.setattr(trading_commands, "TradingEngine", FakeEngine)
+    monkeypatch.setattr(trading_commands.time, "monotonic", iter([0.0, 1.5]).__next__)
+    monkeypatch.setattr(trading_commands.time, "sleep", lambda _: None)
+    monkeypatch.setattr(trading_commands.signal, "getsignal", lambda *_: None)
+    monkeypatch.setattr(trading_commands.signal, "signal", lambda *_: None)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "run",
+            "--duration-sec",
+            "1",
+            "--skip-auth",
+            "--strategy",
+            strategy_name,
+            "--strategy-symbols",
+            strategy_symbols,
+            "--strategy-order-quantity",
+            "2",
+            "--strategy-max-symbols-per-cycle",
+            "10",
+            "--strategy-max-buys-per-cycle",
+            "3",
+            "--strategy-run-interval-sec",
+            "5.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["strategy_name"] == strategy_name
+    config = captured["config"]
+    assert config is not None
+    assert config.strategy == "fake-strategy"
+    assert config.strategy_symbols == ("005930", "000660")
+    assert config.strategy_order_quantity == 2
+    assert config.strategy_max_symbols_per_cycle == 10
+    assert config.strategy_max_buys_per_cycle == 3
+    assert config.strategy_run_interval_sec == 5.0
+
+
+def test_parse_strategy_symbols_ignores_blank_entries_and_trims_case() -> None:
+    assert trading_commands._parse_strategy_symbols(None) == ()
+    assert trading_commands._parse_strategy_symbols("") == ()
+    assert trading_commands._parse_strategy_symbols("   ") == ()
+    assert trading_commands._parse_strategy_symbols(" 005930, 000660 ,  ") == (
+        "005930",
+        "000660",
+    )
+    assert trading_commands._parse_strategy_symbols("005930,,000660,,") == ("005930", "000660")
+    assert trading_commands._parse_strategy_symbols("krw:005930,usd:AAPL") == (
+        "KRW:005930",
+        "USD:AAPL",
+    )
+
+
+def test_run_wires_empty_strategy_symbols_after_parse(monkeypatch) -> None:
+    runner = CliRunner()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=True),
+        client=MagicMock(),
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    captured: dict[str, Any] = {}
+
+    def fake_resolve_strategy(*, strategy_name: str, client):
+        captured["strategy_name"] = strategy_name
+        return "fake-strategy"
+
+    captured["config"] = None
+
+    class FakeEngine:
+        def __init__(self, **kwargs) -> None:
+            captured["config"] = kwargs["config"]
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(trading_commands, "resolve_strategy", fake_resolve_strategy)
+    monkeypatch.setattr(trading_commands, "TradingEngine", FakeEngine)
+    monkeypatch.setattr(trading_commands.time, "monotonic", iter([0.0, 1.5]).__next__)
+    monkeypatch.setattr(trading_commands.time, "sleep", lambda _: None)
+    monkeypatch.setattr(trading_commands.signal, "getsignal", lambda *_: None)
+    monkeypatch.setattr(trading_commands.signal, "signal", lambda *_: None)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "run",
+            "--duration-sec",
+            "1",
+            "--skip-auth",
+            "--strategy",
+            "graham",
+            "--strategy-symbols",
+            "  , ",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["strategy_name"] == "graham"
+    config = captured["config"]
+    assert config is not None
+    assert config.strategy == "fake-strategy"
+    assert config.strategy_symbols == ()
+
+
+@pytest.mark.parametrize("quantity", [0, -1])
+def test_run_wires_non_positive_strategy_order_quantity(monkeypatch, quantity) -> None:
+    runner = CliRunner()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=True),
+        client=MagicMock(),
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    captured: dict[str, Any] = {}
+
+    def fake_resolve_strategy(*, strategy_name: str, client):
+        return "fake-strategy"
+
+    captured["config"] = None
+
+    class FakeEngine:
+        def __init__(self, **kwargs) -> None:
+            captured["config"] = kwargs["config"]
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(trading_commands, "resolve_strategy", fake_resolve_strategy)
+    monkeypatch.setattr(trading_commands, "TradingEngine", FakeEngine)
+    monkeypatch.setattr(trading_commands.time, "monotonic", iter([0.0, 1.5]).__next__)
+    monkeypatch.setattr(trading_commands.time, "sleep", lambda _: None)
+    monkeypatch.setattr(trading_commands.signal, "getsignal", lambda *_: None)
+    monkeypatch.setattr(trading_commands.signal, "signal", lambda *_: None)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "run",
+            "--duration-sec",
+            "1",
+            "--skip-auth",
+            "--strategy",
+            "graham",
+            "--strategy-order-quantity",
+            str(quantity),
+        ],
+    )
+
+    assert result.exit_code == 0
+    config = captured["config"]
+    assert config is not None
+    assert config.strategy_order_quantity == quantity
+
+
+def test_run_strategy_symbols_requires_strategy_name(monkeypatch) -> None:
+    runner = CliRunner()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=True),
+        client=MagicMock(),
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    class ForbiddenEngine:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError(
+                "engine should not start when strategy symbols are missing strategy"
+            )
+
+    monkeypatch.setattr(trading_commands, "TradingEngine", ForbiddenEngine)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "run",
+            "--duration-sec",
+            "1",
+            "--skip-auth",
+            "--strategy-symbols",
+            "005930",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--strategy-symbols requires --strategy." in result.stdout
+
+
+def test_run_rejects_unknown_strategy(monkeypatch) -> None:
+    runner = CliRunner()
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=True),
+        client=MagicMock(),
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+
+    class ForbiddenEngine:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("engine should not start when strategy is unknown")
+
+    monkeypatch.setattr(trading_commands, "TradingEngine", ForbiddenEngine)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "run",
+            "--duration-sec",
+            "1",
+            "--skip-auth",
+            "--strategy",
+            "does-not-exist",
+            "--strategy-symbols",
+            "005930",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "unknown strategy" in result.stdout.lower()
+    assert "available strategies" in result.stdout.lower()
 
 
 def test_run_returns_nonzero_when_engine_start_fails(monkeypatch) -> None:
