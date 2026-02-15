@@ -34,13 +34,11 @@ stock-manager smoke
   - `KIS_APP_KEY`
   - `KIS_APP_SECRET`
   - `KIS_ACCOUNT_NUMBER`
-- 모의 모드(`true`) 권장값:
+- 모의 모드(`true`) 필수값:
   - `KIS_MOCK_APP_KEY`
   - `KIS_MOCK_SECRET`
   - `KIS_MOCK_ACCOUNT_NUMBER`
-- 하위호환 fallback:
-  - 모의 모드에서 `KIS_MOCK_*`가 비어 있으면 `KIS_APP_*`/`KIS_ACCOUNT_NUMBER`를 fallback으로 사용합니다.
-  - doctor에서 fallback 사용 경고를 출력합니다.
+- 모의 모드에서는 실전 키/계좌 fallback을 허용하지 않습니다.
 
 ## Slack 모의 표기
 - 모든 Slack 알림은 모의모드(`is_paper_trading=true`)일 때 제목/텍스트 앞에 `[MOCK] ` prefix를 붙입니다.
@@ -225,21 +223,48 @@ stock-manager smoke
   - `stock-manager run`: 엔진 실행/유지 (`--duration-sec`, `--skip-auth`)
   - `stock-manager trade buy|sell SYMBOL QTY --price PRICE`: 주문 (기본 dry-run)
   - `stock-manager smoke`: 무주문 스모크 (인증 + 시세 + 잔고)
+  - `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`: 모의 QA 게이트 실행
 - **실전 안전장치**
   - 기본은 dry-run이며 주문 전송 없음
   - 실주문은 `--execute` 필요
   - 실전(`KIS_USE_MOCK=false`)에서 실주문은 `--confirm-live`까지 동시 필요
+  - 실전 주문/실전 run은 `.sisyphus/evidence/mock-promotion-gate.json`의 `pass=true`가 없으면 차단
+
+### Mock -> Live 승격 Runbook
+- 1) 개발 변경 검증
+  - `uv run pytest tests/unit -q`
+- 2) 모의 스모크 검증
+  - `KIS_USE_MOCK=true uv run stock-manager smoke`
+- 3) 모의 엔진 단기 구동
+  - `KIS_USE_MOCK=true uv run stock-manager run --duration-sec 1`
+- 4) 모의 QA 게이트 실행 및 artifact 생성
+  - `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`
+- 5) 실전 승격 전 최종 확인
+  - `python -m json.tool .sisyphus/evidence/mock-promotion-gate.json`
+  - `"pass": true`, `"mode": "mock"` 확인
+- 6) 실전 실행
+  - `KIS_USE_MOCK=false uv run stock-manager run --duration-sec 1`
+  - `KIS_USE_MOCK=false uv run stock-manager trade buy 005930 1 --price 70000 --execute --confirm-live`
 
 ### 자동매매 준비 체크
 - `stock-manager run`은 시작 시 `startup_reconciliation`을 반드시 수행합니다.
-- 복구 결과가 `FAILED`면 엔진은 즉시 중단되며, `recovery.failed` CRITICAL 알림 후 종료됩니다.
-- 복구 실패 상태에서 엔진이 계속 기동되는 동작은 허용하지 않습니다.
+- 복구 결과가 `FAILED`면 엔진은 no-trade degraded 모드로 기동되고 신규 주문은 차단됩니다.
+- 일손실 임계치(기본 1%) 도달 시 `risk.killswitch.triggered` CRITICAL 알림과 함께 신규 매수가 차단됩니다.
+- 영업일 롤오버 시 `risk.killswitch.cleared` 이벤트가 발생하고 일일 리스크 지표가 초기화됩니다.
 - 권장 사전 점검 순서:
   1. `uv run pytest -q`
   2. `uv run stock-manager doctor`
   3. `uv run stock-manager smoke`
   4. `KIS_USE_MOCK=true uv run stock-manager run --duration-sec 1`
-- 위 4단계가 모두 성공하면 “자동매매 준비 완료(코드/무주문 운영 기준)”로 판단합니다.
+  5. `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`
+- 위 5단계가 모두 성공하면 실전 승격 준비 완료로 판단합니다.
+
+### 롤백 절차
+- 실전 주문 차단: `KIS_USE_MOCK=true`로 즉시 전환
+- 엔진 중단: 실행 중 프로세스에 `Ctrl+C`
+- 상태 점검: `uv run stock-manager doctor`
+- 계좌/잔고 교차확인: `uv run stock-manager smoke`
+- 승격 재시도 전: `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`
 
 ### MCP 점검/장애 대응
 - KIS MCP 호출이 `deadline has elapsed`로 반복 실패하면, 우선 원격 MCP 인증 경로를 점검합니다.
