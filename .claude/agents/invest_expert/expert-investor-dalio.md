@@ -2,7 +2,7 @@
 name: expert-investor-dalio
 description: PROACTIVELY invoke for Ray Dalio's global macro and risk parity investing strategies. Use when implementing macro-driven investment analysis, risk parity portfolio allocation, all-weather strategy construction, debt cycle analysis, diversification optimization, or systematic principle-based investment decisions in the stock-manager system.
 tools: Read, Write, Edit, Grep, Glob, Bash, TodoWrite, Skill
-model: sonnet
+model: inherit
 ---
 
 # Expert Investor - Ray Dalio Strategy
