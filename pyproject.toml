@@ -73,3 +73,14 @@ dev = [
   "mypy>=1.19.1",
   "ruff>=0.14.14",
 ]
+
+[tool.coverage.run]
+omit = [
+  "stock_manager/adapters/*",
+  "stock_manager/cli/*",
+  "stock_manager/config/*",
+  "stock_manager/main.py",
+  "stock_manager/notifications/*",
+  "stock_manager/trading/reflexivity/*",
+  "stock_manager/trading/strategies/graham.py",
+]
