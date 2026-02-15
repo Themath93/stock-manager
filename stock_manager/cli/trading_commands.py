@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Literal
+from typing import Any, Literal
 
 import typer
 
@@ -18,11 +18,14 @@ from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
 )
 from stock_manager.adapters.broker.kis.client import KISRestClient
 from stock_manager.adapters.broker.kis.config import KISConfig
+from stock_manager.adapters.broker.kis.exceptions import KISAPIError
 from stock_manager.engine import TradingEngine
 from stock_manager.trading import OrderExecutor, TradingConfig
 
 DEFAULT_SMOKE_SYMBOL = "005930"
 PROMOTION_GATE_PATH = Path(".sisyphus/evidence/mock-promotion-gate.json")
+_MOCK_OPSQ2000_RETRY_ATTEMPTS = 5
+_MOCK_OPSQ2000_RETRY_BASE_DELAY_SEC = 0.6
 
 _ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8}$")
 _ACCOUNT_PRODUCT_CODE_PATTERN = re.compile(r"^\d{2}$")
@@ -108,6 +111,79 @@ def _enforce_live_promotion_gate(*, use_mock: bool) -> None:
         return
 
     raise ValueError(f"Live trading is blocked by promotion gate: {reason}")
+
+
+def _is_opsq2000_exception(exc: Exception) -> bool:
+    if _looks_like_opsq2000_error(str(exc)):
+        return True
+
+    if isinstance(exc, KISAPIError):
+        if exc.error_code and _looks_like_opsq2000_error(exc.error_code):
+            return True
+        if isinstance(exc.response_data, dict):
+            payload_text = (
+                f"{exc.response_data.get('msg_cd', '')} {exc.response_data.get('msg1', '')}"
+            )
+            return _looks_like_opsq2000_error(payload_text)
+
+    return False
+
+
+def _request_balance_with_mock_retry(
+    *, runtime: RuntimeContext, balance_request: dict[str, Any]
+) -> dict[str, Any]:
+    attempts = _MOCK_OPSQ2000_RETRY_ATTEMPTS if runtime.config.use_mock else 1
+    request_profiles: list[dict[str, Any]] = [balance_request]
+
+    if runtime.config.use_mock:
+        params = balance_request.get("params")
+        if isinstance(params, dict):
+            inqr_dvsn = str(params.get("INQR_DVSN", "")).strip()
+            if inqr_dvsn == "02":
+                alternate_request = {
+                    **balance_request,
+                    "params": {**params, "INQR_DVSN": "01"},
+                }
+                request_profiles.append(alternate_request)
+
+    last_exception: Exception | None = None
+
+    for profile in request_profiles:
+        for attempt in range(1, attempts + 1):
+            try:
+                response = runtime.client.make_request(
+                    method="GET",
+                    path=profile["url_path"],
+                    params=profile["params"],
+                    headers={"tr_id": profile["tr_id"]},
+                )
+            except Exception as exc:
+                last_exception = exc
+                if runtime.config.use_mock and _is_opsq2000_exception(exc) and attempt < attempts:
+                    time.sleep(_MOCK_OPSQ2000_RETRY_BASE_DELAY_SEC * attempt)
+                    continue
+                if runtime.config.use_mock and _is_opsq2000_exception(exc):
+                    break
+                raise
+
+            if str(response.get("rt_cd")) == "0":
+                return response
+
+            message = f"{response.get('msg_cd', '')} {response.get('msg1', '')}"
+            if runtime.config.use_mock and _looks_like_opsq2000_error(message):
+                last_exception = RuntimeError(
+                    f"balance check failed: {response.get('msg1', 'unknown error')}"
+                )
+                if attempt < attempts:
+                    time.sleep(_MOCK_OPSQ2000_RETRY_BASE_DELAY_SEC * attempt)
+                    continue
+                break
+
+            raise RuntimeError(f"balance check failed: {response.get('msg1', 'unknown error')}")
+
+    if last_exception is not None:
+        raise last_exception
+    raise RuntimeError("balance check failed: unknown error")
 
 
 def _build_runtime_context() -> RuntimeContext:
@@ -275,16 +351,10 @@ def smoke_command() -> None:
             is_paper_trading=runtime.config.use_mock,
             **get_default_inquire_balance_params(),
         )
-        balance_response = runtime.client.make_request(
-            method="GET",
-            path=balance_request["url_path"],
-            params=balance_request["params"],
-            headers={"tr_id": balance_request["tr_id"]},
+        balance_response = _request_balance_with_mock_retry(
+            runtime=runtime,
+            balance_request=balance_request,
         )
-        if str(balance_response.get("rt_cd")) != "0":
-            raise RuntimeError(
-                f"balance check failed: {balance_response.get('msg1', 'unknown error')}"
-            )
 
         current_price = (
             price_response.get("output", {}).get("stck_prpr")
