@@ -949,6 +949,8 @@ class TradingEngine:
                 if not isinstance(symbol, str) or not symbol.strip():
                     continue
                 symbol = symbol.strip().upper()
+                if not bool(getattr(score, "passes_all", True)):
+                    continue
 
                 if self._position_manager.get_position(symbol) is not None:
                     continue

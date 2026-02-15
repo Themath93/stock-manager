@@ -10,15 +10,21 @@ TR_ID Reference:
 - Paper Trading: Simulation environment TR_IDs (where supported)
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, TypedDict
 
 # API Endpoints
 _BASE_URL = "https://api.koreainvestment.com"
 _DOMESTIC_STOCK_BASE = "/uapi/domestic-stock/v1/quotations"
 _ETNETN_BASE = "/uapi/etfetn/v1/quotations"
 
+
+class _DomesticStockTrId(TypedDict):
+    real: str
+    paper: str | None
+
+
 # TR_ID Constants
-TR_IDS = {
+TR_IDS: dict[str, _DomesticStockTrId] = {
     # Both real and paper trading supported
     "v1_국내주식-008": {"real": "FHKST01010100", "paper": "FHKST01010100"},  # Current price
     "v1_국내주식-009": {"real": "FHKST01010300", "paper": "FHKST01010300"},  # Conclusion
@@ -29,20 +35,22 @@ TR_IDS = {
     "v1_국내주식-016": {"real": "FHKST03010100", "paper": "FHKST03010100"},  # Period price
     "v1_국내주식-022": {"real": "FHKST03010200", "paper": "FHKST03010200"},  # Intraday chart
     "v1_국내주식-023": {"real": "FHPST01060000", "paper": "FHPST01060000"},  # Time conclusion
-    "v1_국내주식-025": {"real": "FHPST02310000", "paper": "FHPST02310000"},  # Overtime time conclusion
+    "v1_국내주식-025": {
+        "real": "FHPST02310000",
+        "paper": "FHPST02310000",
+    },  # Overtime time conclusion
     "v1_국내주식-026": {"real": "FHPST02320000", "paper": "FHPST02320000"},  # Overtime daily price
-
     # Real trading only (paper trading not supported)
     "v1_국내주식-054": {"real": "FHPST01010000", "paper": None},  # Price 2
     "v1_국내주식-068": {"real": "FHPST02400000", "paper": None},  # ETF/ETN price
     "v1_국내주식-069": {"real": "FHPST02440000", "paper": None},  # NAV comparison (item)
     "v1_국내주식-070": {"real": "FHPST02440100", "paper": None},  # NAV comparison (minute)
     "v1_국내주식-071": {"real": "FHPST02440200", "paper": None},  # NAV comparison (daily)
-    "국내주식-073": {"real": "FHKST121600C0", "paper": None},     # ETF component
-    "국내주식-076": {"real": "FHPST02300000", "paper": None},     # Overtime price
-    "국내주식-077": {"real": "FHPST02300400", "paper": None},     # Overtime ask/bid
-    "국내주식-120": {"real": "FHKST117300C0", "paper": None},     # Expected closing
-    "국내주식-213": {"real": "FHKST03010230", "paper": None},     # Daily chart price
+    "국내주식-073": {"real": "FHKST121600C0", "paper": None},  # ETF component
+    "국내주식-076": {"real": "FHPST02300000", "paper": None},  # Overtime price
+    "국내주식-077": {"real": "FHPST02300400", "paper": None},  # Overtime ask/bid
+    "국내주식-120": {"real": "FHKST117300C0", "paper": None},  # Expected closing
+    "국내주식-213": {"real": "FHKST03010230", "paper": None},  # Daily chart price
 }
 
 
@@ -66,9 +74,10 @@ def _get_tr_id(api_id: str, is_paper_trading: bool = False) -> str:
     tr_id_info = TR_IDS[api_id]
 
     if is_paper_trading:
-        if tr_id_info["paper"] is None:
+        paper_tr_id = tr_id_info["paper"]
+        if paper_tr_id is None:
             raise ValueError(f"Paper trading is not supported for {api_id}")
-        return tr_id_info["paper"]
+        return paper_tr_id
 
     return tr_id_info["real"]
 

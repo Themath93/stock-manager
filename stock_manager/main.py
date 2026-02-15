@@ -61,9 +61,48 @@ def build_app():
             "--skip-auth",
             help="Skip preflight authentication before engine start.",
         ),
+        strategy: str | None = typer.Option(
+            None,
+            "--strategy",
+            help="Strategy name to run (for example: graham)",
+        ),
+        strategy_symbols: str | None = typer.Option(
+            None,
+            "--strategy-symbols",
+            help="Comma-separated stock symbols for strategy screening.",
+        ),
+        strategy_order_quantity: int = typer.Option(
+            1,
+            "--strategy-order-quantity",
+            help="Order quantity per strategy buy when condition is met.",
+        ),
+        strategy_max_symbols_per_cycle: int = typer.Option(
+            50,
+            "--strategy-max-symbols-per-cycle",
+            help="Max symbols screened each strategy cycle.",
+        ),
+        strategy_max_buys_per_cycle: int = typer.Option(
+            1,
+            "--strategy-max-buys-per-cycle",
+            help="Max number of buys submitted per strategy cycle.",
+        ),
+        strategy_run_interval_sec: float = typer.Option(
+            60.0,
+            "--strategy-run-interval-sec",
+            help="Seconds between strategy cycles after startup.",
+        ),
     ) -> None:
         """Start trading engine and keep it running until stop signal."""
-        run_command(duration_sec=duration_sec, skip_auth=skip_auth)
+        run_command(
+            duration_sec=duration_sec,
+            skip_auth=skip_auth,
+            strategy=strategy,
+            strategy_symbols=strategy_symbols,
+            strategy_order_quantity=strategy_order_quantity,
+            strategy_max_symbols_per_cycle=strategy_max_symbols_per_cycle,
+            strategy_max_buys_per_cycle=strategy_max_buys_per_cycle,
+            strategy_run_interval_sec=strategy_run_interval_sec,
+        )
 
     app.add_typer(create_trade_app(), name="trade")
 

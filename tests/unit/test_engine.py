@@ -297,6 +297,21 @@ class _RaisingStrategy(Strategy):
         raise RuntimeError("boom")
 
 
+class _ScreeningStrategy(Strategy):
+    def __init__(self, scores: dict[str, bool]) -> None:
+        self.scores = scores
+        self.screened_symbols: list[str] = []
+
+    def screen(self, symbols: list[str]) -> list[StrategyScore]:
+        self.screened_symbols = list(symbols)
+        return [
+            _DummyScore(symbol=symbol, passes=self.scores.get(symbol, True)) for symbol in symbols
+        ]
+
+    def evaluate(self, symbol: str) -> _DummyScore | None:
+        return _DummyScore(symbol=symbol, passes=self.scores.get(symbol, True))
+
+
 class TestStrategyOrchestration:
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -391,6 +406,243 @@ class TestStrategyOrchestration:
         engine.buy.assert_not_called()
         assert "strategy" in caplog.text.lower()
 
+        engine.stop()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_strategy_max_symbols_per_cycle_truncates_screened_list(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        symbols = ("005930", "000660", "035720", "051910", "035420")
+        strategy = _ScreeningStrategy({symbol: True for symbol in symbols})
+
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=symbols,
+            strategy_order_quantity=1,
+            strategy_max_symbols_per_cycle=3,
+            strategy_max_buys_per_cycle=10,
+            strategy_run_interval_sec=0.0,
+        )
+
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+        )
+        engine._get_current_price = MagicMock(return_value=70000)
+        engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
+
+        engine.start()
+
+        assert strategy.screened_symbols == ["005930", "000660", "035720"]
+        assert engine.buy.call_count == 3
+        assert [call.args[0] for call in engine.buy.call_args_list] == [
+            "005930",
+            "000660",
+            "035720",
+        ]
+        engine.stop()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_strategy_max_buys_per_cycle_limits_submissions(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        symbols = ("005930", "000660", "035720", "051910")
+        strategy = _ScreeningStrategy({symbol: True for symbol in symbols})
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=symbols,
+            strategy_order_quantity=1,
+            strategy_max_symbols_per_cycle=10,
+            strategy_max_buys_per_cycle=2,
+            strategy_run_interval_sec=0.0,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+        )
+        engine._get_current_price = MagicMock(return_value=70000)
+        engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
+
+        engine.start()
+
+        assert engine.buy.call_count == 2
+        assert [call.args[0] for call in engine.buy.call_args_list] == ["005930", "000660"]
+        engine.stop()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    @pytest.mark.parametrize("order_quantity", [0, -1])
+    def test_strategy_order_quantity_le_zero_skips_buys(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+        order_quantity,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        strategy = _ScreeningStrategy({"005930": True, "000660": True})
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=("005930", "000660"),
+            strategy_order_quantity=order_quantity,
+            strategy_max_symbols_per_cycle=10,
+            strategy_max_buys_per_cycle=10,
+            strategy_run_interval_sec=0.0,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+        )
+        engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
+
+        engine.start()
+
+        engine.buy.assert_not_called()
+        engine.stop()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_strategy_cycle_skips_existing_positions(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        strategy = _ScreeningStrategy({"005930": True, "000660": True, "035720": True})
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=("005930", "000660", "035720"),
+            strategy_order_quantity=1,
+            strategy_max_symbols_per_cycle=10,
+            strategy_max_buys_per_cycle=10,
+            strategy_run_interval_sec=0.0,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+        )
+        engine._get_current_price = MagicMock(return_value=70000)
+        engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
+        engine._position_manager.get_position = MagicMock(
+            side_effect=lambda symbol: True if symbol == "005930" else None
+        )
+
+        engine.start()
+
+        assert engine.buy.call_count == 2
+        assert [call.args[0] for call in engine.buy.call_args_list] == ["000660", "035720"]
+        engine.stop()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_strategy_skips_non_passing_scores(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        strategy = _ScreeningStrategy({"005930": True, "000660": False, "035720": True})
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=("005930", "000660", "035720"),
+            strategy_order_quantity=1,
+            strategy_max_symbols_per_cycle=10,
+            strategy_max_buys_per_cycle=10,
+            strategy_run_interval_sec=0.0,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+        )
+        engine._get_current_price = MagicMock(return_value=70000)
+        engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
+
+        engine.start()
+
+        assert engine.buy.call_count == 2
+        assert [call.args[0] for call in engine.buy.call_args_list] == ["005930", "035720"]
         engine.stop()
 
 

@@ -4,12 +4,18 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 import typer
 
 from stock_manager.adapters.broker.kis.config import KISConfig
-from stock_manager.config.env_writer import backup_file, ensure_env_file, scan_env_file, set_env_vars
+from stock_manager.config.env_writer import (
+    backup_file,
+    ensure_env_file,
+    scan_env_file,
+    set_env_vars,
+)
 from stock_manager.config.paths import require_project_root
 
 _ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8}$")
@@ -33,15 +39,21 @@ def _mask(value: str) -> str:
 def _verify_kis(config: KISConfig) -> bool:
     """Best-effort KIS token issuance verification. Never raises."""
     try:
+        app_key = config.app_key
+        app_secret = config.app_secret
+        if app_key is None or app_secret is None:
+            typer.echo("KIS verify: FAILED (missing app credentials)")
+            return False
+
         payload = {
             "grant_type": "client_credentials",
-            "appkey": config.app_key.get_secret_value(),
-            "appsecret": config.app_secret.get_secret_value(),
+            "appkey": app_key.get_secret_value(),
+            "appsecret": app_secret.get_secret_value(),
         }
         headers = {
             "Content-Type": "application/json; charset=utf-8",
-            "appkey": config.app_key.get_secret_value(),
-            "appsecret": config.app_secret.get_secret_value(),
+            "appkey": app_key.get_secret_value(),
+            "appsecret": app_secret.get_secret_value(),
             "custtype": "P",
         }
         with httpx.Client(base_url=config.api_base_url, timeout=15.0) as client:
@@ -192,8 +204,12 @@ def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
     if slack_enabled:
         slack_bot_token = typer.prompt("SLACK_BOT_TOKEN (xoxb-...)", hide_input=True).strip()
         while not slack_bot_token.startswith("xoxb-"):
-            slack_bot_token = typer.prompt("SLACK_BOT_TOKEN must start with xoxb-", hide_input=True).strip()
-        slack_default_channel = typer.prompt("SLACK_DEFAULT_CHANNEL (e.g. C123... or #general)").strip()
+            slack_bot_token = typer.prompt(
+                "SLACK_BOT_TOKEN must start with xoxb-", hide_input=True
+            ).strip()
+        slack_default_channel = typer.prompt(
+            "SLACK_DEFAULT_CHANNEL (e.g. C123... or #general)"
+        ).strip()
         slack_order_channel = typer.prompt(
             "SLACK_ORDER_CHANNEL (optional; default=SLACK_DEFAULT_CHANNEL)",
             default=slack_default_channel,
@@ -202,10 +218,15 @@ def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
             "SLACK_ALERT_CHANNEL (optional; default=SLACK_DEFAULT_CHANNEL)",
             default=slack_default_channel,
         ).strip()
-        slack_min_level = typer.prompt(
-            "SLACK_MIN_LEVEL (DEBUG/INFO/WARNING/ERROR)",
-            default="INFO",
-        ).strip().upper() or "INFO"
+        slack_min_level = (
+            typer.prompt(
+                "SLACK_MIN_LEVEL (DEBUG/INFO/WARNING/ERROR)",
+                default="INFO",
+            )
+            .strip()
+            .upper()
+            or "INFO"
+        )
 
     updates: dict[str, str] = {
         "KIS_APP_KEY": kis_app_key,
@@ -234,7 +255,8 @@ def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
         typer.echo("")
         typer.echo("Verification")
         try:
-            config = KISConfig(_env_file=str(env_path))
+            config_kwargs: dict[str, Any] = {"_env_file": str(env_path)}
+            config = KISConfig(**config_kwargs)  # type: ignore[call-arg]
             verified_kis = _verify_kis(config)
         except Exception as e:
             typer.echo(f"KIS verify: FAILED (config) {e}")

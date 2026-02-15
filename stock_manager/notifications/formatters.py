@@ -70,7 +70,9 @@ def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
     if event.event_type == "engine.started":
         fields = [
             _mrkdwn_field("*Status:*", "Running"),
-            _mrkdwn_field("*Mode:*", "Paper Trading" if details.get("is_paper_trading") else "Live Trading"),
+            _mrkdwn_field(
+                "*Mode:*", "Paper Trading" if details.get("is_paper_trading") else "Live Trading"
+            ),
             _mrkdwn_field("*Positions Loaded:*", str(details.get("position_count", 0))),
             _mrkdwn_field("*Recovery:*", str(details.get("recovery_result", "N/A"))),
         ]
@@ -82,7 +84,10 @@ def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
 
     text = f"{mode_prefix}{emoji} {event.title}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"},
+        },
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -122,7 +127,10 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
 
     text = f"{mode_prefix}{emoji} {event.title}: {side_emoji} {side} {quantity}x {symbol}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"},
+        },
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -143,7 +151,9 @@ def format_position_event(event: NotificationEvent) -> dict[str, Any]:
     fields = [
         _mrkdwn_field("*Symbol:*", symbol),
         _mrkdwn_field("*Entry Price:*", _format_currency(entry_price) if entry_price else "N/A"),
-        _mrkdwn_field("*Trigger Price:*", _format_currency(trigger_price) if trigger_price else "N/A"),
+        _mrkdwn_field(
+            "*Trigger Price:*", _format_currency(trigger_price) if trigger_price else "N/A"
+        ),
     ]
 
     # Add P&L info if available
@@ -160,7 +170,10 @@ def format_position_event(event: NotificationEvent) -> dict[str, Any]:
 
     text = f"{mode_prefix}{emoji} {event.title}: {symbol}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"},
+        },
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -184,7 +197,10 @@ def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
     discrepancy_count = details.get("discrepancy_count", 0)
     text = f"{mode_prefix}{emoji} {event.title}: {discrepancy_count} discrepancies found"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"},
+        },
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -203,7 +219,9 @@ def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
             _mrkdwn_field("*Result:*", "RECONCILED"),
             _mrkdwn_field("*Orphan Positions:*", str(len(details.get("orphan_positions", [])))),
             _mrkdwn_field("*Missing Positions:*", str(len(details.get("missing_positions", [])))),
-            _mrkdwn_field("*Quantity Mismatches:*", str(len(details.get("quantity_mismatches", {})))),
+            _mrkdwn_field(
+                "*Quantity Mismatches:*", str(len(details.get("quantity_mismatches", {})))
+            ),
         ]
     else:  # recovery.failed
         errors = details.get("errors", [])
@@ -217,7 +235,10 @@ def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
 
     text = f"{mode_prefix}{emoji} {event.title}"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"},
+        },
         {"type": "section", "fields": fields},
         _context_block(event),
     ]
@@ -233,8 +254,11 @@ def _format_generic_event(event: NotificationEvent) -> dict[str, Any]:
     fields = [_mrkdwn_field(f"*{k}:*", str(v)) for k, v in list(event.details.items())[:8]]
 
     text = f"{mode_prefix}{emoji} {event.title} ({event.event_type})"
-    blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"}},
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"},
+        },
     ]
     if fields:
         blocks.append({"type": "section", "fields": fields})
@@ -249,10 +273,10 @@ def _format_generic_event(event: NotificationEvent) -> dict[str, Any]:
 def _level_to_color(level: NotificationLevel) -> str:
     """Map notification level to Slack attachment color (hex)."""
     colors = {
-        NotificationLevel.INFO: "#36a64f",      # green
-        NotificationLevel.WARNING: "#ECB22E",    # yellow
-        NotificationLevel.ERROR: "#E01E5A",      # red
-        NotificationLevel.CRITICAL: "#E01E5A",   # red
+        NotificationLevel.INFO: "#36a64f",  # green
+        NotificationLevel.WARNING: "#ECB22E",  # yellow
+        NotificationLevel.ERROR: "#E01E5A",  # red
+        NotificationLevel.CRITICAL: "#E01E5A",  # red
     }
     return colors.get(level, "#36a64f")
 
@@ -331,7 +355,5 @@ def _context_block(event: NotificationEvent) -> dict[str, Any]:
     ts = event.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
     return {
         "type": "context",
-        "elements": [
-            {"type": "mrkdwn", "text": f"{ts} | `{event.event_type}`"}
-        ],
+        "elements": [{"type": "mrkdwn", "text": f"{ts} | `{event.event_type}`"}],
     }
