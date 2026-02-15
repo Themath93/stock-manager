@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from stock_manager.main import build_app
 import stock_manager.cli.trading_commands as trading_commands
+from stock_manager.adapters.broker.kis.exceptions import KISAPIError
 
 
 def test_help_includes_run_trade_smoke_commands() -> None:
@@ -559,3 +560,90 @@ def test_smoke_prints_opsq2000_hint_when_balance_returns_invalid_account(monkeyp
     assert result.exit_code == 1
     assert "OPSQ2000" in result.stdout
     assert "KIS_MOCK_ACCOUNT_NUMBER" in result.stdout
+
+
+def test_smoke_retries_opsq2000_and_recovers(monkeypatch) -> None:
+    runner = CliRunner()
+    client = MagicMock()
+    opsq_error = KISAPIError(
+        "ERROR : INPUT INVALID_CHECK_ACNO",
+        error_code="OPSQ2000",
+        response_data={"msg_cd": "OPSQ2000", "msg1": "ERROR : INPUT INVALID_CHECK_ACNO"},
+    )
+    client.make_request.side_effect = [opsq_error, {"rt_cd": "0", "output1": []}]
+
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=True),
+        client=client,
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        trading_commands,
+        "inquire_current_price",
+        lambda **_: {"rt_cd": "0", "output": {"stck_prpr": "70000"}},
+    )
+    monkeypatch.setattr(
+        trading_commands,
+        "inquire_balance",
+        lambda **_: {
+            "tr_id": "VTTC8434R",
+            "url_path": "/uapi/domestic-stock/v1/trading/inquire-balance",
+            "params": {"CANO": "12345678", "ACNT_PRDT_CD": "01"},
+        },
+    )
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(trading_commands.time, "sleep", lambda sec: sleep_calls.append(float(sec)))
+
+    result = runner.invoke(build_app(), ["smoke"])
+
+    assert result.exit_code == 0
+    assert "Smoke OK" in result.stdout
+    assert client.make_request.call_count == 2
+    assert len(sleep_calls) == 1
+
+
+def test_smoke_fails_after_opsq2000_retry_exhaustion(monkeypatch) -> None:
+    runner = CliRunner()
+    client = MagicMock()
+    opsq_error = KISAPIError(
+        "ERROR : INPUT INVALID_CHECK_ACNO",
+        error_code="OPSQ2000",
+        response_data={"msg_cd": "OPSQ2000", "msg1": "ERROR : INPUT INVALID_CHECK_ACNO"},
+    )
+
+    def always_opsq(*args, **kwargs):
+        raise opsq_error
+
+    client.make_request.side_effect = always_opsq
+
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(use_mock=True),
+        client=client,
+        account_number="12345678",
+        account_product_code="01",
+    )
+    monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        trading_commands,
+        "inquire_current_price",
+        lambda **_: {"rt_cd": "0", "output": {"stck_prpr": "70000"}},
+    )
+    monkeypatch.setattr(
+        trading_commands,
+        "inquire_balance",
+        lambda **_: {
+            "tr_id": "VTTC8434R",
+            "url_path": "/uapi/domestic-stock/v1/trading/inquire-balance",
+            "params": {"CANO": "12345678", "ACNT_PRDT_CD": "01"},
+        },
+    )
+    monkeypatch.setattr(trading_commands.time, "sleep", lambda _sec: None)
+
+    result = runner.invoke(build_app(), ["smoke"])
+
+    assert result.exit_code == 1
+    assert "OPSQ2000" in result.stdout
+    assert "KIS_MOCK_ACCOUNT_NUMBER" in result.stdout
+    assert client.make_request.call_count == trading_commands._MOCK_OPSQ2000_RETRY_ATTEMPTS
