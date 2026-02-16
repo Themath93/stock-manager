@@ -1,471 +1,172 @@
-# Stock Manager (Boilerplate)
+# Stock Manager
 
-Python 3.13 기반 자동매매 봇 보일러플레이트.
+Stock Manager는 국내 주식 운용을 위한 Python 3.13 기반 트레이딩 봇입니다.
+안전한 **paper-first** 흐름을 기본으로 설계되어, 명시적인 승격(승인) 검사를 통과한 경우에만 실거래를 허용합니다.
 
-## Quickstart
+## 이 저장소에서 제공하는 기능
+- 거래 세션을 설정하고 검증하며 실행/모니터링할 수 있는 CLI 명령어 제공.
+- 주문 처리, 리스크 검사, 영속성(상태 저장/복구)을 담당하는 모듈형 어댑터와 도메인 서비스.
+- 주문 실행, 재조정, 리스크 이벤트에 대한 Slack 알림 연동.
+- 개발/CI에서 사용할 수 있는 오프라인 안전 검증 경로(`mock`) 제공.
+
+## 저장소 구조 (요약)
+- `stock_manager/`: 핵심 애플리케이션 코드.
+- `stock_manager/cli/`: setup/doctor/smoke/run/trade 명령 핸들러.
+- `stock_manager/adapters/broker/kis/`: 한국 투자사(KIS) 연동 전송 레이어와 설정.
+- `stock_manager/trading/`: 주문, 전략, 리스크, 생명주기(런타임) 서비스.
+- `stock_manager/notifications/`: Slack 이벤트 포맷터 및 알림 전송기.
+- `stock_manager/qa/`: mock 승격 게이트(Mock Promotion Gate) 검사기.
+- `scripts/`: 보조 스크립트.
+- `tests/unit/`, `tests/integration/`: 테스트 스위트.
+
+## 사전 요구 사항
+- Python 3.13+
+- 의존성/테스크 실행용 `uv` (또는 동등한 환경 도구)
+- 선택 사항: 모드에 따라 PostgreSQL, Slack 앱 토큰, 브로커 키.
+
+## 설치 및 초기화
 ```bash
-# 가장 쉬운 방법 (권장)
-./setup.sh
-
-# 또는: 직접 설치
+# 저장소 클론 후 의존성 설치
+git clone <repo-url>
+cd stock-manager
 uv sync --extra dev --extra cli
 
-# .env 설정 (인터랙티브)
+# 대화형 설정 마법사 실행 (.env 생성)
 stock-manager setup
-stock-manager doctor
-
-# 엔진 실행 (Ctrl+C 종료)
-stock-manager run --duration-sec 0
-
-# 주문: 기본은 dry-run (실주문 없음)
-stock-manager trade buy 005930 1 --price 70000
-
-# 실주문은 --execute 필요
-# 실전(KIS_USE_MOCK=false)에서는 --confirm-live까지 같이 필요
-stock-manager trade buy 005930 1 --price 70000 --execute --confirm-live
-
-# 무주문 스모크: 인증 + 현재가 + 잔고
-stock-manager smoke
 ```
 
-## KIS 모드 선택 규칙
-- `KIS_USE_MOCK=true`면 모의투자, `false`면 실전투자입니다.
-- 실전 모드(`false`) 필수값:
-  - `KIS_APP_KEY`
-  - `KIS_APP_SECRET`
-  - `KIS_ACCOUNT_NUMBER`
-- 모의 모드(`true`) 필수값:
-  - `KIS_MOCK_APP_KEY`
-  - `KIS_MOCK_SECRET`
-  - `KIS_MOCK_ACCOUNT_NUMBER`
-- 모의 모드에서는 실전 키/계좌 fallback을 허용하지 않습니다.
+## 환경 변수
 
-## Slack 모의 표기
-- 모든 Slack 알림은 모의모드(`is_paper_trading=true`)일 때 제목/텍스트 앞에 `[MOCK] ` prefix를 붙입니다.
-- 실전모드에서는 prefix가 없습니다.
+최소한의 필수 변수는 `.env.example`에 정리되어 있습니다.
 
-## KIS API 기준 (MCP 우선, 장애 시 fallback)
-- 우선 KIS MCP로 API 정합성을 확인합니다.
-- MCP 타임아웃/장애 시 로컬 매핑 파일을 소스 오브 트루스로 사용합니다:
-  - `docs/kis-openapi/_data/tr_id_mapping.json`
-- 현재 봇의 핵심 API:
-  - 인증: `/oauth2/tokenP`
-  - 현재가: `/uapi/domestic-stock/v1/quotations/inquire-price`
-  - 잔고: `/uapi/domestic-stock/v1/trading/inquire-balance`
-  - 주문: `/uapi/domestic-stock/v1/trading/order-cash`
+### 모드 전환
+- `KIS_USE_MOCK=true` → 모의(페이퍼) 거래 모드.
+- `KIS_USE_MOCK=false` → 실거래 모드.
 
-## 구조
-- `stock_manager/`: 애플리케이션 코드
-  - `adapters/`: 외부 의존성 어댑터 (KIS 등)
-  - `notifications/`: Slack 알림 시스템
-  - `trading/`: 트레이딩 도메인/로직
-  - `persistence/`: 상태 저장/복구
-  - `engine.py`: 트레이딩 엔진 파사드
-  - `main.py`: CLI 엔트리포인트 (`stock-manager ...`)
-- `scripts/`: 유틸리티 스크립트
-  - `generate_kis_apis.py`: KIS OpenAPI 문서 기반 코드 생성 도구
+### 모의 모드 자격 증명 규칙
+`KIS_USE_MOCK=true`일 때는 모의 전용 키만 허용됩니다:
+- `KIS_MOCK_APP_KEY`
+- `KIS_MOCK_SECRET`
+- `KIS_MOCK_ACCOUNT_NUMBER`
 
-## 다음 단계 (MVP Focus)
-- 테스트 커버리지 개선 (현재 66%, 목표 80%)
-- KISBrokerAdapter 완성 및 통합 테스트
-- 전략 로직 구현 (구체화 필요)
-- 리팩토링 및 코드 정리
+실거래 키를 모의 모드에서 대체값으로 허용하지 않습니다.
 
-> **MVP 정책:** 해외주식 모듈은 서비스 확장 시 구현 예정 (Post-MVP)
+### 공통 설정
+- `KIS_ACCOUNT_PRODUCT_CODE` (2자리, 기본값 `01`)
+- Slack 알림을 사용할 경우 토큰/채널 값(선택).
 
-## 구현된 기능
+## 주요 명령
 
-### SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (90% 완료)
-- **BrokerPort 인터페이스** ✅ 완료
-  - 추상 인터페이스 정의 (port/broker_port.py)
-- **KIS 설정 모듈** ✅ 완료
-  - LIVE/PAPER 모드 지원
-  - 환경 변수 로딩 (KIS_APP_KEY, KIS_APP_SECRET, MODE)
-  - REST_URL, WS_URL 자동 전환
-- **REST 클라이언트** ✅ 완료 (Phase 2)
-  - access_token 발급 (/oauth2/tokenP)
-  - 주문 전송, 조회 기본 기능
-  - approval_key 발급 (/oauth2/Approval) ✅ 완료
-  - 토큰 자동 갱신 (스레드 안전) ✅ 완료
-  - 해시키 생성 (/uapi/hashkey) ✅ 완료
-  - threading.Lock으로 동시성 제어 ✅ 완료
-- **WebSocket 클라이언트** ✅ 완료
-  - 연결/종료 메서드
-  - 호가 구독 (subscribe_quotes)
-  - 체결 이벤트 구독 (subscribe_executions)
-  - 지수 백오프 재연결 로직
-- **MockBrokerAdapter** ✅ 완료
-  - 테스트용 더블 구현
-- **품질 지표** ✅ 달성
-  - 테스트 커버리지: 85% (목표 80%)
-  - 테스트 통과율: 100% (26/26)
-  - TRUST 5 점수: 94.3%
-  - 스레드 안전성: 완료
-- **Phase 3 진행 중** ⏳
-  - **Milestone 1 완료** (2026-01-27)
-    - AppConfig.account_id 필드 구현
-    - KISBrokerAdapter 생성자에 account_id 파라미터 추가
-    - cancel_order 메서드에서 self.account_id 사용 완료
-    - 단위 테스트 통과 (12/12 tests passing)
-    - TODO 코멘트 제거
-  - **Milestone 2 예정**: 통합 테스트 작성
-  - **Milestone 3 예정**: 문서화 및 코드 정리
+### `stock-manager setup`
+`.env` 값 입력을 도와주는 대화형 설정 마법사.
 
-### SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
-- 주문 생성 (idempotency key 중복 검사 포함)
-- 주문 전송 (NEW → SENT 상태 전이)
-- 주문 취소 (SENT/PARTIAL → CANCELED)
-- 체결 처리 (누적 수량 계산, PARTIAL → FILLED 상태 전이)
-- 포지션 계산 및 업데이트
-- 브로커/DB 상태 동기화
+### `stock-manager doctor`
+환경 설정과 파일 포맷을 검증합니다.
 
-### SPEC-BACKEND-WORKER-004: 워커 아키텍처 (완료)
-- **분산 락 서비스 (LockService)**
-  - PostgreSQL row-level locks 기반 원자적 락 획득
-  - TTL(Time-To-Live) 지원 및 갱신 (renew)
-  - 하트비트 메커니즘으로 생존 상태 추적
-  - 만료된 락 자동 정리 (cleanup_expired)
-- **워커 생명주기 관리 (WorkerLifecycleService)**
-  - 워커 등록 및 상태 추적 (IDLE, SCANNING, HOLDING, EXITING)
-  - 정상 종료 및 크래시 복구 지원
-  - 정지된 워커 감지 및 정리 (cleanup_stale_workers)
-- **마켓 데이터 폴러 (MarketDataPoller)**
-  - 후보 종목 발견 (discover_candidates)
-  - 거래량/가격 범위 기반 필터링
-  - 커스텀 필터 지원
-- **전략 실행기 (StrategyExecutor)**
-  - 매수 시그널 평가 (should_buy)
-  - 매도 시그널 평가 (should_sell)
-  - 신뢰도(confidence) 임계값 지원
-  - 플러그인 가능한 전략 포트 (StrategyPort)
-- **PnL 계산기 (PnLCalculator)**
-  - 미실현 PnL 계산 (calculate_unrealized_pnl)
-  - 실현 PnL 계산 (calculate_realized_pnl)
-  - 승률 계산 (calculate_win_rate)
-  - 수익률 계산 (calculate_profit_factor)
-  - 최대 낙폭 계산 (calculate_max_drawdown)
-- **일일 요약 서비스 (DailySummaryService)**
-  - 일일 성과 요약 생성 (generate_summary)
-  - 날짜별 조회 (get_summary)
-  - 날짜 범위 목록 (list_summaries)
-- **워커 메인 오케스트레이터 (WorkerMain)**
-  - 상태 머신 (IDLE → SCANNING → HOLDING → SCANNING → EXITING)
-  - 비동기 이벤트 루프
-  - 백그라운드 하트비트 태스크
-  - 모든 서비스 통합 (Lock, Lifecycle, Poller, Strategy, Order, Summary)
+### `stock-manager smoke`
+실거래가 발생하지 않는 상태 점검 명령입니다.
+- 인증
+- 단일 가격 조회
+- 잔고 조회
 
-### SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (완료)
-- **장 시작/종료 서비스 (MarketLifecycleService)**
-  - 장 시작 프로세스 (설정 로드, 인증, 계좌 확인, 전략 파라미터 로드)
-  - 장 종료 프로세스 (미체결 주문 취소 확인, 포지션 스냅샷 생성, 일일 정산 계산)
-  - 시스템 상태 관리 (OFFLINE → INITIALIZING → READY → TRADING → CLOSING → CLOSED)
-  - 거래 중지 모드 (STOPPED 상태 지원)
-- **상태 복구 서비스 (StateRecoveryService)**
-  - DB/브로커 상태 비교 및 동기화
-  - 미체결 주문 복구 (DB 조회 → 브로커 조회 → 상태 동기화)
-  - 포지션 재계산 (체결 기반 포지션 일치 확인)
-  - 복구 실패 시 거래 중지 처리
-- **정산 서비스 (SettlementService)**
-  - 포지션 스냅샷 생성 (모든 포지션 현재 상태 저장)
-  - 일일 정산 계산 (실현 손익, 평가 손익, 총 손익)
-  - DailySettlementEvent 발행
-- **데이터베이스 스키마**
-  - market_states 테이블 (시스템 상태 추적)
-  - daily_settlements 테이블 (일일 정산 기록)
-  - recovery_logs 테이블 (상태 복구 이력)
+빠른 준비 상태 점검용 명령입니다.
 
-### SPEC-OBSERVABILITY-001: 로그 레벨 기반 Slack 알림 시스템 (완료)
-- **Python logging.Handler 통합** ✅ 완료
-  - SlackHandler: Python 표준 logging 모듈과 Slack 통합
-  - AlertMapper: 로그 레벨 → 알림 설정 매핑 (CRITICAL, ERROR, WARNING, INFO, DEBUG)
-  - SlackFormatter: 구조화된 Slack 메시지 포맷팅 및 민감 정보 마스킹
-  - SlackHandlerConfig: Pydantic 기반 설정 관리
-- **알림 라우팅 정책** ✅ 완료
-  - CRITICAL: 즉시 알림, 스택 트레이스 포함, (!) 이모지
-  - ERROR: 즉시 알림, (x) 이모지
-  - WARNING: 배치 처리 (5분 집계), (warning) 이모지
-  - INFO/DEBUG: Slack 알림 없음
-- **고급 기능** ✅ 완료
-  - 비동기 전송 (백그라운드 스레드)
-  - 중복 알림 필터 (SHA256 해시 기반, 1분 윈도우)
-  - 민감 정보 마스킹 (token, secret, password, api_key 패턴)
-  - 배치 큐 자동 플러시 (종료 시)
-- **품질 지표** ✅ 완료
-  - 테스트 커버리지: 95% (목표 85% 초과)
-  - 테스트 통과율: 100% (57/57 tests)
-  - TRUST 5 준수 완료
-- **사용 예제**
-  ```python
-  import logging
-  from stock_manager.adapters.observability import SlackHandler, SlackHandlerConfig
+### `stock-manager trade`
+`stock-manager trade buy|sell SYMBOL QTY --price PRICE`
 
-  logger = logging.getLogger(__name__)
-  config = SlackHandlerConfig(
-      bot_token=os.getenv("SLACK_BOT_TOKEN"),
-      critical_channel=os.getenv("SLACK_CRITICAL_CHANNEL"),
-      error_channel=os.getenv("SLACK_ERROR_CHANNEL"),
-      warning_channel=os.getenv("SLACK_WARNING_CHANNEL"),
-  )
-  handler = SlackHandler(config)
-  logger.addHandler(handler)
+- 기본 동작은 **dry-run**(실행 없음)입니다.
+- 모의 모드에서 주문을 제출하려면 `--execute`를 사용합니다.
+- 실거래 실행은 `--execute --confirm-live`를 사용하고, 승격 게이트 통과가 필요합니다.
 
-  logger.critical("Critical system failure")  # 즉시 Slack으로 전송
-  logger.error("Database connection failed")  # 즉시 Slack으로 전송
-  logger.warning("High memory usage")         # 5분 배치 처리
-  logger.info("Application started")          # Slack 전송 없음
-  ```
+### `stock-manager run`
+거래 엔진 루프를 시작합니다.
 
-### CLI 운영 커맨드
-- **엔트리 포인트**: `stock-manager`
-- **핵심 명령**
-  - `stock-manager setup`: `.env` 설정 위저드
-  - `stock-manager doctor`: `.env` 진단 (계좌 형식 포함)
-  - `stock-manager run`: 엔진 실행/유지 (`--duration-sec`, `--skip-auth`)
-    - 전략 자동탐색 옵션: `--strategy-auto-discover`, `--strategy-discovery-limit`, `--strategy-discovery-fallback-symbols`
-    - WebSocket 브리지 옵션: `--websocket-monitoring-enabled`, `--websocket-execution-notice-enabled`
-  - `stock-manager trade buy|sell SYMBOL QTY --price PRICE`: 주문 (기본 dry-run)
-  - `stock-manager smoke`: 무주문 스모크 (인증 + 시세 + 잔고)
-  - `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`: 모의 QA 게이트 실행
-- **실전 안전장치**
-  - 기본은 dry-run이며 주문 전송 없음
-  - 실주문은 `--execute` 필요
-  - 실전(`KIS_USE_MOCK=false`)에서 실주문은 `--confirm-live`까지 동시 필요
-  - 실전 주문/실전 run은 `.sisyphus/evidence/mock-promotion-gate.json`의 `pass=true`가 없으면 차단
+권장 실행 순서:
+1. 로컬 점검을 위해 `stock-manager run --skip-auth` 실행.
+2. 모의 모드에서 `stock-manager smoke` 실행.
+3. 모의 모드와 전략 옵션으로 `stock-manager run --duration-sec N` 실행.
+4. mock promotion gate 산출물을 생성/검토.
+5. `KIS_USE_MOCK=false --confirm-live --execute`로 실거래 실행(게이트 통과 상태).
 
-### Mock -> Live 승격 Runbook
-- 1) 개발 변경 검증
-  - `uv run pytest tests/unit -q`
-- 2) 모의 스모크 검증
-  - `KIS_USE_MOCK=true uv run stock-manager smoke`
-- 3) 모의 엔진 단기 구동
-  - `KIS_USE_MOCK=true uv run stock-manager run --duration-sec 1`
-- 4) 모의 QA 게이트 실행 및 artifact 생성
-  - `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`
-- 5) 실전 승격 전 최종 확인
-  - `python -m json.tool .sisyphus/evidence/mock-promotion-gate.json`
-  - `"pass": true`, `"mode": "mock"` 확인
-- 6) 실전 실행
-  - `KIS_USE_MOCK=false uv run stock-manager run --duration-sec 1`
-  - `KIS_USE_MOCK=false uv run stock-manager trade buy 005930 1 --price 70000 --execute --confirm-live`
+### 전략/런타임 옵션
+`run`은 전략과 websocket 알림/탐색 동작을 조절할 수 있습니다:
+- `--strategy`, `--strategy-symbols`
+- `--strategy-order-quantity`, `--strategy-max-symbols-per-cycle`, `--strategy-max-buys-per-cycle`
+- `--strategy-run-interval-sec`
+- `--strategy-auto-discover`, `--strategy-discovery-limit`, `--strategy-discovery-fallback-symbols`
+- `--websocket-monitoring-enabled`, `--websocket-execution-notice-enabled`
 
-### 자동매매 준비 체크
-- `stock-manager run`은 시작 시 `startup_reconciliation`을 반드시 수행합니다.
-- 복구 결과가 `FAILED`면 엔진은 no-trade degraded 모드로 기동되고 신규 주문은 차단됩니다.
-- 일손실 임계치(기본 1%) 도달 시 `risk.killswitch.triggered` CRITICAL 알림과 함께 신규 매수가 차단됩니다.
-- 영업일 롤오버 시 `risk.killswitch.cleared` 이벤트가 발생하고 일일 리스크 지표가 초기화됩니다.
-- 종목 리스트 없이 전략을 돌릴 때는 `--strategy-auto-discover`를 활성화하면 런타임에서 자동으로 종목을 수집합니다.
-- 실시간 모니터링/체결 통지 연동이 필요하면 `--websocket-monitoring-enabled --websocket-execution-notice-enabled`를 함께 사용합니다.
-- WebSocket 연결이 실패하면 가격 모니터링은 폴링 경로로 자동 fallback 됩니다.
-- 권장 사전 점검 순서:
-  1. `uv run pytest -q`
-  2. `uv run stock-manager doctor`
-  3. `uv run stock-manager smoke`
-  4. `KIS_USE_MOCK=true uv run stock-manager run --duration-sec 1`
-  5. `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`
-- 위 5단계가 모두 성공하면 실전 승격 준비 완료로 판단합니다.
+## 거래 동작 개요
+1. 환경 변수/검증 결과로 런타임 컨텍스트를 구성합니다.
+2. 브로커 클라이언트 인증을 수행합니다.
+3. 전략/심볼/제한값으로 전략 컨텍스트를 구성합니다.
+4. 엔진 루프를 시작하고 재조정(reconciliation) 생명주기를 실행합니다.
+5. 진입 전 리스크 검사가 선행됩니다.
+6. 핵심 체크포인트에서 Slack 이벤트를 발행합니다.
+7. 주문 실행은 `OrderExecutor`를 통해 모의/실거래 동작을 분리해 처리합니다.
 
-### 롤백 절차
-- 실전 주문 차단: `KIS_USE_MOCK=true`로 즉시 전환
-- 엔진 중단: 실행 중 프로세스에 `Ctrl+C`
-- 상태 점검: `uv run stock-manager doctor`
-- 계좌/잔고 교차확인: `uv run stock-manager smoke`
-- 승격 재시도 전: `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`
+## Slack 알림
+운영상 의미 있는 이벤트에 대해 Slack 알림을 발송합니다.
 
-### MCP 점검/장애 대응
-- KIS MCP 호출이 `deadline has elapsed`로 반복 실패하면, 우선 원격 MCP 인증 경로를 점검합니다.
-- Smithery KIS MCP 엔드포인트는 비인증 요청 시 `401`을 반환하는 것이 정상입니다.
-  - `https://server.smithery.ai/@KISOpenAPI/kis-code-assistant-mcp/mcp`
-- 로컬 `mcp-remote` 토큰 캐시가 비정상(`expires_in` 누락/만료 루프)일 때 도구 호출이 타임아웃될 수 있습니다.
-  1. `~/.mcp-auth/mcp-remote-*`의 KIS 토큰 캐시를 삭제
-  2. MCP 재연결로 OAuth 재인증 수행
-  3. 다시 호출 테스트
-- MCP 장애 시 코드 기준 정합성은 로컬 매핑 파일을 소스 오브 트루스로 사용합니다.
-  - `docs/kis-openapi/_data/tr_id_mapping.json`
+- 모의 모드 알림은 `[MOCK]` 접두사로 구분됩니다.
+- 에러, 실행 공지, 리스크 이벤트, 상태 전환 알림을 포함합니다.
+- 포맷 상세는 `ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md`를 참고하세요.
 
-### Slack 알림
-- 주문/체결/리스크 이벤트 알림
-- 에러 로그 알림 (자동 레벨 기반 라우팅)
-- 시스템 상태 모니터링
-- 메시지 전송/수정/스레드 댓글 기능 (ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md 참조)
+Slack 사용 여부는 환경 변수로 제어하며, 사용 시 필수 키는 `doctor`에서 확인합니다.
 
-### 통합 설정 관리 (AppConfig)
-- `src/stock_manager/config/app_config.py`에서 통합 설정 관리
-- KIS 설정: 모드(LIVE/PAPER), API 키, REST/WebSocket URL
-- Slack 설정: Bot Token, Channel ID
-- 공통 설정: 로그 레벨, 계좌 ID
-- 운영 모드에 따른 URL 자동 선택 헬퍼 메서드 제공
+## Mock Promotion Gate (mock → live)
+실거래는 mock promotion gate 통과 전에는 차단됩니다.
 
-## 개발 환경 설정
+- 게이트 파일: `.sisyphus/evidence/mock-promotion-gate.json`
+- 필수 조건 예시: `mode = mock`, `pass = true`
+- 게이트를 적용하는 명령:
+  - `stock-manager run` (실거래)
+  - `stock-manager trade ... --execute --confirm-live` (실거래)
 
-### 로컬 PostgreSQL 환경 (docker-compose)
-프로젝트 루트의 `docker-compose.yml`을 사용하여 로컬 개발용 PostgreSQL 데이터베이스를 실행할 수 있습니다.
+예시:
+```bash
+uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json
+cat .sisyphus/evidence/mock-promotion-gate.json
+```
+
+## 비거래 시간대 검증(폐장 시) 전략
+시장 폐장 시에는 단위 테스트와 오프라인 검증으로 가능한 한 많이 확인합니다.
 
 ```bash
-# PostgreSQL 컨테이너 시작
-docker-compose up -d postgres
-
-# 컨테이너 상태 확인
-docker-compose ps
-
-# 로그 확인
-docker-compose logs postgres
-
-# 컨테이너 중지
-docker-compose down
-
-# 볼륨 포함하여 완전 삭제
-docker-compose down -v
+uv run pytest --no-cov tests/unit/test_mock_qa_gate.py -q
+uv run pytest --no-cov tests/unit/test_cli_main.py -q
+uv run pytest --no-cov tests/unit/test_doctor.py -q
 ```
 
-**설정:**
-- 이미지: postgres:15-alpine
-- 포트: 5432
-- 데이터베이스: stock_manager
-- 사용자: postgres / postgres
-- Health check 포함
+전체 테스트 실행 시 저장소는 글로벌 커버리지 게이트(`--cov-fail-under=80`)를 적용합니다.
+작은 변경은 위와 같이 `--no-cov`로 핵심 테스트만 빠르게 검증할 수 있습니다.
 
-**환경 변수 (.env):**
-```bash
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=stock_manager
-DB_USER=postgres
-DB_PASSWORD=postgres
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/stock_manager
-```
+권장 커버리지 점검 항목:
+- 핵심 거래 실행 경로의 높은 신뢰도 검증
+- Slack 알림 및 진단 경로 단언
+- 모의 모드 자격 증명/안전 장치 테스트
 
-## 유틸리티 스크립트
-
-### KIS Slack Check 스크립트
-`scripts/kis_slack_check.py`는 KIS API 연결과 Slack 알림 전송을 테스트하는 유틸리티입니다.
+## 사용 예시
 
 ```bash
-# 실행 방법
-python scripts/kis_slack_check.py
+# 모의 모드: smoke 실행
+KIS_USE_MOCK=true uv run stock-manager smoke
 
-# 환경 변수 요구사항:
-# - ACCOUNT_ID: 계좌 ID
-# - SLACK_BOT_TOKEN: Slack Bot Token
-# - SLACK_CHANNEL_ID: Slack Channel ID
-# - KIS_APP_KEY 또는 KIS_KIS_APP_KEY: KIS 앱키
-# - KIS_APP_SECRET 또는 KIS_KIS_APP_SECRET: KIS 앱시크릿키
+# 모의 모드: 전략 자동 탐색으로 1개 종목 실행
+KIS_USE_MOCK=true uv run stock-manager run --duration-sec 60 --strategy graham --strategy-auto-discover
+
+# 모의 모드: 주문 실행(비실거래)
+KIS_USE_MOCK=true uv run stock-manager trade buy 005930 1 --price 70000 --execute
+
+# 실거래: confirm-live + gate 필요
+KIS_USE_MOCK=false uv run stock-manager trade buy 005930 1 --price 70000 --execute --confirm-live
 ```
 
-**기능:**
-- KIS API 인증 및 현금 잔고 조회
-- Slack 알림 전송 테스트
-- 계좌 정보 마스킹 처리
+## FAQ
+- `doctor` 실행 결과가 “Doctor result: NOT OK”라면, 환경 변수를 수정한 뒤 다시 실행하세요.
+- promotion gate 메시지로 주문이 막히면 mock gate 스크립트를 실행해 산출물을 확인하세요.
+- smoke는 통과했는데 mock 모드에서 run이 실패한다면 계좌 형식과 출력에 포함된 OPSQ2000 힌트를 확인하세요.
 
-## 테스트
-
-### 테스트 커버리지
-
-현재 상태: 85% (26/26 KISRestClient tests passing)
-
-**Phase 2 업데이트:**
-- KISRestClient 단위 테스트: 26개 ✅ (TokenManager 7개, approval_key 3개, 해시키 3개, 기본 13개)
-- 테스트 커버리지: 85% (목표 80% 초과 달성)
-- TRUST 5 점수: 94.3%
-
-**전체 프로젝트 테스트:**
-- 도메인 모델 테스트: Order, Fill, OrderStatus, OrderRequest (10 tests)
-- 도메인 모델 테스트: Worker 도메인 (WorkerStatus, StockLock, WorkerProcess, Candidate, PositionSnapshot, DailySummary) (21 tests)
-- 서비스 레이어 테스트: OrderService, LockService, WorkerLifecycleService 등
-- 어댑터 테스트: MockBroker, KISBroker, KISConfig, KISRestClient, PostgreSQL
-- 유틸리티 테스트: Slack 알림 (7 tests)
-
-### 단위 테스트 실행
-
-```bash
-# 전체 테스트 실행
-pytest tests/
-
-# 단위 테스트만 실행
-pytest tests/unit/
-
-# 특정 모듈 테스트
-pytest tests/unit/domain/test_order.py -v
-
-# 커버리지 리포트
-pytest --cov=src/stock_manager --cov-report=html tests/
-```
-
-### 통합 테스트 실행
-
-통합 테스트는 PostgreSQL 데이터베이스가 필요합니다. docker-compose로 데이터베이스를 먼저 실행하세요.
-
-```bash
-# 1. PostgreSQL 컨테이너 시작
-docker-compose up -d postgres
-
-# 2. 통합 테스트 실행 (대기 시간 후)
-pytest tests/integration/ -v
-
-# 3. 또는 pytest 마크로 통합 테스트만 실행
-pytest -m integration -v
-```
-
-**참고:** 통합 테스트는 데이터베이스가 실행 중이지 않으면 자동으로 건너뜁니다(skip).
-
-## AI 개발자 가이드
-
-### ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md
-Slack 알림 유틸의 사용법, API, 테스트 가이드 포함
-
-## 프로젝트 진행 상태
-
-### 완료된 SPEC
-- SPEC-CLI-001: CLI Worker Entrypoints (2026-01-29 완료)
-- SPEC-OBSERVABILITY-001: 로그 레벨 기반 Slack 알림 시스템 (2026-01-25 완료)
-- SPEC-BACKEND-002: 주문 실행 및 상태 관리 시스템
-- SPEC-BACKEND-WORKER-004: 워커 아키텍처 (2026-01-25 완료)
-- SPEC-BACKEND-INFRA-003: 장 시작/종료 및 상태 복구 라이프사이클 (2026-01-25 완료)
-
-### SPEC-KIS-DOCS-001: KIS OpenAPI 문서 재정비 및 TR_ID 매핑 시스템 (Milestone 3 완료)
-- **TR_ID 매핑 데이터베이스 구축** ✅ 완료
-  - 336개 API의 실전/모의 TR_ID 매핑 완료
-  - `docs_raw/kis-openapi/_data/tr_id_mapping.json` 생성
-  - Excel 파싱 스크립트 구현 (`scripts/parse_kis_excel.py`)
-- **Excel 파싱 스크립트** ✅ 완료
-  - HTS_OPENAPI.xlsx 자동 파싱
-  - 카테고리별 API 분류 (16개 카테고리)
-  - TR_ID, API ID, HTTP Method, URL 정보 추출
-- **문서 수정 스크립트** ✅ 완료
-  - 기존 문서 TR_ID 일괄 수정
-  - API ID → 실제 TR_ID 변환
-  - 실전/모의 TR_ID 명확히 구분
-- **API 문서 템플릿** ✅ 완료
-  - 표준화된 문서 구조 정의
-  - TR_ID 정보 포함 섹션 추가
-  - Request/Response 필드 템플릿
-- **REST Client TR_ID 지원** ✅ 완료
-  - `KISRESTClient.get_tr_id()` 메서드 구현
-  - 요청 헤더에 `tr_id` 필드 자동 포함
-  - 실전/모의 환경별 TR_ID 반환
-- **Milestone 3: API 문서 자동 생성 시스템** ✅ 완료
-  - 336개 KIS OpenAPI API 문서 자동 생성 완료
-  - 16개 카테고리별 문서 자동 분류 및 구조화
-  - 표준화된 마크다운 템플릿 기반 문서 생성
-  - TR_ID 매핑 데이터와의 자동 연동
-  - Request/Response 필드 상세 문서화
-  - API별 예제 코드 및 사용법 포함
-- **품질 지표** ✅ 달성
-  - API 문서 커버리지: 336/336 (100%)
-  - 테스트 커버리지: 90/90 tests 통과 (87.53%)
-  - TRUST 5 점수: 93/100 PASS
-  - 문서 일관성: 100%
-
-### 진행 중인 작업
-- SPEC-BACKEND-API-001: 한국투자증권 OpenAPI 브로커 어댑터 (85% 완료)
-  - 완료: BrokerPort 인터페이스, KIS 설정, REST/WebSocket 클라이언트
-  - 완료: approval_key 발급, 토큰 자동 갱신 (스레드 안전), 해시키 생성
-  - 완료: 단위 테스트 26개 (85% 커버리지, TRUST 5: 94.3%)
-  - 예정: KISBrokerAdapter 완성, WebSocket 연결 통합, 통합 테스트
-
-### 다음 단계 (MVP Scope)
-- KISBrokerAdapter 완성 및 WebSocket 연결 통합
-- 통합 테스트 작성
-- 리팩토링 및 코드 정리
-- 전체 프로젝트 테스트 커버리지 개선 (목표 80%)
-
-> **Note:** 해외주식 모듈은 Post-MVP로 연기됨
+## 참고
+- 개발 기본 경로는 모의 모드입니다.
+- 프로젝트는 보수적으로 동작하며, 실거래는 명시적 의도와 안전 검사 완료가 선행되어야 합니다.
