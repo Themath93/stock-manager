@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class StrategyScore:
+class StrategyScore(ABC):
     """Base class for strategy evaluation scores."""
 
     symbol: str

@@ -95,7 +95,9 @@ def test_doctor_not_ok_when_account_product_code_invalid(tmp_path: Path, monkeyp
     assert result.ok is False
 
 
-def test_doctor_mock_fallback_is_ok_with_warning(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_doctor_mock_without_mock_credentials_is_not_ok(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
@@ -117,8 +119,11 @@ def test_doctor_mock_fallback_is_ok_with_warning(tmp_path: Path, monkeypatch, ca
     result = run_doctor(verbose=False)
     captured = capsys.readouterr()
 
-    assert result.ok is True
-    assert "fallback" in captured.out.lower()
+    assert result.ok is False
+    assert "KIS_MOCK_APP_KEY" in captured.out
+    assert "KIS_MOCK_SECRET" in captured.out
+    assert "KIS_MOCK_ACCOUNT_NUMBER" in captured.out
+    assert "fallback" not in captured.out.lower()
 
 
 def test_doctor_mock_missing_both_mock_and_real_is_not_ok(tmp_path: Path, monkeypatch) -> None:
@@ -126,9 +131,7 @@ def test_doctor_mock_missing_both_mock_and_real_is_not_ok(tmp_path: Path, monkey
     repo.mkdir()
     (repo / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     (repo / ".env").write_text(
-        "KIS_USE_MOCK=true\n"
-        "KIS_ACCOUNT_PRODUCT_CODE=01\n"
-        "SLACK_ENABLED=false\n",
+        "KIS_USE_MOCK=true\nKIS_ACCOUNT_PRODUCT_CODE=01\nSLACK_ENABLED=false\n",
         encoding="utf-8",
     )
 

@@ -183,13 +183,15 @@ def run_setup(*, reset: bool = False, skip_verify: bool = False) -> SetupResult:
     else:
         if not kis_mock_app_key or not kis_mock_secret or not mock_account_number:
             typer.echo(
-                "Note: mock credentials/account are optional now, but needed when switching to KIS_USE_MOCK=true."
+                "Note: mock credentials/account are optional while KIS_USE_MOCK=false, "
+                "but required when switching to KIS_USE_MOCK=true."
             )
 
     if kis_use_mock and (not kis_app_key or not kis_app_secret or not real_account_number):
         typer.echo(
             "Note: real credentials/account are optional in mock mode. "
-            "If omitted, set them later before switching to real trading."
+            "Set them before switching to KIS_USE_MOCK=false. "
+            "Mock mode intentionally never falls back to real credentials/account."
         )
 
     product_code = _prompt_product_code()
