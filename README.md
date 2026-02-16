@@ -221,6 +221,8 @@ stock-manager smoke
   - `stock-manager setup`: `.env` 설정 위저드
   - `stock-manager doctor`: `.env` 진단 (계좌 형식 포함)
   - `stock-manager run`: 엔진 실행/유지 (`--duration-sec`, `--skip-auth`)
+    - 전략 자동탐색 옵션: `--strategy-auto-discover`, `--strategy-discovery-limit`, `--strategy-discovery-fallback-symbols`
+    - WebSocket 브리지 옵션: `--websocket-monitoring-enabled`, `--websocket-execution-notice-enabled`
   - `stock-manager trade buy|sell SYMBOL QTY --price PRICE`: 주문 (기본 dry-run)
   - `stock-manager smoke`: 무주문 스모크 (인증 + 시세 + 잔고)
   - `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json`: 모의 QA 게이트 실행
@@ -251,6 +253,9 @@ stock-manager smoke
 - 복구 결과가 `FAILED`면 엔진은 no-trade degraded 모드로 기동되고 신규 주문은 차단됩니다.
 - 일손실 임계치(기본 1%) 도달 시 `risk.killswitch.triggered` CRITICAL 알림과 함께 신규 매수가 차단됩니다.
 - 영업일 롤오버 시 `risk.killswitch.cleared` 이벤트가 발생하고 일일 리스크 지표가 초기화됩니다.
+- 종목 리스트 없이 전략을 돌릴 때는 `--strategy-auto-discover`를 활성화하면 런타임에서 자동으로 종목을 수집합니다.
+- 실시간 모니터링/체결 통지 연동이 필요하면 `--websocket-monitoring-enabled --websocket-execution-notice-enabled`를 함께 사용합니다.
+- WebSocket 연결이 실패하면 가격 모니터링은 폴링 경로로 자동 fallback 됩니다.
 - 권장 사전 점검 순서:
   1. `uv run pytest -q`
   2. `uv run stock-manager doctor`

@@ -90,6 +90,7 @@ class TradingEngine:
     state_path: Path = field(default_factory=lambda: Path.home() / ".stock_manager" / "state.json")
     is_paper_trading: bool = False
     notifier: NotifierProtocol = field(default_factory=NoOpNotifier)
+    broker_adapter: Any | None = None
 
     # Internal components (initialized in __post_init__)
     _executor: OrderExecutor = field(init=False)
@@ -118,6 +119,7 @@ class TradingEngine:
     _auto_exit_last_trigger: dict[tuple[str, str], float] = field(
         default_factory=dict, init=False, repr=False
     )
+    _broker_adapter: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         """Initialize all trading components with proper dependencies."""
@@ -166,6 +168,8 @@ class TradingEngine:
             interval=60.0,  # Check every minute
             on_discrepancy=self._handle_discrepancy,
         )
+
+        self._broker_adapter = self._resolve_broker_adapter()
 
         # Initialize empty state
         self._state = TradingState(positions={}, last_updated=datetime.now(timezone.utc))
@@ -254,7 +258,8 @@ class TradingEngine:
 
         # Start background monitoring threads
         symbols = list(self._position_manager.get_all_positions().keys())
-        if symbols:
+        quote_stream_active = self._start_realtime_streams(symbols)
+        if symbols and not quote_stream_active:
             self._price_monitor.start(symbols, self._on_price_update)
         self._reconciler.start()
 
@@ -313,6 +318,7 @@ class TradingEngine:
 
         # Stop monitoring threads (they handle joining internally)
         self._price_monitor.stop(timeout=timeout / 2)
+        self._stop_realtime_streams()
         self._reconciler.stop(timeout=timeout / 2)
 
         # Final state save
@@ -409,20 +415,18 @@ class TradingEngine:
         result = self._executor.buy(symbol=symbol, quantity=order_quantity, price=price)
 
         if result.success:
-            # Set stop-loss and take-profit if specified
             if stop_loss:
                 position = self._position_manager.get_position(symbol)
                 if position:
                     position.stop_loss = Decimal(str(stop_loss))
-                    # Add symbol to price monitoring for stop-loss tracking
-                    self._price_monitor.add_symbol(symbol)
 
             if take_profit:
                 position = self._position_manager.get_position(symbol)
                 if position:
                     position.take_profit = Decimal(str(take_profit))
-                    # Add symbol to price monitoring for take-profit tracking
-                    self._price_monitor.add_symbol(symbol)
+
+            if stop_loss or take_profit:
+                self._ensure_symbol_monitoring(symbol)
 
             # Persist state after successful order
             self._update_state()
@@ -583,6 +587,223 @@ class TradingEngine:
             price: Current price
         """
         self._position_manager.update_price(symbol, price)
+
+    def _resolve_broker_adapter(self) -> Any | None:
+        if self.broker_adapter is not None:
+            return self.broker_adapter
+
+        websocket_monitoring_enabled = bool(
+            getattr(self.config, "websocket_monitoring_enabled", False)
+        )
+        websocket_execution_notice_enabled = bool(
+            getattr(self.config, "websocket_execution_notice_enabled", False)
+        )
+        if not websocket_monitoring_enabled and not websocket_execution_notice_enabled:
+            return None
+
+        try:
+            from stock_manager.adapters.broker.kis.broker_adapter import KISBrokerAdapter
+            from stock_manager.adapters.broker.kis.client import KISRestClient
+        except Exception:
+            return None
+
+        if not isinstance(self.client, KISRestClient):
+            return None
+
+        try:
+            return KISBrokerAdapter(
+                config=self.client.config,
+                account_number=self.account_number,
+                account_product_code=self.account_product_code,
+                rest_client=self.client,
+            )
+        except Exception:
+            logger.warning("Failed to initialize KIS broker adapter", exc_info=True)
+            return None
+
+    def _start_realtime_streams(self, symbols: list[str]) -> bool:
+        adapter = self._broker_adapter
+        if adapter is None:
+            return False
+
+        quote_stream_active = False
+        if bool(getattr(self.config, "websocket_monitoring_enabled", False)) and symbols:
+            try:
+                adapter.subscribe_quotes(symbols=symbols, callback=self._on_websocket_quote)
+                quote_stream_active = True
+            except Exception:
+                logger.warning(
+                    "WebSocket quote stream unavailable; falling back to polling",
+                    exc_info=True,
+                )
+
+        if bool(getattr(self.config, "websocket_execution_notice_enabled", False)):
+            try:
+                adapter.subscribe_executions(callback=self._on_websocket_execution)
+            except Exception:
+                logger.warning("WebSocket execution stream unavailable", exc_info=True)
+
+        return quote_stream_active
+
+    def _stop_realtime_streams(self) -> None:
+        adapter = self._broker_adapter
+        if adapter is None:
+            return
+        try:
+            adapter.disconnect_websocket()
+        except Exception:
+            logger.debug("Failed to stop websocket streams cleanly", exc_info=True)
+
+    def _ensure_symbol_monitoring(self, symbol: str) -> None:
+        normalized = symbol.strip().upper()
+        if not normalized:
+            return
+
+        adapter = self._broker_adapter
+        if adapter is not None and bool(
+            getattr(self.config, "websocket_monitoring_enabled", False)
+        ):
+            try:
+                adapter.subscribe_quotes(symbols=[normalized], callback=self._on_websocket_quote)
+                return
+            except Exception:
+                logger.warning(
+                    "WebSocket quote subscription failed; using polling monitor",
+                    exc_info=True,
+                )
+
+        if not self._price_monitor.is_running:
+            self._price_monitor.start([], self._on_price_update)
+        self._price_monitor.add_symbol(normalized)
+
+    def _on_websocket_quote(self, event: Any) -> None:
+        symbol = str(getattr(event, "symbol", "")).strip().upper()
+        if not symbol:
+            return
+
+        ask_price = getattr(event, "ask_price", None)
+        bid_price = getattr(event, "bid_price", None)
+        price = ask_price if ask_price is not None else bid_price
+        if price is None:
+            return
+
+        self._on_price_update(symbol, price)
+
+    def _on_websocket_execution(self, event: Any) -> None:
+        symbol = str(getattr(event, "symbol", "")).strip().upper()
+        order_id = getattr(event, "order_id", None)
+        side = getattr(event, "side", None)
+        price = getattr(event, "price", None)
+        quantity = getattr(event, "quantity", None)
+
+        self._notify(
+            "order.execution_notice",
+            NotificationLevel.INFO,
+            "Execution Notice",
+            symbol=symbol or None,
+            order_id=str(order_id) if order_id not in (None, "") else None,
+            side=str(side) if side not in (None, "") else None,
+            price=str(price) if price not in (None, "") else None,
+            quantity=str(quantity) if quantity not in (None, "") else None,
+        )
+
+        try:
+            result = self._reconciler.reconcile_now()
+            if not result.is_clean:
+                self._handle_discrepancy(result)
+            self._update_state()
+            self._persist_state()
+        except Exception:
+            logger.debug("Execution reconciliation failed", exc_info=True)
+
+    def _discover_strategy_symbols(self) -> list[str]:
+        limit = int(getattr(self.config, "strategy_discovery_limit", 0) or 0)
+        if limit <= 0:
+            return []
+
+        fallback = self._normalize_symbol_entries(
+            getattr(self.config, "strategy_discovery_fallback_symbols", ())
+        )
+
+        if self.is_paper_trading:
+            return fallback[:limit]
+
+        try:
+            from stock_manager.adapters.broker.kis.apis.domestic_stock.ranking import (
+                get_volume_rank,
+            )
+
+            response = get_volume_rank(self.client, is_paper_trading=False)
+        except Exception:
+            logger.warning("Strategy symbol discovery failed", exc_info=True)
+            return fallback[:limit]
+
+        if str(response.get("rt_cd", "1")) != "0":
+            return fallback[:limit]
+
+        output = response.get("output", [])
+        if not isinstance(output, list):
+            return fallback[:limit]
+
+        discovered: list[str] = []
+        seen: set[str] = set()
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            symbol = self._extract_discovery_symbol(item)
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            discovered.append(symbol)
+            if len(discovered) >= limit:
+                break
+
+        if discovered:
+            return discovered
+        return fallback[:limit]
+
+    @staticmethod
+    def _extract_discovery_symbol(payload: dict[str, Any]) -> str:
+        for key in (
+            "mksc_shrn_iscd",
+            "stck_shrn_iscd",
+            "pdno",
+            "iscd",
+            "ISCD",
+            "fid_input_iscd",
+            "symbol",
+            "SYMBOL",
+        ):
+            value = payload.get(key)
+            if value in (None, ""):
+                continue
+
+            symbol = str(value).strip().upper()
+            if symbol.startswith("A") and len(symbol) == 7 and symbol[1:].isdigit():
+                symbol = symbol[1:]
+            if symbol:
+                return symbol
+        return ""
+
+    @staticmethod
+    def _normalize_symbol_entries(values: Any) -> list[str]:
+        if not isinstance(values, (list, tuple, set)):
+            return []
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            symbol = str(value).strip().upper()
+            if not symbol:
+                continue
+            if symbol.startswith("A") and len(symbol) == 7 and symbol[1:].isdigit():
+                symbol = symbol[1:]
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            normalized.append(symbol)
+
+        return normalized
 
     def _persist_state(self):
         """Save current state to disk atomically."""
@@ -865,7 +1086,9 @@ class TradingEngine:
     def _start_strategy_orchestration(self) -> None:
         strategy = getattr(self.config, "strategy", None)
         symbols = list(getattr(self.config, "strategy_symbols", ()))
-        if strategy is None or not symbols:
+        if strategy is None:
+            return
+        if not symbols and not bool(getattr(self.config, "strategy_auto_discover", False)):
             return
 
         try:
@@ -920,6 +1143,8 @@ class TradingEngine:
             return
 
         symbols = list(getattr(self.config, "strategy_symbols", ()))
+        if not symbols and bool(getattr(self.config, "strategy_auto_discover", False)):
+            symbols = self._discover_strategy_symbols()
         if not symbols:
             return
 

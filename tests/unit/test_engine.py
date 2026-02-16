@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from dataclasses import dataclass
 import logging
+from types import SimpleNamespace
 
 from stock_manager.engine import TradingEngine, EngineStatus
 from stock_manager.trading import (
@@ -644,6 +645,226 @@ class TestStrategyOrchestration:
         assert engine.buy.call_count == 2
         assert [call.args[0] for call in engine.buy.call_args_list] == ["005930", "035720"]
         engine.stop()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_strategy_auto_discover_uses_mock_fallback_symbols(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        strategy = _ScreeningStrategy({"005930": True, "000660": True})
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=(),
+            strategy_order_quantity=1,
+            strategy_max_symbols_per_cycle=10,
+            strategy_max_buys_per_cycle=10,
+            strategy_auto_discover=True,
+            strategy_discovery_limit=2,
+            strategy_discovery_fallback_symbols=("005930", "000660", "035720"),
+            strategy_run_interval_sec=0.0,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+        )
+        engine._get_current_price = MagicMock(return_value=70000)
+        engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
+
+        engine.start()
+
+        assert strategy.screened_symbols == ["005930", "000660"]
+        assert engine.buy.call_count == 2
+        engine.stop()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_strategy_auto_discover_uses_volume_rank_in_real_mode(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        strategy = _ScreeningStrategy({"005930": True, "000660": True})
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=(),
+            strategy_order_quantity=1,
+            strategy_max_buys_per_cycle=10,
+            strategy_auto_discover=True,
+            strategy_discovery_limit=2,
+            strategy_run_interval_sec=0.0,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=False,
+        )
+        engine._get_current_price = MagicMock(return_value=70000)
+        engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
+
+        with patch(
+            "stock_manager.adapters.broker.kis.apis.domestic_stock.ranking.get_volume_rank",
+            return_value={
+                "rt_cd": "0",
+                "output": [
+                    {"stck_shrn_iscd": "005930"},
+                    {"mksc_shrn_iscd": "000660"},
+                ],
+            },
+        ):
+            engine.start()
+
+        assert strategy.screened_symbols == ["005930", "000660"]
+        assert engine.buy.call_count == 2
+        engine.stop()
+
+
+class TestRealtimeBridge:
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_uses_websocket_streams_when_enabled(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+        mock_position,
+    ):
+        mock_load.return_value = TradingState(
+            positions={"005930": mock_position},
+            last_updated=datetime.now(timezone.utc),
+        )
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        broker_adapter = MagicMock()
+        config = TradingConfig(
+            websocket_monitoring_enabled=True,
+            websocket_execution_notice_enabled=True,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+            broker_adapter=broker_adapter,
+        )
+
+        engine.start()
+        engine.stop()
+
+        broker_adapter.subscribe_quotes.assert_called_once()
+        broker_adapter.subscribe_executions.assert_called_once()
+        broker_adapter.disconnect_websocket.assert_called_once()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_with_stop_loss_subscribes_symbol_to_websocket(
+        self,
+        mock_reconcile,
+        mock_load,
+        mock_client,
+        tmp_path,
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        broker_adapter = MagicMock()
+        config = TradingConfig(websocket_monitoring_enabled=True, max_positions=5)
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=True,
+            broker_adapter=broker_adapter,
+        )
+        engine.start()
+
+        position = Position(
+            symbol="005930",
+            quantity=1,
+            entry_price=Decimal("70000"),
+        )
+        engine._position_manager.open_position(position)
+        engine._executor.buy = MagicMock(return_value=OrderResult(success=True, order_id="BUY123"))
+
+        result = engine.buy("005930", 1, 70000, stop_loss=65000)
+
+        assert result.success is True
+        broker_adapter.subscribe_quotes.assert_called_with(
+            symbols=["005930"],
+            callback=engine._on_websocket_quote,
+        )
+        engine.stop()
+
+    def test_websocket_execution_notice_triggers_reconciliation(self, engine):
+        engine._reconciler.reconcile_now = MagicMock(
+            return_value=SimpleNamespace(is_clean=True, discrepancies=[])
+        )
+        engine._notify = MagicMock()
+        engine._persist_state = MagicMock()
+
+        event = SimpleNamespace(
+            symbol="005930",
+            order_id="ORD-1",
+            side="buy",
+            price=Decimal("70000"),
+            quantity=Decimal("1"),
+        )
+        engine._on_websocket_execution(event)
+
+        engine._notify.assert_called_once()
+        engine._reconciler.reconcile_now.assert_called_once()
+        engine._persist_state.assert_called_once()
 
 
 # =============================================================================

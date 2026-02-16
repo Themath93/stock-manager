@@ -236,6 +236,11 @@ def run_command(
     strategy_max_symbols_per_cycle: int,
     strategy_max_buys_per_cycle: int,
     strategy_run_interval_sec: float,
+    strategy_auto_discover: bool = False,
+    strategy_discovery_limit: int = 20,
+    strategy_discovery_fallback_symbols: str | None = None,
+    websocket_monitoring_enabled: bool = False,
+    websocket_execution_notice_enabled: bool = False,
 ) -> None:
     if duration_sec < 0:
         typer.echo("--duration-sec must be 0 or a positive integer.")
@@ -249,6 +254,7 @@ def run_command(
             strategy_symbols=strategy_symbols,
             client=runtime.client,
         )
+        discovery_fallback_symbols = _parse_strategy_symbols(strategy_discovery_fallback_symbols)
         _enforce_live_promotion_gate(use_mock=runtime.config.use_mock)
         if not skip_auth:
             runtime.client.authenticate()
@@ -262,6 +268,11 @@ def run_command(
                 strategy_max_symbols_per_cycle=strategy_max_symbols_per_cycle,
                 strategy_max_buys_per_cycle=strategy_max_buys_per_cycle,
                 strategy_run_interval_sec=strategy_run_interval_sec,
+                strategy_auto_discover=strategy_auto_discover,
+                strategy_discovery_limit=strategy_discovery_limit,
+                strategy_discovery_fallback_symbols=discovery_fallback_symbols,
+                websocket_monitoring_enabled=websocket_monitoring_enabled,
+                websocket_execution_notice_enabled=websocket_execution_notice_enabled,
             ),
             account_number=runtime.account_number,
             account_product_code=runtime.account_product_code,

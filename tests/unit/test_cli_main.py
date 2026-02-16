@@ -310,6 +310,13 @@ def test_run_wires_strategy_options_into_trading_config(monkeypatch) -> None:
             "3",
             "--strategy-run-interval-sec",
             "5.0",
+            "--strategy-auto-discover",
+            "--strategy-discovery-limit",
+            "7",
+            "--strategy-discovery-fallback-symbols",
+            "005930,000660",
+            "--websocket-monitoring-enabled",
+            "--websocket-execution-notice-enabled",
         ],
     )
 
@@ -323,6 +330,11 @@ def test_run_wires_strategy_options_into_trading_config(monkeypatch) -> None:
     assert config.strategy_max_symbols_per_cycle == 10
     assert config.strategy_max_buys_per_cycle == 3
     assert config.strategy_run_interval_sec == 5.0
+    assert config.strategy_auto_discover is True
+    assert config.strategy_discovery_limit == 7
+    assert config.strategy_discovery_fallback_symbols == ("005930", "000660")
+    assert config.websocket_monitoring_enabled is True
+    assert config.websocket_execution_notice_enabled is True
 
 
 def test_parse_strategy_symbols_ignores_blank_entries_and_trims_case() -> None:
