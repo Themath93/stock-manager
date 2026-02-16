@@ -91,6 +91,31 @@ def build_app():
             "--strategy-run-interval-sec",
             help="Seconds between strategy cycles after startup.",
         ),
+        strategy_auto_discover: bool = typer.Option(
+            False,
+            "--strategy-auto-discover",
+            help="Auto-discover strategy symbols when --strategy-symbols is empty.",
+        ),
+        strategy_discovery_limit: int = typer.Option(
+            20,
+            "--strategy-discovery-limit",
+            help="Maximum number of auto-discovered symbols per cycle.",
+        ),
+        strategy_discovery_fallback_symbols: str | None = typer.Option(
+            None,
+            "--strategy-discovery-fallback-symbols",
+            help="Comma-separated fallback symbols for auto-discovery failures.",
+        ),
+        websocket_monitoring_enabled: bool = typer.Option(
+            False,
+            "--websocket-monitoring-enabled",
+            help="Use websocket quote stream for position monitoring.",
+        ),
+        websocket_execution_notice_enabled: bool = typer.Option(
+            False,
+            "--websocket-execution-notice-enabled",
+            help="Use websocket execution notice stream for reconciliation.",
+        ),
     ) -> None:
         """Start trading engine and keep it running until stop signal."""
         run_command(
@@ -102,6 +127,11 @@ def build_app():
             strategy_max_symbols_per_cycle=strategy_max_symbols_per_cycle,
             strategy_max_buys_per_cycle=strategy_max_buys_per_cycle,
             strategy_run_interval_sec=strategy_run_interval_sec,
+            strategy_auto_discover=strategy_auto_discover,
+            strategy_discovery_limit=strategy_discovery_limit,
+            strategy_discovery_fallback_symbols=strategy_discovery_fallback_symbols,
+            websocket_monitoring_enabled=websocket_monitoring_enabled,
+            websocket_execution_notice_enabled=websocket_execution_notice_enabled,
         )
 
     app.add_typer(create_trade_app(), name="trade")

@@ -415,13 +415,12 @@ class TestKillSwitchNotifications:
 
 
 class TestAllNotificationTypesComplete:
-    """Test that all 9 notification event types can be triggered."""
-
-    def test_all_11_notification_types_present(self):
+    def test_all_12_notification_types_present(self):
         event_types = {
             "engine.started",
             "engine.stopped",
             "order.filled",
+            "order.execution_notice",
             "order.rejected",
             "position.stop_loss",
             "position.take_profit",
@@ -431,7 +430,7 @@ class TestAllNotificationTypesComplete:
             "risk.killswitch.triggered",
             "risk.killswitch.cleared",
         }
-        assert len(event_types) == 11
+        assert len(event_types) == 12
 
 
 class TestNotificationEventAttributes:

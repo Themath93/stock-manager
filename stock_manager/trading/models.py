@@ -148,4 +148,9 @@ class TradingConfig:
     strategy_max_symbols_per_cycle: int = 50
     strategy_max_buys_per_cycle: int = 1
     strategy_run_interval_sec: float = 60.0
+    strategy_auto_discover: bool = False
+    strategy_discovery_limit: int = 20
+    strategy_discovery_fallback_symbols: tuple[str, ...] = ()
+    websocket_monitoring_enabled: bool = False
+    websocket_execution_notice_enabled: bool = False
     auto_exit_cooldown_sec: float = 1.0

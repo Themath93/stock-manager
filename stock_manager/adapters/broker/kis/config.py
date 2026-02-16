@@ -35,10 +35,10 @@ class KISConfig(BaseSettings):
     Environment Variables:
         KIS_APP_KEY: Real trading application key issued by KIS
         KIS_APP_SECRET: Real trading application secret key issued by KIS
-        KIS_MOCK_APP_KEY: Mock trading application key (optional, preferred in mock mode)
-        KIS_MOCK_SECRET: Mock trading application secret (optional, preferred in mock mode)
-        KIS_ACCOUNT_NUMBER: Real trading account number (optional)
-        KIS_MOCK_ACCOUNT_NUMBER: Mock trading account number (optional, preferred in mock mode)
+        KIS_MOCK_APP_KEY: Mock trading application key (required when KIS_USE_MOCK=true)
+        KIS_MOCK_SECRET: Mock trading application secret (required when KIS_USE_MOCK=true)
+        KIS_ACCOUNT_NUMBER: Real trading account number (used only when KIS_USE_MOCK=false)
+        KIS_MOCK_ACCOUNT_NUMBER: Mock trading account number (required when KIS_USE_MOCK=true)
         KIS_ACCOUNT_PRODUCT_CODE: Account product code (optional, default: "01")
         KIS_USE_MOCK: Use mock trading environment (optional, default: true)
 

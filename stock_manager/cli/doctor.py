@@ -56,11 +56,8 @@ def run_doctor(*, verbose: bool = False) -> DoctorResult:
         use_mock = True
         mode_errors.append("KIS_USE_MOCK must be one of: true/false/1/0/yes/no.")
 
-    advisory_messages: list[str] = []
     missing_required: list[str] = []
 
-    real_key = values.get("KIS_APP_KEY", "").strip()
-    real_secret = values.get("KIS_APP_SECRET", "").strip()
     real_account = values.get("KIS_ACCOUNT_NUMBER", "").strip()
 
     mock_key = values.get("KIS_MOCK_APP_KEY", "").strip()
@@ -70,28 +67,15 @@ def run_doctor(*, verbose: bool = False) -> DoctorResult:
     effective_account = ""
 
     if use_mock:
-        if not (mock_key and mock_secret):
-            if real_key and real_secret:
-                advisory_messages.append(
-                    "KIS_USE_MOCK=true is using fallback credentials: "
-                    "KIS_APP_KEY/KIS_APP_SECRET. Set KIS_MOCK_APP_KEY/KIS_MOCK_SECRET."
-                )
-            else:
-                if not mock_key:
-                    missing_required.append("KIS_MOCK_APP_KEY (or fallback KIS_APP_KEY)")
-                if not mock_secret:
-                    missing_required.append("KIS_MOCK_SECRET (or fallback KIS_APP_SECRET)")
+        if not mock_key:
+            missing_required.append("KIS_MOCK_APP_KEY")
+        if not mock_secret:
+            missing_required.append("KIS_MOCK_SECRET")
 
         if mock_account:
             effective_account = mock_account
-        elif real_account:
-            effective_account = real_account
-            advisory_messages.append(
-                "KIS_USE_MOCK=true is using fallback account: "
-                "KIS_ACCOUNT_NUMBER. Set KIS_MOCK_ACCOUNT_NUMBER."
-            )
         else:
-            missing_required.append("KIS_MOCK_ACCOUNT_NUMBER (or fallback KIS_ACCOUNT_NUMBER)")
+            missing_required.append("KIS_MOCK_ACCOUNT_NUMBER")
     else:
         for key in ["KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT_NUMBER"]:
             if not values.get(key, "").strip():
@@ -117,7 +101,9 @@ def run_doctor(*, verbose: bool = False) -> DoctorResult:
             "KIS_ACCOUNT_PRODUCT_CODE must be exactly 2 digits (example: 01)."
         )
 
-    ok = not mode_errors and not missing_required and not missing_slack and not account_format_errors
+    ok = (
+        not mode_errors and not missing_required and not missing_slack and not account_format_errors
+    )
 
     typer.echo("")
     if mode_errors:
@@ -130,11 +116,6 @@ def run_doctor(*, verbose: bool = False) -> DoctorResult:
         for key in missing_required:
             typer.echo(f"  - {key}")
 
-    if advisory_messages:
-        typer.echo("KIS fallback warnings:")
-        for msg in advisory_messages:
-            typer.echo(f"  - {msg}")
-
     if missing_slack:
         typer.echo("Slack enabled but missing keys:")
         for key in missing_slack:
@@ -144,7 +125,9 @@ def run_doctor(*, verbose: bool = False) -> DoctorResult:
         typer.echo("Account format errors:")
         for error in account_format_errors:
             typer.echo(f"  - {error}")
-        typer.echo("Fix: run `stock-manager setup` and enter 8-digit account + 2-digit product code.")
+        typer.echo(
+            "Fix: run `stock-manager setup` and enter 8-digit account + 2-digit product code."
+        )
 
     typer.echo("")
     if ok:
