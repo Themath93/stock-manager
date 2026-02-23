@@ -37,9 +37,9 @@ Clarification Rules:
 
 Core Skills (load when needed):
 
-- Skill("moai-foundation-claude") for orchestration patterns
-- Skill("moai-foundation-core") for SPEC system and workflows
-- Skill("moai-workflow-project") for project management
+- Skill("git-master") for git workflow guidance
+- Skill("frontend-ui-ux") for UI and interaction work
+- Skill("find-skills") to discover additional capabilities
 
 ### Phase 2: Route
 
@@ -126,9 +126,9 @@ Integrate and report results:
 
 ### Type A: Workflow Commands
 
-Definition: Commands that orchestrate the primary MoAI development workflow.
+Definition: Commands that orchestrate the primary development workflow.
 
-Commands: /moai:0-project, /moai:1-plan, /moai:2-run, /moai:3-sync
+Commands: /start-work, /refactor, /handoff
 
 Allowed Tools: Full access (Task, AskUserQuestion, TodoWrite, Bash, Read, Write, Edit, Glob, Grep)
 
@@ -142,7 +142,7 @@ WHY: Flexibility enables efficient execution while maintaining quality through a
 
 Definition: Commands for rapid fixes and automation where speed is prioritized.
 
-Commands: /moai:alfred, /moai:fix, /moai:loop
+Commands: /ralph-loop, /ulw-loop, /stop-continuation
 
 Allowed Tools: Task, AskUserQuestion, TodoWrite, Bash, Read, Write, Edit, Glob, Grep
 
@@ -156,9 +156,9 @@ WHY: Quick, targeted operations where agent overhead is unnecessary.
 
 Definition: User feedback command for improvements and bug reports.
 
-Commands: /moai:9-feedback
+Commands: project-defined feedback commands (if configured)
 
-Purpose: When users encounter bugs or have improvement suggestions, this command automatically creates a GitHub issue in the MoAI-ADK repository.
+Purpose: When users encounter bugs or have improvement suggestions, this workflow routes feedback into the project issue tracker.
 
 Allowed Tools: Full access (all tools)
 
@@ -260,19 +260,19 @@ When using Explore agent or direct exploration tools (Grep, Glob, Read), apply t
 
 - Use structural search (ast-grep) before text-based search (Grep)
 - AST-Grep understands code syntax and eliminates false positives
-- Load moai-tool-ast-grep skill for complex pattern matching
+- Load an ast-grep-oriented skill for complex pattern matching
 - Example: `sg -p 'class $X extends Service' --lang python` is faster than `grep -r "class.*extends.*Service"`
 
 **Principle 2: Search Scope Limitation**
 
 - Always use `path` parameter to limit search scope
 - Avoid searching entire codebase unnecessarily
-- Example: `Grep(pattern="async def", path="src/moai_adk/core/")` instead of `Grep(pattern="async def")`
+- Example: `Grep(pattern="async def", path="src/core/")` instead of `Grep(pattern="async def")`
 
 **Principle 3: File Pattern Specificity**
 
 - Use specific Glob patterns instead of wildcards
-- Example: `Glob(pattern="src/moai_adk/core/*.py")` instead of `Glob(pattern="src/**/*.py")`
+- Example: `Glob(pattern="src/core/*.py")` instead of `Glob(pattern="src/**/*.py")`
 - Reduces files scanned by 50-80%
 
 **Principle 4: Parallel Processing**
@@ -290,14 +290,14 @@ When invoking Explore agent or using exploration tools directly:
 - Use Glob for file discovery
 - Use Grep with specific path parameter only
 - Skip Read operations unless necessary
-- Example: `Glob("src/moai_adk/core/*.py") + Grep("async def", path="src/moai_adk/core/")`
+- Example: `Glob("src/core/*.py") + Grep("async def", path="src/core/")`
 
 **medium** (target: 30 seconds):
 
 - Use Glob + Grep with path limitation
 - Use Read selectively for key files only
-- Load moai-tool-ast-grep for structural search if needed
-- Example: `Glob("src/**/*.py") + Grep("class Service") + Read("src/moai_adk/core/service.py")`
+- Load ast-grep support for structural search if needed
+- Example: `Glob("src/**/*.py") + Grep("class Service") + Read("src/core/service.py")`
 
 **very thorough** (target: 2 minutes):
 
@@ -327,7 +327,7 @@ Direct tool usage is acceptable when:
 
 ### Development Methodology
 
-MoAI uses DDD (Domain-Driven Development) as its development methodology:
+This workflow uses DDD (Domain-Driven Development) as its development methodology:
 
 - ANALYZE-PRESERVE-IMPROVE cycle for all development
 - Behavior preservation through characterization tests
@@ -380,11 +380,11 @@ report_generation:
   user_choice: Minimal # Default: Minimal, Full, None
  (constitution.development_mode: ddd)
 
-### MoAI Command Flow
+### Workflow Command Flow
 
-- /moai:1-plan "description" leads to Use the manager-spec subagent
-- /moai:2-run SPEC-001 leads to Use the manager-ddd subagent (ANALYZE-PRESERVE-IMPROVE)
-- /moai:3-sync SPEC-001 leads to Use the manager-docs subagent
+- Planning phase leads to manager-spec subagent usage
+- Implementation phase leads to manager-ddd subagent usage (ANALYZE-PRESERVE-IMPROVE)
+- Synchronization phase leads to manager-docs subagent usage
 
 ### DDD Development Approach
 
@@ -530,7 +530,7 @@ Permission errors: Review settings.json and file permissions manually
 
 Integration errors: Use the expert-devops subagent to resolve issues
 
-MoAI-ADK errors: When MoAI-ADK specific errors occur (workflow failures, agent issues, command problems), suggest user to run /moai:9-feedback to report the issue
+Workflow-specific errors: When workflow-specific failures occur (agent issues, command problems), suggest reporting them through the repository issue tracker
 
 ### Resumable Agents
 
@@ -897,4 +897,72 @@ Last Updated: 2026-01-22
 Language: English
 Core Rule: Alfred is an orchestrator; direct implementation is prohibited
 
-For detailed patterns on plugins, sandboxing, headless mode, and version management, refer to Skill("moai-foundation-claude").
+For detailed patterns on plugins, sandboxing, headless mode, and version management, refer to the Claude Code reference documentation.
+
+---
+
+# Behavioral Guidelines
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

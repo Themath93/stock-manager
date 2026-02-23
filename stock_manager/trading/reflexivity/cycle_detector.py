@@ -1,5 +1,6 @@
 """Boom-bust cycle detection based on Soros reflexivity."""
 
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 import logging
@@ -7,6 +8,17 @@ import logging
 from .thesis import CycleStage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CycleAnalysis:
+    """Extended cycle detection result with intermediate metrics."""
+    stage: CycleStage
+    trend_strength: Decimal     # 0.0-1.0, strength of current trend
+    volume_pattern: str         # "increasing", "decreasing", "neutral", "climactic", "elevated", "normal"
+    volatility: Decimal         # 0.0-1.0 normalized volatility
+    momentum: int               # -1, 0, +1 directional momentum
+
 
 class BoomBustCycleDetector:
     """Identifies current stage of boom-bust cycle."""
@@ -64,6 +76,79 @@ class BoomBustCycleDetector:
         except Exception as e:
             logger.error(f"Cycle detection failed: {e}")
             return CycleStage.INCEPTION
+
+    def detect_stage_full(
+        self,
+        symbol: str,
+        lookback_days: int = 90
+    ) -> CycleAnalysis:
+        """Detect cycle stage with full intermediate metrics.
+
+        Returns CycleAnalysis with stage matching detect_stage() output,
+        plus trend_strength, volume_pattern, volatility, momentum.
+        """
+        try:
+            from stock_manager.adapters.broker.kis.apis.domestic_stock.basic import (
+                inquire_daily_price
+            )
+
+            response = inquire_daily_price(self.client, symbol, period=str(lookback_days))
+            if response.get("rt_cd") != "0":
+                logger.warning(f"Failed to get data for {symbol}")
+                return CycleAnalysis(
+                    stage=CycleStage.INCEPTION,
+                    trend_strength=Decimal("0"),
+                    volume_pattern="normal",
+                    volatility=Decimal("0"),
+                    momentum=0,
+                )
+
+            daily_prices = response.get("output2", [])
+            if len(daily_prices) < 20:
+                return CycleAnalysis(
+                    stage=CycleStage.INCEPTION,
+                    trend_strength=Decimal("0"),
+                    volume_pattern="normal",
+                    volatility=Decimal("0"),
+                    momentum=0,
+                )
+
+            trend_strength = self._calculate_trend_strength(daily_prices)
+            volume_pattern = self._analyze_volume_pattern(daily_prices)
+            volatility = self._calculate_volatility(daily_prices)
+            momentum = self._calculate_momentum_acceleration(daily_prices)
+
+            # Classify stage (same logic as detect_stage)
+            if trend_strength < Decimal("0.3"):
+                stage = CycleStage.INCEPTION
+            elif trend_strength < Decimal("0.6") and momentum > 0:
+                stage = CycleStage.ACCELERATION
+            elif trend_strength >= Decimal("0.6") and volatility > Decimal("0.5"):
+                stage = CycleStage.TESTING
+            elif trend_strength >= Decimal("0.8") and volume_pattern == "climactic":
+                stage = CycleStage.EUPHORIA
+            elif trend_strength >= Decimal("0.6") and momentum < 0:
+                stage = CycleStage.TWILIGHT
+            else:
+                stage = CycleStage.COLLAPSE
+
+            return CycleAnalysis(
+                stage=stage,
+                trend_strength=trend_strength,
+                volume_pattern=volume_pattern,
+                volatility=volatility,
+                momentum=momentum,
+            )
+
+        except Exception as e:
+            logger.error(f"Full cycle detection failed: {e}")
+            return CycleAnalysis(
+                stage=CycleStage.INCEPTION,
+                trend_strength=Decimal("0"),
+                volume_pattern="normal",
+                volatility=Decimal("0"),
+                momentum=0,
+            )
 
     def _calculate_trend_strength(self, daily_prices: list[dict]) -> Decimal:
         """Calculate trend strength (0-1)."""

@@ -9,15 +9,97 @@ Stock Manager는 국내 주식 운용을 위한 Python 3.13 기반 트레이딩 
 - 주문 실행, 재조정, 리스크 이벤트에 대한 Slack 알림 연동.
 - 개발/CI에서 사용할 수 있는 오프라인 안전 검증 경로(`mock`) 제공.
 
+## 시스템 아키텍처
+
+```
+CLI (main.py)
+  └─ TradingEngine (engine.py)
+       ├─ Strategy Layer
+       │    ├─ GrahamScreener (기존)
+       │    └─ ConsensusStrategy (신규) ← Strategy ABC drop-in
+       │         └─ ConsensusEvaluator
+       │              ├─ 10 Investor Personas (병렬 평가)
+       │              │   Graham, Buffett, Lynch, Soros, Dalio,
+       │              │   Munger, Templeton, Livermore, Fisher, Simons
+       │              ├─ Wood Advisory (10+1, 투표 제외)
+       │              └─ VoteAggregator (7/10 이상 BUY → 통과)
+       ├─ TradingPipelineRunner (11-state FSM)
+       │    ├─ BuySpecialist → KIS 매수 주문
+       │    ├─ PositionMonitor (손절/익절/트레일링스톱)
+       │    └─ SellSpecialist → KIS 매도 주문
+       ├─ KIS Broker Adapter (모의/실전 자동 전환)
+       ├─ PipelineJsonLogger (NDJSON, 12 이벤트 타입)
+       └─ Slack Notifications (Block Kit, 5채널 라우팅)
+```
+
 ## 저장소 구조 (요약)
-- `stock_manager/`: 핵심 애플리케이션 코드.
-- `stock_manager/cli/`: setup/doctor/smoke/run/trade 명령 핸들러.
-- `stock_manager/adapters/broker/kis/`: 한국 투자사(KIS) 연동 전송 레이어와 설정.
-- `stock_manager/trading/`: 주문, 전략, 리스크, 생명주기(런타임) 서비스.
-- `stock_manager/notifications/`: Slack 이벤트 포맷터 및 알림 전송기.
-- `stock_manager/qa/`: mock 승격 게이트(Mock Promotion Gate) 검사기.
-- `scripts/`: 보조 스크립트.
-- `tests/unit/`, `tests/integration/`: 테스트 스위트.
+
+```
+stock_manager/
+├── cli/                          # CLI 명령 핸들러
+├── adapters/broker/kis/          # KIS 증권사 연동 (모의/실전)
+├── trading/
+│   ├── strategies/               # 전략 (graham, consensus)
+│   ├── personas/                 # 10+1 투자 페르소나
+│   │   └── prompts/              # LLM 시스템 프롬프트 (YAML)
+│   ├── consensus/                # 투표 집계, 평가기, 파서
+│   ├── pipeline/                 # 11-state 파이프라인 (runner, buy/sell, monitor)
+│   ├── indicators/               # 기술 지표 + KIS 데이터 페처
+│   ├── llm/                      # LLM 클라이언트, 서킷브레이커
+│   ├── logging/                  # NDJSON 파이프라인 로거
+│   └── reflexivity/              # Soros 반사성 사이클 분석
+├── notifications/                # Slack Block Kit 알림
+├── pipeline/                     # 기본 지표 함수
+├── qa/                           # Mock Promotion Gate
+└── tests/                        # 단위/통합 테스트
+```
+
+## Consensus 트레이딩 파이프라인
+
+### 10+1 페르소나 시스템
+
+10명의 투자 대가 페르소나가 각 종목을 독립적으로 평가합니다. 각 페르소나는 고유한 투자 철학(가치투자, 성장투자, 모멘텀 등)에 기반한 규칙으로 BUY/SELL/HOLD 투표를 수행합니다.
+
+| 페르소나 | 투자 철학 |
+|----------|-----------|
+| Benjamin Graham | 안전 마진 중심 가치투자 |
+| Warren Buffett | 경제적 해자, 장기 보유 |
+| Peter Lynch | 성장주, 일상에서 발견하는 투자 |
+| George Soros | 반사성 이론, 매크로 모멘텀 |
+| Ray Dalio | 리스크 패리티, 분산 투자 |
+| Charlie Munger | 역발상, 정신 모델 |
+| John Templeton | 글로벌 가치투자, 역발상 |
+| Jesse Livermore | 가격 추세, 모멘텀 |
+| Philip Fisher | 성장주 질적 분석 |
+| Jim Simons | 계량적 신호, 통계 차익 |
+
+**Cathie Wood Advisory**: 11번째 페르소나로 혁신 기술 관점의 자문을 제공합니다. 투표에는 포함되지 않으며, 별도 참고 의견으로 활용됩니다.
+
+### 투표 집계 (VoteAggregator)
+
+4단계 게이트를 통해 합의 결과를 판정합니다.
+
+1. **정족수 확인**: 전체 페르소나의 60% 이상이 투표에 참여해야 합니다.
+2. **임계값 확인**: 10명 중 7명 이상이 BUY 투표를 해야 합니다.
+3. **최소 확신도**: 페르소나별 확신도 점수가 0.5 이상이어야 합니다.
+4. **카테고리 다양성**: 서로 다른 투자 철학 카테고리에서 2개 이상의 BUY가 있어야 합니다.
+
+### Hybrid 2-Stage 아키텍처
+
+불필요한 LLM 비용을 최소화하면서 정확도를 높이는 2단계 구조를 채택합니다.
+
+- **1단계 (규칙 기반)**: 모든 종목에 대해 규칙 기반 평가를 수행합니다. 추가 비용 없이 빠르게 후보군을 좁힙니다.
+- **2단계 (선택적 LLM 검증)**: 1단계를 통과한 약 15%의 종목에 대해 `claude-agent-sdk`를 사용한 LLM 검증을 수행합니다. 모호한 케이스나 고확신 케이스에서만 트리거됩니다.
+
+### 11-state 파이프라인 상태 전이
+
+```
+WATCHLIST → SCREENING → EVALUATING → CONSENSUS_APPROVED
+                                    → CONSENSUS_REJECTED
+CONSENSUS_APPROVED → BUY_PENDING → BOUGHT → MONITORING
+MONITORING → SELL_PENDING → SOLD
+(모든 상태에서) → ERROR
+```
 
 ## 사전 요구 사항
 - Python 3.13+
@@ -96,6 +178,13 @@ stock-manager setup
 - `--strategy-auto-discover`, `--strategy-discovery-limit`, `--strategy-discovery-fallback-symbols`
 - `--websocket-monitoring-enabled`, `--websocket-execution-notice-enabled`
 
+## 전략 비교
+
+| 전략 | 설명 | 사용법 |
+|------|------|--------|
+| `graham` | 벤저민 그레이엄 가치투자 스크리너 | `--strategy graham` |
+| `consensus` | 10+1 페르소나 합의 투표 시스템 | `--strategy consensus` |
+
 ## 거래 동작 개요
 1. 환경 변수/검증 결과로 런타임 컨텍스트를 구성합니다.
 2. 브로커 클라이언트 인증을 수행합니다.
@@ -146,6 +235,21 @@ uv run pytest --no-cov tests/unit/test_doctor.py -q
 - Slack 알림 및 진단 경로 단언
 - 모의 모드 자격 증명/안전 장치 테스트
 
+## 테스트
+
+```bash
+# 전체 테스트 실행
+uv run pytest
+
+# 커버리지 포함
+uv run pytest --cov=stock_manager --cov-fail-under=80
+
+# 특정 모듈 테스트
+uv run pytest tests/unit/test_consensus_pipeline.py -v
+uv run pytest tests/unit/test_pipeline_runner.py -v
+uv run pytest tests/unit/test_buy_specialist.py -v
+```
+
 ## 사용 예시
 
 ```bash
@@ -155,6 +259,12 @@ KIS_USE_MOCK=true uv run stock-manager smoke
 # 모의 모드: 전략 자동 탐색으로 1개 종목 실행
 KIS_USE_MOCK=true uv run stock-manager run --duration-sec 60 --strategy graham --strategy-auto-discover
 
+# 모의 모드: Consensus 전략으로 특정 종목 평가
+stock-manager run --strategy consensus --strategy-symbols "005930,000660,035420" --duration-sec 300
+
+# 모의 모드: 자동 탐색 + fallback 종목
+stock-manager run --strategy consensus --strategy-auto-discover --strategy-discovery-fallback-symbols "005930,000660"
+
 # 모의 모드: 주문 실행(비실거래)
 KIS_USE_MOCK=true uv run stock-manager trade buy 005930 1 --price 70000 --execute
 
@@ -163,9 +273,55 @@ KIS_USE_MOCK=false uv run stock-manager trade buy 005930 1 --price 70000 --execu
 ```
 
 ## FAQ
-- `doctor` 실행 결과가 “Doctor result: NOT OK”라면, 환경 변수를 수정한 뒤 다시 실행하세요.
+- `doctor` 실행 결과가 "Doctor result: NOT OK"라면, 환경 변수를 수정한 뒤 다시 실행하세요.
 - promotion gate 메시지로 주문이 막히면 mock gate 스크립트를 실행해 산출물을 확인하세요.
 - smoke는 통과했는데 mock 모드에서 run이 실패한다면 계좌 형식과 출력에 포함된 OPSQ2000 힌트를 확인하세요.
+
+## Contributing
+
+### 개발 환경
+
+- Python 3.13 이상 필요
+- 패키지 및 태스크 실행에 `uv`를 사용합니다.
+
+```bash
+uv sync --extra dev --extra cli
+```
+
+### 브랜치 전략
+
+브랜치명은 `feature/SPEC-XXX-description` 형식을 따릅니다.
+
+예시:
+- `feature/SPEC-001-consensus-strategy`
+- `feature/SPEC-002-trailing-stop`
+
+### PR 제출 전 필수 확인 사항
+
+```bash
+# 테스트 통과 확인
+uv run pytest
+
+# 린트 검사
+uv run ruff check
+
+# 타입 검사
+uv run mypy stock_manager
+```
+
+### 커밋 메시지
+
+한국어 또는 영어로 작성하며, 변경 사유를 명시합니다.
+
+예시:
+- `feat: Consensus 전략 투표 집계기 추가 (7/10 임계값)`
+- `fix: KIS 모의 모드에서 계좌 번호 검증 누락 수정`
+
+### 코드 스타일
+
+- `ruff` 포맷터 규칙을 준수합니다.
+- 모든 공개 함수와 클래스에 type hints를 필수로 작성합니다.
+- 새로운 비즈니스 로직에는 단위 테스트를 함께 제출합니다.
 
 ## 참고
 - 개발 기본 경로는 모의 모드입니다.

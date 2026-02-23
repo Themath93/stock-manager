@@ -1,0 +1,53 @@
+{
+  "mode": "mock",
+  "pass": true,
+  "timestamp": "2026-02-23T13:24:55.592514+00:00",
+  "finished_at": "2026-02-23T13:24:57.340264+00:00",
+  "fail_fast": true,
+  "checks": [
+    {
+      "name": "unit_engine_risk_executor",
+      "command": "uv run pytest tests/unit/test_engine.py tests/unit/test_risk.py tests/unit/test_order_executor.py --no-cov -q",
+      "critical": true,
+      "passed": true,
+      "exit_code": 0,
+      "duration_sec": 0.525,
+      "timed_out": false,
+      "stdout_tail": "============================= test session starts ==============================\nplatform darwin -- Python 3.11.11, pytest-9.0.2, pluggy-1.6.0\nrootdir: /Users/byungwoyoon/Desktop/Projects/stock-manager\nconfigfile: pyproject.toml\nplugins: anyio-4.12.1, mock-3.15.1, asyncio-1.3.0, cov-7.0.0\nasyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 94 items\n\ntests/unit/test_engine.py .............................................. [ 48%]\n......................                                                   [ 72%]\ntests/unit/test_risk.py ......................                           [ 95%]\ntests/unit/test_order_executor.py ....                                   [100%]\n\n============================== 94 passed in 0.15s ==============================\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "smoke_auth_price_balance",
+      "command": "uv run stock-manager smoke",
+      "critical": true,
+      "passed": true,
+      "exit_code": 0,
+      "duration_sec": 0.599,
+      "timed_out": false,
+      "stdout_tail": "Smoke OK: auth=ok, price(005930)=193000, holdings=0\n",
+      "stderr_tail": "2026-02-23 22:24:56 | INFO     | stock_manager.adapters.broker.kis.client | Successfully authenticated with KIS API\n"
+    },
+    {
+      "name": "unit_cli_live_gate",
+      "command": "uv run pytest tests/unit/test_cli_main.py::test_trade_execute_blocks_live_without_promotion_gate_even_with_confirm_live tests/unit/test_cli_main.py::test_run_blocks_live_without_promotion_gate --no-cov -q",
+      "critical": true,
+      "passed": true,
+      "exit_code": 0,
+      "duration_sec": 0.305,
+      "timed_out": false,
+      "stdout_tail": "============================= test session starts ==============================\nplatform darwin -- Python 3.11.11, pytest-9.0.2, pluggy-1.6.0\nrootdir: /Users/byungwoyoon/Desktop/Projects/stock-manager\nconfigfile: pyproject.toml\nplugins: anyio-4.12.1, mock-3.15.1, asyncio-1.3.0, cov-7.0.0\nasyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 2 items\n\ntests/unit/test_cli_main.py ..                                           [100%]\n\n============================== 2 passed in 0.03s ===============================\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "unit_state_roundtrip",
+      "command": "uv run pytest tests/unit/test_state.py::TestTradingState::test_risk_controls_round_trip --no-cov -q",
+      "critical": false,
+      "passed": true,
+      "exit_code": 0,
+      "duration_sec": 0.319,
+      "timed_out": false,
+      "stdout_tail": "============================= test session starts ==============================\nplatform darwin -- Python 3.11.11, pytest-9.0.2, pluggy-1.6.0\nrootdir: /Users/byungwoyoon/Desktop/Projects/stock-manager\nconfigfile: pyproject.toml\nplugins: anyio-4.12.1, mock-3.15.1, asyncio-1.3.0, cov-7.0.0\nasyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 1 item\n\ntests/unit/test_state.py .                                               [100%]\n\n============================== 1 passed in 0.01s ===============================\n",
+      "stderr_tail": ""
+    }
+  ]
+}

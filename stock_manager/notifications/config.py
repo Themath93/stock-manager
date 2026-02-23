@@ -23,6 +23,11 @@ class SlackConfig(BaseSettings):
         SLACK_DEFAULT_CHANNEL: Default channel for all notifications
         SLACK_ORDER_CHANNEL: Override channel for order events (optional)
         SLACK_ALERT_CHANNEL: Override channel for warnings/errors (optional)
+        SLACK_ANALYSIS_CHANNEL: Channel for analysis events (#trading-analysis)
+        SLACK_ORDERS_CHANNEL: Channel for order events (#trading-orders)
+        SLACK_POSITIONS_CHANNEL: Channel for position events (#trading-positions)
+        SLACK_ALERTS_CHANNEL: Channel for alert events (#trading-alerts)
+        SLACK_RESULTS_CHANNEL: Channel for trade result events (#trading-results)
         SLACK_MIN_LEVEL: Minimum notification level to send (default: "INFO")
     """
 
@@ -43,6 +48,13 @@ class SlackConfig(BaseSettings):
     async_enabled: bool = False
     queue_maxsize: int = 1000
 
+    # Pipeline-specific channels (loaded from SLACK_<NAME>_CHANNEL env vars)
+    analysis_channel: str = ""    # #trading-analysis
+    orders_channel: str = ""      # #trading-orders
+    positions_channel: str = ""   # #trading-positions
+    alerts_channel: str = ""      # #trading-alerts
+    results_channel: str = ""     # #trading-results
+
     def get_min_level(self) -> NotificationLevel:
         """Parse min_level string to NotificationLevel enum.
 
@@ -54,3 +66,42 @@ class SlackConfig(BaseSettings):
             return NotificationLevel[self.min_level.upper()]
         except KeyError:
             return NotificationLevel.INFO
+
+    def get_channel_for_event(self, event_type: str) -> str:
+        """Resolve the appropriate Slack channel for a pipeline event type.
+
+        Looks up the event type in CHANNEL_MAP, then resolves the channel
+        field on this config instance. Falls back to default_channel if the
+        mapped channel is empty.
+
+        Args:
+            event_type: Pipeline event type (e.g. "agent_vote", "buy_decision").
+
+        Returns:
+            Channel name string. Empty string if no channel configured.
+        """
+        field_name = CHANNEL_MAP.get(event_type, "default_channel")
+        channel = getattr(self, field_name, "") or ""
+        return channel or self.default_channel
+
+
+# Maps pipeline event types to SlackConfig channel field names.
+CHANNEL_MAP: dict[str, str] = {
+    # Analysis events -> analysis_channel
+    "screening_complete": "analysis_channel",
+    "agent_vote": "analysis_channel",
+    "advisory_vote": "analysis_channel",
+    "consensus_result": "analysis_channel",
+    # Order events -> orders_channel
+    "buy_decision": "orders_channel",
+    "order_executed": "orders_channel",
+    # Position events -> positions_channel
+    "state_change": "positions_channel",
+    "condition_check": "positions_channel",
+    # Alert events -> alerts_channel
+    "condition_warning": "alerts_channel",
+    "sell_trigger": "alerts_channel",
+    "error": "alerts_channel",
+    # Result events -> results_channel
+    "trade_complete": "results_channel",
+}

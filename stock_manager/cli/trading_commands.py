@@ -19,8 +19,10 @@ from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
 from stock_manager.adapters.broker.kis.client import KISRestClient
 from stock_manager.adapters.broker.kis.config import KISConfig
 from stock_manager.adapters.broker.kis.exceptions import KISAPIError
+from stock_manager.config.logging_config import setup_logging
 from stock_manager.engine import TradingEngine
 from stock_manager.trading import OrderExecutor, TradingConfig
+from stock_manager.notifications import SlackConfig, SlackNotifier
 from stock_manager.trading.strategies import resolve_strategy
 
 DEFAULT_SMOKE_SYMBOL = "005930"
@@ -242,6 +244,7 @@ def run_command(
     websocket_monitoring_enabled: bool = False,
     websocket_execution_notice_enabled: bool = False,
 ) -> None:
+    setup_logging()
     if duration_sec < 0:
         typer.echo("--duration-sec must be 0 or a positive integer.")
         raise typer.Exit(code=1)
@@ -259,6 +262,7 @@ def run_command(
         if not skip_auth:
             runtime.client.authenticate()
 
+        notifier = SlackNotifier(SlackConfig())
         engine = TradingEngine(
             client=runtime.client,
             config=TradingConfig(
@@ -277,6 +281,7 @@ def run_command(
             account_number=runtime.account_number,
             account_product_code=runtime.account_product_code,
             is_paper_trading=runtime.config.use_mock,
+            notifier=notifier,
         )
 
         stop_requested = False
@@ -389,6 +394,7 @@ def _execute_trade(
 
 
 def smoke_command() -> None:
+    setup_logging()
     runtime: RuntimeContext | None = None
     try:
         runtime = _build_runtime_context()

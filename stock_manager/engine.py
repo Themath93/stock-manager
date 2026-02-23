@@ -733,7 +733,21 @@ class TradingEngine:
                 get_volume_rank,
             )
 
-            response = get_volume_rank(self.client, is_paper_trading=False)
+            response = get_volume_rank(
+                self.client,
+                is_paper_trading=False,
+                FID_COND_MRKT_DIV_CODE="J",
+                FID_COND_SCR_DIV_CODE="20171",
+                FID_INPUT_ISCD="0001",
+                FID_DIV_CLS_CODE="0",
+                FID_BLNG_CLS_CODE="0",
+                FID_TRGT_CLS_CODE="111111111",
+                FID_TRGT_EXLS_CLS_CODE="000000",
+                FID_INPUT_PRICE_1="",
+                FID_INPUT_PRICE_2="",
+                FID_VOL_CNT="",
+                FID_INPUT_DATE_1="",
+            )
         except Exception:
             logger.warning("Strategy symbol discovery failed", exc_info=True)
             return fallback[:limit]
@@ -1157,6 +1171,13 @@ class TradingEngine:
                 scores = strategy.screen(symbols)
             except Exception:
                 logger.error("Strategy screen failed", exc_info=True)
+                self._notify(
+                    "strategy.error",
+                    NotificationLevel.ERROR,
+                    "Strategy Error",
+                    strategy=type(strategy).__name__,
+                    symbols=symbols,
+                )
                 return
 
             max_buys = int(getattr(self.config, "strategy_max_buys_per_cycle", 0) or 0)
