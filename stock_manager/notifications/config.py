@@ -29,6 +29,8 @@ class SlackConfig(BaseSettings):
         SLACK_ALERTS_CHANNEL: Channel for alert events (#trading-alerts)
         SLACK_RESULTS_CHANNEL: Channel for trade result events (#trading-results)
         SLACK_MIN_LEVEL: Minimum notification level to send (default: "INFO")
+        SLACK_APP_TOKEN: Slack App-Level Token for Socket Mode (xapp-...)
+        SLACK_ALLOWED_USER_IDS: Comma-separated Slack User IDs allowed to use bot (empty = all users)
     """
 
     _DEFAULT_ENV_FILE = str(default_env_file())
@@ -47,6 +49,10 @@ class SlackConfig(BaseSettings):
     min_level: str = "INFO"
     async_enabled: bool = False
     queue_maxsize: int = 1000
+
+    # Socket Mode (for Slack Bot trigger system)
+    app_token: SecretStr | None = None  # SLACK_APP_TOKEN (xapp-...)
+    allowed_user_ids: str = ""          # SLACK_ALLOWED_USER_IDS (comma-separated)
 
     # Pipeline-specific channels (loaded from SLACK_<NAME>_CHANNEL env vars)
     analysis_channel: str = ""    # #trading-analysis

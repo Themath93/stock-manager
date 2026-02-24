@@ -141,6 +141,71 @@ def build_app():
         """Run no-order smoke checks: auth + quote + balance."""
         smoke_command()
 
+    @app.command("slack")
+    def slack_bot() -> None:
+        """Start Slack Bot listener (Socket Mode) for /sm commands."""
+        import threading
+        import signal
+        import logging
+        from stock_manager.config.logging_config import setup_logging
+        setup_logging()
+        slack_log = logging.getLogger("slack_bolt")
+        slack_log.setLevel(logging.WARNING)
+
+        from stock_manager.notifications.config import SlackConfig
+        from stock_manager.slack_bot.session_manager import SessionManager
+        from stock_manager.slack_bot.app import create_slack_app
+
+        slack_config = SlackConfig()
+
+        if not slack_config.app_token:
+            typer.echo("Error: SLACK_APP_TOKEN is not set. Set it in .env (xapp-1-...)")
+            raise typer.Exit(code=1)
+
+        app_token = slack_config.app_token.get_secret_value()
+
+        def _on_engine_crash(exc: Exception) -> None:
+            typer.echo(f"[slack-bot] Engine crashed: {exc}")
+
+        session_manager = SessionManager(on_crash=_on_engine_crash)
+        bolt_app = create_slack_app(session_manager)
+
+        stop_event = threading.Event()
+
+        def _on_signal(signum, frame):
+            typer.echo("\n[slack-bot] Shutdown requested...")
+            if session_manager.is_running:
+                typer.echo("[slack-bot] Stopping active session...")
+                try:
+                    session_manager.stop_session()
+                except Exception as e:
+                    typer.echo(f"[slack-bot] Error stopping session: {e}")
+            stop_event.set()
+
+        signal.signal(signal.SIGINT, _on_signal)
+        signal.signal(signal.SIGTERM, _on_signal)
+
+        from slack_bolt.adapter.socket_mode import SocketModeHandler
+        handler = SocketModeHandler(bolt_app, app_token)
+
+        typer.echo("[slack-bot] Starting Slack Socket Mode listener...")
+        typer.echo("[slack-bot] Use /sm start|stop|status|config in Slack")
+        typer.echo("[slack-bot] Press Ctrl+C to stop")
+
+        # Start handler in background thread so we can catch signals
+        handler_thread = threading.Thread(target=handler.start, daemon=True)
+        handler_thread.start()
+
+        # Wait for shutdown signal
+        stop_event.wait()
+
+        typer.echo("[slack-bot] Shutting down...")
+        try:
+            handler.close()
+        except Exception:
+            pass
+        typer.echo("[slack-bot] Done.")
+
     return app
 
 
