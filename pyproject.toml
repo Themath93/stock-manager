@@ -19,6 +19,7 @@ dependencies = [
   "pydantic-settings>=2.4",
   "python-dotenv>=1.0",
   "rich>=13.8",
+  "slack-bolt>=1.18",
   "slack-sdk>=3.27",
   "typer>=0.12",
   "websocket-client>=1.7",
