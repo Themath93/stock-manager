@@ -57,11 +57,9 @@ def create_slack_app(session_manager) -> Any:
     from stock_manager.notifications.config import SlackConfig
     slack_config = SlackConfig()
 
+    # Socket Mode: token only, no signing_secret or process_before_response needed
     app = App(
         token=slack_config.bot_token.get_secret_value() if slack_config.bot_token else "",
-        signing_secret=os.environ.get("SLACK_SIGNING_SECRET", ""),
-        # Disable Bolt's signal handling - we manage signals in the CLI
-        process_before_response=True,
     )
 
     @app.command("/sm")
