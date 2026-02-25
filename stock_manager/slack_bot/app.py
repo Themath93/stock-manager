@@ -66,7 +66,7 @@ def create_slack_app(session_manager) -> Any:
     def handle_sm_command(ack, respond, command, client):
         """Main /sm command handler.
 
-        Pattern: ack() immediately, process in background, respond() with result.
+        Pattern: ack() immediately, then dispatch synchronously (respond() has no timeout after ack).
         """
         from stock_manager.slack_bot.formatters import format_error
 
@@ -84,17 +84,20 @@ def create_slack_app(session_manager) -> Any:
             )
             return
 
-        # Process in background to avoid blocking Bolt's main loop
-        def _process():
+        # Process synchronously — ack() already sent, no 3s constraint on respond()
+        try:
             _dispatch_command(
                 text=text,
                 user_id=user_id,
                 respond=respond,
                 session_manager=session_manager,
             )
-
-        thread = threading.Thread(target=_process, daemon=True)
-        thread.start()
+        except Exception as exc:
+            logger.error("Unhandled error in /sm: %s", exc, exc_info=True)
+            try:
+                respond(response_type="ephemeral", **format_error(f"Internal error: {exc}"))
+            except Exception:
+                pass
 
     @app.error
     def handle_error(error, body, logger):
