@@ -510,7 +510,7 @@ def approve_websocket_key(
         "custtype": custtype,
     }
 
-    data = {}
+    data: dict[str, Any] = {}
 
     response = httpx.post(url, json=data, headers=headers, timeout=30.0)
     response.raise_for_status()

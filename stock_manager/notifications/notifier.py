@@ -9,17 +9,13 @@ Uses slack_sdk.WebClient for message posting with:
 import logging
 import queue
 import threading
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import Any, Protocol, cast
 
 from stock_manager.notifications.config import SlackConfig
 from stock_manager.notifications.formatters import format_notification
 from stock_manager.notifications.models import NotificationEvent, NotificationLevel
 
 logger = logging.getLogger(__name__)
-
-
-if TYPE_CHECKING:
-    from slack_sdk import WebClient
 
 
 class _SlackClient(Protocol):

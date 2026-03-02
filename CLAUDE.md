@@ -16,6 +16,15 @@ Alfred is the Strategic Orchestrator for Claude Code. All tasks must be delegate
 - Direct tool usage permitted for simpler operations
 - Appropriate Agent Selection: Optimal agent matched to each task
 
+### Project Start Links
+
+- `AGENTS.md`
+- `docs/knowledge-map.md`
+- `docs/quality-gates.md`
+- `docs/harness-engineering-plan.md`
+- `docs/harness-week1-execution-plan.md`
+- `docs/adr/README.md`
+
 ---
 
 ## 2. Request Processing Pipeline
@@ -40,6 +49,7 @@ Core Skills (load when needed):
 - Skill("git-master") for git workflow guidance
 - Skill("frontend-ui-ux") for UI and interaction work
 - Skill("find-skills") to discover additional capabilities
+- Skill("harness-diagnostics") for codebase and skill harness maturity diagnostics
 
 ### Phase 2: Route
 

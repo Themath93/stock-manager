@@ -20,24 +20,26 @@ from typing import Any, Dict
 _DOMESTIC_STOCK_BASE = "/uapi/domestic-stock/v1/quotations"
 
 # TR_ID Constants
-TR_IDS = {
+TR_IDS: dict[str, dict[str, str | None]] = {
     # Both real and paper trading supported
-    "v1_국내주식-021": {"real": "FHKUP03500100", "paper": "FHKUP03500100"},  # Daily index chart price
-
+    "v1_국내주식-021": {
+        "real": "FHKUP03500100",
+        "paper": "FHKUP03500100",
+    },  # Daily index chart price
     # Real trading only (paper trading not supported)
     "v1_국내주식-045": {"real": "FHKUP03500200", "paper": None},  # Time index chart price
     "v1_국내주식-055": {"real": "FHPST01390000", "paper": None},  # VI status
     "v1_국내주식-063": {"real": "FHPUP02100000", "paper": None},  # Index price
     "v1_국내주식-065": {"real": "FHPUP02120000", "paper": None},  # Index daily price
     "v1_국내주식-066": {"real": "FHPUP02140000", "paper": None},  # Index category price
-    "국내주식-040": {"real": "CTCA0903R", "paper": None},         # Check holiday
-    "국내주식-064": {"real": "FHPUP02110100", "paper": None},     # Index tick price
-    "국내주식-119": {"real": "FHPUP02110200", "paper": None},     # Index time price
-    "국내주식-121": {"real": "FHPST01840000", "paper": None},     # Expected index trend
-    "국내주식-122": {"real": "FHKUP11750000", "paper": None},     # Expected total index
-    "국내주식-141": {"real": "FHKST01011800", "paper": None},     # News title
-    "국내주식-155": {"real": "FHPST07020000", "paper": None},     # Compare interest
-    "국내주식-160": {"real": "HHMCM000002C0", "paper": None},     # Market time
+    "국내주식-040": {"real": "CTCA0903R", "paper": None},  # Check holiday
+    "국내주식-064": {"real": "FHPUP02110100", "paper": None},  # Index tick price
+    "국내주식-119": {"real": "FHPUP02110200", "paper": None},  # Index time price
+    "국내주식-121": {"real": "FHPST01840000", "paper": None},  # Expected index trend
+    "국내주식-122": {"real": "FHKUP11750000", "paper": None},  # Expected total index
+    "국내주식-141": {"real": "FHKST01011800", "paper": None},  # News title
+    "국내주식-155": {"real": "FHPST07020000", "paper": None},  # Compare interest
+    "국내주식-160": {"real": "HHMCM000002C0", "paper": None},  # Market time
 }
 
 
@@ -61,11 +63,15 @@ def _get_tr_id(api_id: str, is_paper_trading: bool = False) -> str:
     tr_id_info = TR_IDS[api_id]
 
     if is_paper_trading:
-        if tr_id_info["paper"] is None:
+        paper_tr_id = tr_id_info["paper"]
+        if paper_tr_id is None:
             raise ValueError(f"Paper trading is not supported for {api_id}")
-        return tr_id_info["paper"]
+        return paper_tr_id
 
-    return tr_id_info["real"]
+    real_tr_id = tr_id_info["real"]
+    if real_tr_id is None:
+        raise ValueError(f"Real trading TR_ID is not configured for {api_id}")
+    return real_tr_id
 
 
 def get_inquire_daily_indexchartprice(

@@ -10,7 +10,13 @@ TR_ID Reference:
 - Paper Trading: Not supported for ranking APIs
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, TypedDict
+
+
+class TrIdInfo(TypedDict):
+    real: str | None
+    paper: str | None
+
 
 # API Endpoints
 _BASE_URL = "https://api.koreainvestment.com"
@@ -18,7 +24,7 @@ _RANKING_BASE = "/uapi/domestic-stock/v1/ranking"
 _QUOTATIONS_BASE = "/uapi/domestic-stock/v1/quotations"
 
 # TR_ID Constants
-TR_IDS = {
+TR_IDS: dict[str, TrIdInfo] = {
     # Paper trading NOT supported for any ranking APIs
     "v1_국내주식-047": {"real": "FHPST01710000", "paper": None},  # Volume rank
     "v1_국내주식-088": {"real": "FHPST01700000", "paper": None},  # Fluctuation
@@ -34,14 +40,14 @@ TR_IDS = {
     "v1_국내주식-103": {"real": "FHPST01820000", "paper": None},  # Expected trans up/down
     "v1_국내주식-104": {"real": "FHPST01860000", "paper": None},  # Traded by company
     "v1_국내주식-105": {"real": "FHPST01870000", "paper": None},  # Near new high/low
-    "국내주식-089": {"real": "FHPST01720000", "paper": None},    # Quote balance
-    "국내주식-106": {"real": "HHKDB13470100", "paper": None},    # Dividend rate
-    "국내주식-107": {"real": "FHKST190900C0", "paper": None},    # Bulk trans num
-    "국내주식-109": {"real": "FHKST17010000", "paper": None},    # Credit balance
-    "국내주식-133": {"real": "FHPST04820000", "paper": None},    # Short sale
-    "국내주식-138": {"real": "FHPST02340000", "paper": None},    # Overtime fluctuation
-    "국내주식-139": {"real": "FHPST02350000", "paper": None},    # Overtime volume
-    "국내주식-214": {"real": "HHMCM000100C0", "paper": None},    # HTS top view
+    "국내주식-089": {"real": "FHPST01720000", "paper": None},  # Quote balance
+    "국내주식-106": {"real": "HHKDB13470100", "paper": None},  # Dividend rate
+    "국내주식-107": {"real": "FHKST190900C0", "paper": None},  # Bulk trans num
+    "국내주식-109": {"real": "FHKST17010000", "paper": None},  # Credit balance
+    "국내주식-133": {"real": "FHPST04820000", "paper": None},  # Short sale
+    "국내주식-138": {"real": "FHPST02340000", "paper": None},  # Overtime fluctuation
+    "국내주식-139": {"real": "FHPST02350000", "paper": None},  # Overtime volume
+    "국내주식-214": {"real": "HHMCM000100C0", "paper": None},  # HTS top view
 }
 
 
@@ -65,11 +71,15 @@ def _get_tr_id(api_id: str, is_paper_trading: bool = False) -> str:
     tr_id_info = TR_IDS[api_id]
 
     if is_paper_trading:
-        if tr_id_info["paper"] is None:
+        paper_tr_id = tr_id_info["paper"]
+        if paper_tr_id is None:
             raise ValueError(f"Paper trading is not supported for {api_id}")
-        return tr_id_info["paper"]
+        return paper_tr_id
 
-    return tr_id_info["real"]
+    real_tr_id = tr_id_info["real"]
+    if real_tr_id is None:
+        raise ValueError(f"Real trading TR_ID missing for {api_id}")
+    return real_tr_id
 
 
 def get_volume_rank(

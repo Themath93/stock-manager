@@ -6,9 +6,6 @@ Following Kent Beck TDD methodology:
 - REFACTOR: Improve code while keeping tests green
 """
 
-import pytest
-from unittest.mock import MagicMock
-
 from stock_manager.adapters.broker.kis.apis.domestic_stock import orders
 
 
@@ -64,8 +61,13 @@ class TestCashOrder:
 
     def test_cash_order_buy_defaults(self):
         result = orders.cash_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01", order_type="buy",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
             is_paper_trading=False,
         )
         assert result["tr_id"] == "TTTC0012U"
@@ -78,34 +80,56 @@ class TestCashOrder:
 
     def test_cash_order_sell(self):
         result = orders.cash_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01", order_type="sell",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="sell",
             is_paper_trading=False,
         )
         assert result["tr_id"] == "TTTC0011U"
 
     def test_cash_order_with_price(self):
         result = orders.cash_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="00", ord_qty=10, ord_unsl="01", order_type="buy",
-            ord_prc=80000, is_paper_trading=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="00",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
+            ord_prc=80000,
+            is_paper_trading=False,
         )
         assert result["params"]["ORD_DVSN"] == "00"
         assert result["params"]["ORD_UNPR"] == "80000"
 
     def test_cash_order_paper_trading(self):
         result = orders.cash_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01", order_type="buy",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
             is_paper_trading=True,
         )
         assert result["tr_id"] == "VTTC0012U"
 
     def test_cash_order_custom_tr_id(self):
         result = orders.cash_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01", order_type="buy",
-            tr_id="CUSTOM_TR_ID", is_paper_trading=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
+            tr_id="CUSTOM_TR_ID",
+            is_paper_trading=False,
         )
         assert result["tr_id"] == "CUSTOM_TR_ID"
 
@@ -140,30 +164,50 @@ class TestCreditOrder:
 
     def test_credit_order_buy(self):
         result = orders.credit_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01", order_type="buy",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
         )
         assert result["tr_id"] == "TTTC0052U"
 
     def test_credit_order_sell(self):
         result = orders.credit_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01", order_type="sell",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="sell",
         )
         assert result["tr_id"] == "TTTC0051U"
 
     def test_credit_order_with_price(self):
         result = orders.credit_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="00", ord_qty=10, ord_unsl="01", order_type="buy",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="00",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
             ord_prc=80000,
         )
         assert result["params"]["ORD_PRC"] == "80000"
 
     def test_credit_order_custom_tr_id(self):
         result = orders.credit_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01", order_type="buy",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
+            order_type="buy",
             tr_id="CUSTOM_TR_ID",
         )
         assert result["tr_id"] == "CUSTOM_TR_ID"
@@ -179,23 +223,32 @@ class TestOrderCancel:
 
     def test_order_cancel_real_trading(self):
         result = orders.order_cancel(
-            cano="12345678", acnt_prdt_cd="01", orgn_odno="0000012345",
-            orgn_ord_dv="00", is_paper_trading=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            orgn_odno="0000012345",
+            orgn_ord_dv="00",
+            is_paper_trading=False,
         )
         assert result["tr_id"] == "TTTC0013U"
         assert result["params"]["ORGN_ODNO"] == "0000012345"
 
     def test_order_cancel_paper_trading(self):
         result = orders.order_cancel(
-            cano="12345678", acnt_prdt_cd="01", orgn_odno="0000012345",
-            orgn_ord_dv="00", is_paper_trading=True,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            orgn_odno="0000012345",
+            orgn_ord_dv="00",
+            is_paper_trading=True,
         )
         assert result["tr_id"] == "VTTC0013U"
 
     def test_order_cancel_custom_tr_id(self):
         result = orders.order_cancel(
-            cano="12345678", acnt_prdt_cd="01", orgn_odno="0000012345",
-            orgn_ord_dv="00", tr_id="CUSTOM_TR_ID",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            orgn_odno="0000012345",
+            orgn_ord_dv="00",
+            tr_id="CUSTOM_TR_ID",
         )
         assert result["tr_id"] == "CUSTOM_TR_ID"
 
@@ -210,14 +263,17 @@ class TestInquirePsblRvsecncl:
 
     def test_inquire_psbl_rvsecncl_defaults(self):
         result = orders.inquire_psbl_rvsecncl(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC0084R"
         assert result["params"]["CANO"] == "12345678"
 
     def test_inquire_psbl_rvsecncl_custom_tr_id(self):
         result = orders.inquire_psbl_rvsecncl(
-            cano="12345678", acnt_prdt_cd="01", tr_id="CUSTOM_TR_ID",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            tr_id="CUSTOM_TR_ID",
         )
         assert result["tr_id"] == "CUSTOM_TR_ID"
 
@@ -232,30 +288,42 @@ class TestInquireDailyCcld:
 
     def test_inquire_daily_ccld_recent_real(self):
         result = orders.inquire_daily_ccld(
-            cano="12345678", acnt_prdt_cd="01", ord_dt="20240115",
-            is_paper_trading=False, is_old_period=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            ord_dt="20240115",
+            is_paper_trading=False,
+            is_old_period=False,
         )
         assert result["tr_id"] == "TTTC0081R"
         assert result["params"]["ORD_DT"] == "20240115"
 
     def test_inquire_daily_ccld_recent_paper(self):
         result = orders.inquire_daily_ccld(
-            cano="12345678", acnt_prdt_cd="01", ord_dt="20240115",
-            is_paper_trading=True, is_old_period=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            ord_dt="20240115",
+            is_paper_trading=True,
+            is_old_period=False,
         )
         assert result["tr_id"] == "VTTC0081R"
 
     def test_inquire_daily_ccld_old_real(self):
         result = orders.inquire_daily_ccld(
-            cano="12345678", acnt_prdt_cd="01", ord_dt="20231001",
-            is_paper_trading=False, is_old_period=True,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            ord_dt="20231001",
+            is_paper_trading=False,
+            is_old_period=True,
         )
         assert result["tr_id"] == "CTSC9215R"
 
     def test_inquire_daily_ccld_old_paper(self):
         result = orders.inquire_daily_ccld(
-            cano="12345678", acnt_prdt_cd="01", ord_dt="20231001",
-            is_paper_trading=True, is_old_period=True,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            ord_dt="20231001",
+            is_paper_trading=True,
+            is_old_period=True,
         )
         assert result["tr_id"] == "VTSC9215R"
 
@@ -270,7 +338,9 @@ class TestInquireBalance:
 
     def test_inquire_balance_real_trading(self):
         result = orders.inquire_balance(
-            cano="12345678", acnt_prdt_cd="01", is_paper_trading=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            is_paper_trading=False,
         )
         assert result["tr_id"] == "TTTC8434R"
         assert result["params"]["AFHR_FLPR_YN"] == "N"
@@ -279,7 +349,9 @@ class TestInquireBalance:
 
     def test_inquire_balance_paper_trading(self):
         result = orders.inquire_balance(
-            cano="12345678", acnt_prdt_cd="01", is_paper_trading=True,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            is_paper_trading=True,
         )
         assert result["tr_id"] == "VTTC8434R"
 
@@ -305,13 +377,16 @@ class TestInquireBalanceRlzPl:
 
     def test_inquire_balance_rlz_pl_defaults(self):
         result = orders.inquire_balance_rlz_pl(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC8494R"
 
     def test_inquire_balance_rlz_pl_custom_tr_id(self):
         result = orders.inquire_balance_rlz_pl(
-            cano="12345678", acnt_prdt_cd="01", tr_id="CUSTOM_TR_ID",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            tr_id="CUSTOM_TR_ID",
         )
         assert result["tr_id"] == "CUSTOM_TR_ID"
 
@@ -326,19 +401,25 @@ class TestInquirePsblOrder:
 
     def test_inquire_psbl_order_real_trading(self):
         result = orders.inquire_psbl_order(
-            cano="12345678", acnt_prdt_cd="01", is_paper_trading=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            is_paper_trading=False,
         )
         assert result["tr_id"] == "TTTC8908R"
 
     def test_inquire_psbl_order_paper_trading(self):
         result = orders.inquire_psbl_order(
-            cano="12345678", acnt_prdt_cd="01", is_paper_trading=True,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            is_paper_trading=True,
         )
         assert result["tr_id"] == "VTTC8908R"
 
     def test_inquire_psbl_order_with_pdno(self):
         result = orders.inquire_psbl_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
         )
         assert result["params"]["PDNO"] == "005930"
 
@@ -353,7 +434,9 @@ class TestInquirePsblSell:
 
     def test_inquire_psbl_sell_defaults(self):
         result = orders.inquire_psbl_sell(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
         )
         assert result["tr_id"] == "TTTC8408R"
         assert result["params"]["PDNO"] == "005930"
@@ -369,13 +452,16 @@ class TestInquireCreditPsamount:
 
     def test_inquire_credit_psamount_defaults(self):
         result = orders.inquire_credit_psamount(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC8909R"
 
     def test_inquire_credit_psamount_with_pdno(self):
         result = orders.inquire_credit_psamount(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
         )
         assert result["params"]["PDNO"] == "005930"
 
@@ -390,16 +476,25 @@ class TestOrderResv:
 
     def test_order_resv_defaults(self):
         result = orders.order_resv(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="01", ord_qty=10, ord_unsl="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="01",
+            ord_qty=10,
+            ord_unsl="01",
         )
         assert result["tr_id"] == "CTSC0008U"
         assert result["params"]["ORD_QTY"] == "10"
 
     def test_order_resv_with_price(self):
         result = orders.order_resv(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
-            ord_dv="00", ord_qty=10, ord_unsl="01", ord_prc=80000,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
+            ord_dv="00",
+            ord_qty=10,
+            ord_unsl="01",
+            ord_prc=80000,
         )
         assert result["params"]["ORD_PRC"] == "80000"
 
@@ -414,14 +509,18 @@ class TestOrderResvRvsecncl:
 
     def test_order_resv_rvsecncl_cancel(self):
         result = orders.order_resv_rvsecncl(
-            cano="12345678", acnt_prdt_cd="01", orgn_odno="0000012345",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            orgn_odno="0000012345",
             rvse_cncl_dv="cancel",
         )
         assert result["tr_id"] == "CTSC0009U"
 
     def test_order_resv_rvsecncl_revise(self):
         result = orders.order_resv_rvsecncl(
-            cano="12345678", acnt_prdt_cd="01", orgn_odno="0000012345",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            orgn_odno="0000012345",
             rvse_cncl_dv="revise",
         )
         assert result["tr_id"] == "CTSC0013U"
@@ -437,7 +536,8 @@ class TestOrderResvCcnl:
 
     def test_order_resv_ccnl_defaults(self):
         result = orders.order_resv_ccnl(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "CTSC0004R"
 
@@ -452,43 +552,53 @@ class TestPensionAPIs:
 
     def test_pension_inquire_present_balance(self):
         result = orders.pension_inquire_present_balance(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC2202R"
 
     def test_pension_inquire_daily_ccld_krx_only(self):
         result = orders.pension_inquire_daily_ccld(
-            cano="12345678", acnt_prdt_cd="01", use_nxt=False,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            use_nxt=False,
         )
         assert result["tr_id"] == "TTTC2201R"
 
     def test_pension_inquire_daily_ccld_nxt_sor(self):
         result = orders.pension_inquire_daily_ccld(
-            cano="12345678", acnt_prdt_cd="01", use_nxt=True,
+            cano="12345678",
+            acnt_prdt_cd="01",
+            use_nxt=True,
         )
         assert result["tr_id"] == "TTTC2210R"
 
     def test_pension_inquire_psbl_order(self):
         result = orders.pension_inquire_psbl_order(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC0503R"
 
     def test_pension_inquire_psbl_order_with_pdno(self):
         result = orders.pension_inquire_psbl_order(
-            cano="12345678", acnt_prdt_cd="01", pdno="005930",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            pdno="005930",
         )
         assert result["params"]["PDNO"] == "005930"
 
     def test_pension_inquire_deposit(self):
         result = orders.pension_inquire_deposit(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC0506R"
 
     def test_pension_inquire_balance(self):
         result = orders.pension_inquire_balance(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC2208R"
 
@@ -503,14 +613,17 @@ class TestOtherInquiryAPIs:
 
     def test_inquire_account_balance(self):
         result = orders.inquire_account_balance(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "CTRP6548R"
 
     def test_inquire_period_profit(self):
         result = orders.inquire_period_profit(
-            cano="12345678", acnt_prdt_cd="01",
-            str_dt="20240101", end_dt="20240131",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            str_dt="20240101",
+            end_dt="20240131",
         )
         assert result["tr_id"] == "TTTC8708R"
         assert result["params"]["STR_DT"] == "20240101"
@@ -518,20 +631,25 @@ class TestOtherInquiryAPIs:
 
     def test_inquire_period_trade_profit(self):
         result = orders.inquire_period_trade_profit(
-            cano="12345678", acnt_prdt_cd="01",
-            str_dt="20240101", end_dt="20240131",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            str_dt="20240101",
+            end_dt="20240131",
         )
         assert result["tr_id"] == "TTTC8715R"
 
     def test_intgr_margin(self):
         result = orders.intgr_margin(
-            cano="12345678", acnt_prdt_cd="01",
+            cano="12345678",
+            acnt_prdt_cd="01",
         )
         assert result["tr_id"] == "TTTC0869R"
 
     def test_period_rights(self):
         result = orders.period_rights(
-            cano="12345678", acnt_prdt_cd="01",
-            str_dt="20240101", end_dt="20240131",
+            cano="12345678",
+            acnt_prdt_cd="01",
+            str_dt="20240101",
+            end_dt="20240131",
         )
         assert result["tr_id"] == "CTRGA011R"

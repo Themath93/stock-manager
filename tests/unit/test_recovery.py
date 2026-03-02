@@ -1,7 +1,10 @@
 """Unit tests for crash recovery."""
+
 from unittest.mock import Mock
 from stock_manager.persistence.recovery import (
-    startup_reconciliation, RecoveryResult, RecoveryReport
+    startup_reconciliation,
+    RecoveryResult,
+    RecoveryReport,
 )
 from stock_manager.persistence.state import TradingState
 from stock_manager.trading.models import Position, PositionStatus
@@ -27,15 +30,12 @@ class TestStartupReconciliation:
     def test_clean_state_when_matching(self):
         """Test clean state when local matches broker."""
         local_state = TradingState()
-        local_state.positions = {
-            "005930": {"symbol": "005930", "quantity": 10}
-        }
+        local_state.positions = {"005930": {"symbol": "005930", "quantity": 10}}
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [{"pdno": "005930", "hldg_qty": "10"}]
-        })
+        inquire_balance = Mock(
+            return_value={"rt_cd": "0", "output1": [{"pdno": "005930", "hldg_qty": "10"}]}
+        )
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -53,10 +53,7 @@ class TestStartupReconciliation:
         local_state = TradingState()
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": []
-        })
+        inquire_balance = Mock(return_value={"rt_cd": "0", "output1": []})
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -72,10 +69,9 @@ class TestStartupReconciliation:
         local_state = TradingState()
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [{"pdno": "005930", "hldg_qty": "10"}]
-        })
+        inquire_balance = Mock(
+            return_value={"rt_cd": "0", "output1": [{"pdno": "005930", "hldg_qty": "10"}]}
+        )
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -98,13 +94,15 @@ class TestStartupReconciliation:
         local_state = TradingState()
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [
-                {"pdno": "005930", "hldg_qty": "10"},
-                {"pdno": "000660", "hldg_qty": "5"}
-            ]
-        })
+        inquire_balance = Mock(
+            return_value={
+                "rt_cd": "0",
+                "output1": [
+                    {"pdno": "005930", "hldg_qty": "10"},
+                    {"pdno": "000660", "hldg_qty": "5"},
+                ],
+            }
+        )
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -119,15 +117,10 @@ class TestStartupReconciliation:
     def test_reconciled_when_missing_position(self):
         """Test reconciliation when local has positions not at broker."""
         local_state = TradingState()
-        local_state.positions = {
-            "005930": {"symbol": "005930", "quantity": 10}
-        }
+        local_state.positions = {"005930": {"symbol": "005930", "quantity": 10}}
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": []
-        })
+        inquire_balance = Mock(return_value={"rt_cd": "0", "output1": []})
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -144,15 +137,12 @@ class TestStartupReconciliation:
     def test_reconciled_when_quantity_mismatch(self):
         """Test reconciliation when quantities don't match."""
         local_state = TradingState()
-        local_state.positions = {
-            "005930": {"symbol": "005930", "quantity": 10}
-        }
+        local_state.positions = {"005930": {"symbol": "005930", "quantity": 10}}
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [{"pdno": "005930", "hldg_qty": "15"}]
-        })
+        inquire_balance = Mock(
+            return_value={"rt_cd": "0", "output1": [{"pdno": "005930", "hldg_qty": "15"}]}
+        )
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -171,17 +161,19 @@ class TestStartupReconciliation:
         local_state = TradingState()
         local_state.positions = {
             "005930": {"symbol": "005930", "quantity": 10},  # Mismatch
-            "000660": {"symbol": "000660", "quantity": 5}    # Missing at broker
+            "000660": {"symbol": "000660", "quantity": 5},  # Missing at broker
         }
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [
-                {"pdno": "005930", "hldg_qty": "15"},  # Quantity mismatch
-                {"pdno": "035720", "hldg_qty": "20"}   # Orphan
-            ]
-        })
+        inquire_balance = Mock(
+            return_value={
+                "rt_cd": "0",
+                "output1": [
+                    {"pdno": "005930", "hldg_qty": "15"},  # Quantity mismatch
+                    {"pdno": "035720", "hldg_qty": "20"},  # Orphan
+                ],
+            }
+        )
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -199,10 +191,7 @@ class TestStartupReconciliation:
         local_state = TradingState()
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "1",
-            "msg1": "API Error"
-        })
+        inquire_balance = Mock(return_value={"rt_cd": "1", "msg1": "API Error"})
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -232,20 +221,15 @@ class TestStartupReconciliation:
     def test_broker_is_source_of_truth(self):
         """Test that broker positions always override local state."""
         local_state = TradingState()
-        local_state.positions = {
-            "005930": {"symbol": "005930", "quantity": 100}
-        }
+        local_state.positions = {"005930": {"symbol": "005930", "quantity": 100}}
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [{"pdno": "005930", "hldg_qty": "1"}]
-        })
+        inquire_balance = Mock(
+            return_value={"rt_cd": "0", "output1": [{"pdno": "005930", "hldg_qty": "1"}]}
+        )
         save_state = Mock()
 
-        report = startup_reconciliation(
-            local_state, client, inquire_balance, save_state, "state.json"
-        )
+        startup_reconciliation(local_state, client, inquire_balance, save_state, "state.json")
 
         # Even with large difference, broker wins
         assert local_state.positions["005930"]["quantity"] == 1
@@ -253,15 +237,12 @@ class TestStartupReconciliation:
     def test_zero_quantity_at_broker(self):
         """Test handling of zero quantity at broker."""
         local_state = TradingState()
-        local_state.positions = {
-            "005930": {"symbol": "005930", "quantity": 10}
-        }
+        local_state.positions = {"005930": {"symbol": "005930", "quantity": 10}}
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [{"pdno": "005930", "hldg_qty": "0"}]
-        })
+        inquire_balance = Mock(
+            return_value={"rt_cd": "0", "output1": [{"pdno": "005930", "hldg_qty": "0"}]}
+        )
         save_state = Mock()
 
         report = startup_reconciliation(
@@ -277,15 +258,12 @@ class TestStartupReconciliation:
         local_state = TradingState()
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [{"pdno": "005930", "hldg_qty": "10"}]
-        })
+        inquire_balance = Mock(
+            return_value={"rt_cd": "0", "output1": [{"pdno": "005930", "hldg_qty": "10"}]}
+        )
         save_state = Mock()
 
-        startup_reconciliation(
-            local_state, client, inquire_balance, save_state, "state.json"
-        )
+        startup_reconciliation(local_state, client, inquire_balance, save_state, "state.json")
 
         # Verify save was called with correct arguments
         save_state.assert_called_once_with(local_state, "state.json")
@@ -295,15 +273,10 @@ class TestStartupReconciliation:
         local_state = TradingState()
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": []
-        })
+        inquire_balance = Mock(return_value={"rt_cd": "0", "output1": []})
         save_state = Mock()
 
-        startup_reconciliation(
-            local_state, client, inquire_balance, save_state, "state.json"
-        )
+        startup_reconciliation(local_state, client, inquire_balance, save_state, "state.json")
 
         inquire_balance.assert_called_once_with(client)
 
@@ -312,10 +285,12 @@ class TestStartupReconciliation:
         local_state = TradingState()
 
         client = Mock()
-        inquire_balance = Mock(return_value={
-            "rt_cd": "0",
-            "output1": [{"pdno": "005930"}]  # Missing hldg_qty
-        })
+        inquire_balance = Mock(
+            return_value={
+                "rt_cd": "0",
+                "output1": [{"pdno": "005930"}],  # Missing hldg_qty
+            }
+        )
         save_state = Mock()
 
         report = startup_reconciliation(

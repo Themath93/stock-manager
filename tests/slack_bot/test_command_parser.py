@@ -1,6 +1,6 @@
 """Unit tests for command_parser module."""
-import pytest
-from stock_manager.slack_bot.command_parser import parse_command, ParsedCommand
+
+from stock_manager.slack_bot.command_parser import parse_command
 
 
 class TestParseCommand:

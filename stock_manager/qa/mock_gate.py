@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Sequence, cast
 import argparse
 import json
 import shlex
@@ -178,7 +178,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     emit_path = Path(args.emit)
     write_gate_report(report, emit_path)
 
-    for check in report["checks"]:
+    checks = cast(list[object], report.get("checks", []))
+
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
         line = (
             f"[{check['name']}] {'PASS' if check['passed'] else 'FAIL'} ({check['duration_sec']}s)"
         )

@@ -1,7 +1,8 @@
 """Slack Block Kit formatters for /sm command responses."""
+
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from stock_manager.engine import EngineStatus
@@ -100,7 +101,9 @@ def format_status(status: "EngineStatus | None", session_info: dict) -> dict:
         fields.append({"type": "mrkdwn", "text": f"*Trading:*\n{trading}"})
 
         if status.degraded_reason:
-            fields.append({"type": "mrkdwn", "text": f"*Degraded Reason:*\n{status.degraded_reason}"})
+            fields.append(
+                {"type": "mrkdwn", "text": f"*Degraded Reason:*\n{status.degraded_reason}"}
+            )
 
     blocks: list[dict] = [
         {
@@ -126,8 +129,7 @@ def format_config(config_info: dict) -> dict:
     Returns: {"text": str, "blocks": list}
     """
     fields = [
-        {"type": "mrkdwn", "text": f"*{key}:*\n{value}"}
-        for key, value in config_info.items()
+        {"type": "mrkdwn", "text": f"*{key}:*\n{value}"} for key, value in config_info.items()
     ]
 
     blocks: list[dict] = [
@@ -140,10 +142,12 @@ def format_config(config_info: dict) -> dict:
     if fields:
         blocks.append({"type": "section", "fields": fields})
     else:
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": "_No configuration available._"},
-        })
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "_No configuration available._"},
+            }
+        )
 
     return {
         "text": "Current configuration",

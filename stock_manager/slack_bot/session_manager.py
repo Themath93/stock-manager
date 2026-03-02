@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
 
@@ -10,7 +10,6 @@ from stock_manager.cli.trading_commands import (
     _build_runtime_context,
     _enforce_live_promotion_gate,
     _resolve_strategy_config,
-    _parse_strategy_symbols,
 )
 from stock_manager.trading import TradingConfig
 from stock_manager.notifications import SlackNotifier, SlackConfig
@@ -77,17 +76,20 @@ class SessionManager:
             RuntimeError: If session already running or starting
             ValueError: If promotion gate blocks live trading
         """
+        with self._lock:
+            if self._state in (SessionState.RUNNING, SessionState.STARTING):
+                raise RuntimeError(f"Session already active (state={self._state.value})")
+
         # Synchronous promotion gate check — gives immediate user feedback
         # before spawning background thread.
         use_mock_for_gate = params.is_mock
         if use_mock_for_gate is None:
             from stock_manager.adapters.broker.kis.config import KISConfig
+
             use_mock_for_gate = KISConfig().use_mock
         _enforce_live_promotion_gate(use_mock=use_mock_for_gate)
 
         with self._lock:
-            if self._state in (SessionState.RUNNING, SessionState.STARTING):
-                raise RuntimeError(f"Session already active (state={self._state.value})")
             # Reset ERROR state to allow restart
             self._state = SessionState.STARTING
             self._params = params
@@ -190,7 +192,10 @@ class SessionManager:
 
             started_at = time.monotonic()
             while not self._stop_event.is_set():
-                if params.duration_sec > 0 and (time.monotonic() - started_at) >= params.duration_sec:
+                if (
+                    params.duration_sec > 0
+                    and (time.monotonic() - started_at) >= params.duration_sec
+                ):
                     logger.info("Session duration elapsed, stopping.")
                     break
                 if not engine.is_healthy():

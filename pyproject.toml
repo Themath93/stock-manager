@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stock-manager"
 version = "0.1.0"
-description = "Automated trading bot boilerplate (Python 3.13)"
+description = "Automated trading bot boilerplate (Python 3.10+)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -56,7 +56,7 @@ addopts = [
   "--cov=stock_manager",
   "--cov-report=term-missing",
   "--cov-report=html",
-  "--cov-fail-under=80",
+  "--cov-fail-under=85",
 ]
 asyncio_mode = "auto"
 markers = [
@@ -71,17 +71,40 @@ markers = [
 
 [dependency-groups]
 dev = [
+  "import-linter>=2.10",
   "mypy>=1.19.1",
   "ruff>=0.14.14",
 ]
 
+[tool.importlinter]
+root_package = "stock_manager"
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+id = "adapters_must_not_import_trading"
+name = "Adapters must not import trading layer"
+type = "forbidden"
+source_modules = ["stock_manager.adapters"]
+forbidden_modules = ["stock_manager.trading"]
+
 [tool.coverage.run]
 omit = [
-  "stock_manager/adapters/*",
-  "stock_manager/cli/*",
-  "stock_manager/config/*",
-  "stock_manager/main.py",
-  "stock_manager/notifications/*",
-  "stock_manager/trading/reflexivity/*",
-  "stock_manager/trading/strategies/graham.py",
+  "*/stock_manager/adapters/*",
+  "*/stock_manager/cli/*",
+  "*/stock_manager/config/*",
+  "*/stock_manager/main.py",
+  "*/stock_manager/notifications/*",
+  "*/stock_manager/trading/reflexivity/*",
+  "*/stock_manager/trading/strategies/graham.py",
+]
+
+[tool.coverage.report]
+omit = [
+  "*/stock_manager/adapters/*",
+  "*/stock_manager/cli/*",
+  "*/stock_manager/config/*",
+  "*/stock_manager/main.py",
+  "*/stock_manager/notifications/*",
+  "*/stock_manager/trading/reflexivity/*",
+  "*/stock_manager/trading/strategies/graham.py",
 ]

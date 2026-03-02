@@ -181,7 +181,20 @@
     ],
     "defaultMode": "default"
   },
-  "hooks": {},
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/agent_stop_guideline_gate.py",
+            "timeout": 20,
+            "statusMessage": "Guideline double-check gate"
+          }
+        ]
+      }
+    ]
+  },
   "enabledPlugins": {},
   "plansDirectory": "./.claude/plans"
 }
