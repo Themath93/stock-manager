@@ -76,6 +76,10 @@ class SessionManager:
             RuntimeError: If session already running or starting
             ValueError: If promotion gate blocks live trading
         """
+        with self._lock:
+            if self._state in (SessionState.RUNNING, SessionState.STARTING):
+                raise RuntimeError(f"Session already active (state={self._state.value})")
+
         # Synchronous promotion gate check — gives immediate user feedback
         # before spawning background thread.
         use_mock_for_gate = params.is_mock
@@ -86,8 +90,6 @@ class SessionManager:
         _enforce_live_promotion_gate(use_mock=use_mock_for_gate)
 
         with self._lock:
-            if self._state in (SessionState.RUNNING, SessionState.STARTING):
-                raise RuntimeError(f"Session already active (state={self._state.value})")
             # Reset ERROR state to allow restart
             self._state = SessionState.STARTING
             self._params = params
