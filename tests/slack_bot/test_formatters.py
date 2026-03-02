@@ -1,5 +1,5 @@
 """Unit tests for Block Kit formatters."""
-import pytest
+
 from stock_manager.slack_bot.formatters import (
     format_started,
     format_stopped,
@@ -140,6 +140,7 @@ class TestFormatStatus:
 
     def test_with_engine_status(self):
         from unittest.mock import MagicMock
+
         mock_status = MagicMock()
         mock_status.position_count = 3
         mock_status.price_monitor_running = True
@@ -154,6 +155,7 @@ class TestFormatStatus:
 
     def test_with_degraded_engine(self):
         from unittest.mock import MagicMock
+
         mock_status = MagicMock()
         mock_status.position_count = 0
         mock_status.price_monitor_running = False

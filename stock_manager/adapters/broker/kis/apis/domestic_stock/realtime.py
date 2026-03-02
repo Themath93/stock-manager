@@ -17,11 +17,16 @@ APIs included:
 - ETF NAV trends
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypedDict
+
+
+class TrIdInfo(TypedDict):
+    real: str | None
+    paper: str | None
 
 
 # TR_ID Constants for Real-time APIs
-TR_IDS = {
+TR_IDS: dict[str, TrIdInfo] = {
     # NXT APIs (Real trading only)
     "H0NXANC0": {"real": "H0NXANC0", "paper": None},  # Expected conclusion
     "H0NXCNT0": {"real": "H0NXCNT0", "paper": None},  # Execution price
@@ -29,7 +34,6 @@ TR_IDS = {
     "H0NXASP0": {"real": "H0NXASP0", "paper": None},  # Quote/ask prices
     "H0NXMBC0": {"real": "H0NXMBC0", "paper": None},  # Member company trading
     "H0NXMKO0": {"real": "H0NXMKO0", "paper": None},  # Market operation info
-
     # Integrated APIs (Real trading only)
     "H0UNANC0": {"real": "H0UNANC0", "paper": None},  # Expected conclusion
     "H0UNCNT0": {"real": "H0UNCNT0", "paper": None},  # Execution price
@@ -37,7 +41,6 @@ TR_IDS = {
     "H0UNASP0": {"real": "H0UNASP0", "paper": None},  # Quote/ask prices
     "H0UNMBC0": {"real": "H0UNMBC0", "paper": None},  # Member company trading
     "H0UNMKO0": {"real": "H0UNMKO0", "paper": None},  # Market operation info
-
     # KRX APIs (Most real trading only, some support both)
     "H0STCNT0": {"real": "H0STCNT0", "paper": "H0STCNT0"},  # Execution price (both)
     "H0STASP0": {"real": "H0STASP0", "paper": "H0STASP0"},  # Quote/ask prices (both)
@@ -49,12 +52,10 @@ TR_IDS = {
     "H0STMBC0": {"real": "H0STMBC0", "paper": None},  # Member company trading
     "H0STPGM0": {"real": "H0STPGM0", "paper": None},  # Program trading
     "H0STMKO0": {"real": "H0STMKO0", "paper": None},  # Market operation info
-
     # Index APIs (Real trading only)
     "H0UPCNT0": {"real": "H0UPCNT0", "paper": None},  # Index execution
     "H0UPANC0": {"real": "H0UPANC0", "paper": None},  # Index expected conclusion
     "H0UPPGM0": {"real": "H0UPPGM0", "paper": None},  # Index program trading
-
     # ETF/ELW APIs (Real trading only)
     "H0STNAV0": {"real": "H0STNAV0", "paper": None},  # ETF NAV trend
     "H0EWCNT0": {"real": "H0EWCNT0", "paper": None},  # ELW execution price
@@ -83,11 +84,15 @@ def _get_tr_id(tr_id_key: str, is_paper_trading: bool = False) -> str:
     tr_id_info = TR_IDS[tr_id_key]
 
     if is_paper_trading:
-        if tr_id_info["paper"] is None:
+        paper_tr_id = tr_id_info["paper"]
+        if paper_tr_id is None:
             raise ValueError(f"Paper trading is not supported for {tr_id_key}")
-        return tr_id_info["paper"]
+        return paper_tr_id
 
-    return tr_id_info["real"]
+    real_tr_id = tr_id_info["real"]
+    if real_tr_id is None:
+        raise ValueError(f"Real trading TR_ID missing for {tr_id_key}")
+    return real_tr_id
 
 
 def get_H0NXANC0(

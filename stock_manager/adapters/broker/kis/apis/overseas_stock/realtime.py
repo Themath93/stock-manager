@@ -7,7 +7,12 @@ including price quotes, asking prices, and contract notifications.
 API Reference: https://apiportal.koreainvestment.com/
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, TypedDict
+
+
+class TrIdInfo(TypedDict):
+    real: str | None
+    paper: str | None
 
 
 def get_overseas_delayed_price(
@@ -268,6 +273,7 @@ def get_overseas_realtime_asking_price(
 
 # WebSocket helper functions
 
+
 def get_websocket_approval_key(
     client: Any,
     is_paper_trading: bool = True,
@@ -339,7 +345,7 @@ def get_overseas_realtime_api_url(endpoint: str) -> str:
 
 
 # Real-time TR_ID constants for reference
-OVERSEAS_REALTIME_TR_IDS = {
+OVERSEAS_REALTIME_TR_IDS: dict[str, TrIdInfo] = {
     "delayed_price": {
         "real": "HDFSCNT0",
         "paper": None,
@@ -399,8 +405,7 @@ def get_realtime_tr_id(
 
     if tr_id is None:
         raise ValueError(
-            f"Paper trading is not supported for {service_name}. "
-            "Use is_paper_trading=False."
+            f"Paper trading is not supported for {service_name}. Use is_paper_trading=False."
         )
 
     return tr_id

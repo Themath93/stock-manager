@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
 
@@ -10,7 +10,6 @@ from stock_manager.cli.trading_commands import (
     _build_runtime_context,
     _enforce_live_promotion_gate,
     _resolve_strategy_config,
-    _parse_strategy_symbols,
 )
 from stock_manager.trading import TradingConfig
 from stock_manager.notifications import SlackNotifier, SlackConfig
@@ -82,6 +81,7 @@ class SessionManager:
         use_mock_for_gate = params.is_mock
         if use_mock_for_gate is None:
             from stock_manager.adapters.broker.kis.config import KISConfig
+
             use_mock_for_gate = KISConfig().use_mock
         _enforce_live_promotion_gate(use_mock=use_mock_for_gate)
 
@@ -190,7 +190,10 @@ class SessionManager:
 
             started_at = time.monotonic()
             while not self._stop_event.is_set():
-                if params.duration_sec > 0 and (time.monotonic() - started_at) >= params.duration_sec:
+                if (
+                    params.duration_sec > 0
+                    and (time.monotonic() - started_at) >= params.duration_sec
+                ):
                     logger.info("Session duration elapsed, stopping.")
                     break
                 if not engine.is_healthy():

@@ -8,8 +8,9 @@ thread-pool contexts.
 from __future__ import annotations
 
 import asyncio
-import os
+import importlib
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,26 @@ async def async_persona_query(
         Response text or None on failure / empty response.
     """
     try:
-        from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
+        claude_agent_sdk = importlib.import_module("claude_agent_sdk")
     except ImportError:
         logger.warning("claude-agent-sdk not installed. LLM features disabled.")
         return None
 
+    assistant_message_type = getattr(claude_agent_sdk, "AssistantMessage", None)
+    text_block_type = getattr(claude_agent_sdk, "TextBlock", None)
+    claude_agent_options = getattr(claude_agent_sdk, "ClaudeAgentOptions", None)
+    query = getattr(claude_agent_sdk, "query", None)
+    if (
+        assistant_message_type is None
+        or text_block_type is None
+        or claude_agent_options is None
+        or query is None
+    ):
+        logger.warning("claude-agent-sdk API changed. LLM features disabled.")
+        return None
+
     stderr_lines: list[str] = []
-    options = ClaudeAgentOptions(
+    options = claude_agent_options(
         model=model or os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
         system_prompt=system_prompt,
         permission_mode="default",
@@ -67,9 +81,9 @@ async def async_persona_query(
                 continue
             raise
 
-        if isinstance(message, AssistantMessage):
+        if isinstance(message, assistant_message_type):
             for block in message.content:
-                if isinstance(block, TextBlock):
+                if isinstance(block, text_block_type):
                     response_text += block.text
 
     return response_text if response_text else None
@@ -100,7 +114,7 @@ async def async_persona_query_with_retry(
                 return result
         except Exception:
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
             continue
     return best_response
 

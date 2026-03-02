@@ -14,7 +14,6 @@ Edge cases include:
 - Network errors
 """
 
-import json
 from unittest.mock import Mock, patch
 
 import httpx
@@ -88,6 +87,7 @@ ERROR_RESPONSE = {
 # get_oauth_url Tests
 # =============================================================================
 
+
 class TestGetOAuthUrl:
     """Tests for get_oauth_url helper function."""
 
@@ -123,6 +123,7 @@ class TestGetOAuthUrl:
 # =============================================================================
 # issue_access_token Tests
 # =============================================================================
+
 
 class TestIssueAccessToken:
     """Tests for issue_access_token function and variants."""
@@ -230,9 +231,7 @@ class TestIssueAccessToken:
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_issue_access_token_timeout(self, mock_post):
         """Test handling of request timeout."""
-        mock_post.side_effect = httpx.TimeoutException(
-            "Request timed out", request=Mock()
-        )
+        mock_post.side_effect = httpx.TimeoutException("Request timed out", request=Mock())
 
         with pytest.raises(httpx.TimeoutException):
             issue_access_token(
@@ -243,9 +242,7 @@ class TestIssueAccessToken:
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_issue_access_token_network_error(self, mock_post):
         """Test handling of network connection error."""
-        mock_post.side_effect = httpx.NetworkError(
-            "Connection failed", request=Mock()
-        )
+        mock_post.side_effect = httpx.NetworkError("Connection failed", request=Mock())
 
         with pytest.raises(httpx.NetworkError):
             issue_access_token(
@@ -257,6 +254,7 @@ class TestIssueAccessToken:
 # =============================================================================
 # issue_access_token_real Tests
 # =============================================================================
+
 
 class TestIssueAccessTokenReal:
     """Tests for issue_access_token_real convenience function."""
@@ -305,6 +303,7 @@ class TestIssueAccessTokenReal:
 # issue_access_token_paper Tests
 # =============================================================================
 
+
 class TestIssueAccessTokenPaper:
     """Tests for issue_access_token_paper convenience function."""
 
@@ -351,6 +350,7 @@ class TestIssueAccessTokenPaper:
 # =============================================================================
 # revoke_access_token Tests
 # =============================================================================
+
 
 class TestRevokeAccessToken:
     """Tests for revoke_access_token function and variants."""
@@ -440,9 +440,7 @@ class TestRevokeAccessToken:
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_revoke_access_token_timeout(self, mock_post):
         """Test handling of timeout during token revocation."""
-        mock_post.side_effect = httpx.TimeoutException(
-            "Request timed out", request=Mock()
-        )
+        mock_post.side_effect = httpx.TimeoutException("Request timed out", request=Mock())
 
         with pytest.raises(httpx.TimeoutException):
             revoke_access_token(
@@ -454,9 +452,7 @@ class TestRevokeAccessToken:
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_revoke_access_token_network_error(self, mock_post):
         """Test handling of network error during token revocation."""
-        mock_post.side_effect = httpx.NetworkError(
-            "Connection failed", request=Mock()
-        )
+        mock_post.side_effect = httpx.NetworkError("Connection failed", request=Mock())
 
         with pytest.raises(httpx.NetworkError):
             revoke_access_token(
@@ -469,6 +465,7 @@ class TestRevokeAccessToken:
 # =============================================================================
 # revoke_access_token_real Tests
 # =============================================================================
+
 
 class TestRevokeAccessTokenReal:
     """Tests for revoke_access_token_real convenience function."""
@@ -519,6 +516,7 @@ class TestRevokeAccessTokenReal:
 # revoke_access_token_paper Tests
 # =============================================================================
 
+
 class TestRevokeAccessTokenPaper:
     """Tests for revoke_access_token_paper convenience function."""
 
@@ -567,6 +565,7 @@ class TestRevokeAccessTokenPaper:
 # =============================================================================
 # generate_hash_key Tests
 # =============================================================================
+
 
 class TestGenerateHashKey:
     """Tests for generate_hash_key function and variants."""
@@ -664,9 +663,7 @@ class TestGenerateHashKey:
     def test_generate_hash_key_timeout(self, mock_post):
         """Test handling of timeout during hash key generation."""
         test_payload = {"symbol": "005930"}
-        mock_post.side_effect = httpx.TimeoutException(
-            "Request timed out", request=Mock()
-        )
+        mock_post.side_effect = httpx.TimeoutException("Request timed out", request=Mock())
 
         with pytest.raises(httpx.TimeoutException):
             generate_hash_key(
@@ -679,9 +676,7 @@ class TestGenerateHashKey:
     def test_generate_hash_key_network_error(self, mock_post):
         """Test handling of network error during hash key generation."""
         test_payload = {"symbol": "005930"}
-        mock_post.side_effect = httpx.NetworkError(
-            "Connection failed", request=Mock()
-        )
+        mock_post.side_effect = httpx.NetworkError("Connection failed", request=Mock())
 
         with pytest.raises(httpx.NetworkError):
             generate_hash_key(
@@ -712,6 +707,7 @@ class TestGenerateHashKey:
 # generate_hash_key_real Tests
 # =============================================================================
 
+
 class TestGenerateHashKeyReal:
     """Tests for generate_hash_key_real convenience function."""
 
@@ -741,6 +737,7 @@ class TestGenerateHashKeyReal:
 # generate_hash_key_paper Tests
 # =============================================================================
 
+
 class TestGenerateHashKeyPaper:
     """Tests for generate_hash_key_paper convenience function."""
 
@@ -769,6 +766,7 @@ class TestGenerateHashKeyPaper:
 # =============================================================================
 # approve_websocket_key Tests
 # =============================================================================
+
 
 class TestApproveWebsocketKey:
     """Tests for approve_websocket_key function and variants."""
@@ -860,9 +858,7 @@ class TestApproveWebsocketKey:
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_approve_websocket_key_timeout(self, mock_post):
         """Test handling of timeout during WebSocket key approval."""
-        mock_post.side_effect = httpx.TimeoutException(
-            "Request timed out", request=Mock()
-        )
+        mock_post.side_effect = httpx.TimeoutException("Request timed out", request=Mock())
 
         with pytest.raises(httpx.TimeoutException):
             approve_websocket_key(
@@ -874,9 +870,7 @@ class TestApproveWebsocketKey:
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_approve_websocket_key_network_error(self, mock_post):
         """Test handling of network error during WebSocket key approval."""
-        mock_post.side_effect = httpx.NetworkError(
-            "Connection failed", request=Mock()
-        )
+        mock_post.side_effect = httpx.NetworkError("Connection failed", request=Mock())
 
         with pytest.raises(httpx.NetworkError):
             approve_websocket_key(
@@ -889,6 +883,7 @@ class TestApproveWebsocketKey:
 # =============================================================================
 # approve_websocket_key_real Tests
 # =============================================================================
+
 
 class TestApproveWebsocketKeyReal:
     """Tests for approve_websocket_key_real convenience function."""
@@ -939,6 +934,7 @@ class TestApproveWebsocketKeyReal:
 # =============================================================================
 # approve_websocket_key_paper Tests
 # =============================================================================
+
 
 class TestApproveWebsocketKeyPaper:
     """Tests for approve_websocket_key_paper convenience function."""

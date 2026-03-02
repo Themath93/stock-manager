@@ -12,7 +12,13 @@ This module provides functions for domestic stock market analysis including:
 Total APIs: 29
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, TypedDict
+
+
+class TrIdInfo(TypedDict):
+    real: str | None
+    paper: str | None
+
 
 # API Endpoints
 _BASE_URL = "https://api.koreainvestment.com"
@@ -20,13 +26,15 @@ _DOMESTIC_STOCK_BASE = "/uapi/domestic-stock/v1/quotations"
 _DOMESTIC_STOCK_RANKING = "/uapi/domestic-stock/v1/ranking"
 
 # TR_ID Constants
-TR_IDS = {
+TR_IDS: dict[str, TrIdInfo] = {
     # v1 APIs
-    "v1_국내주식-044": {"real": "FHPPG04650101", "paper": None},  # Program trade by stock (execution)
+    "v1_국내주식-044": {
+        "real": "FHPPG04650101",
+        "paper": None,
+    },  # Program trade by stock (execution)
     "v1_국내주식-046": {"real": "HHPTJ04160200", "paper": None},  # Investor trend estimate
     "v1_국내주식-056": {"real": "FHKST03010800", "paper": None},  # Daily trade volume
     "v1_국내주식-074": {"real": "FHPTJ04030000", "paper": None},  # Investor time by market
-
     # Standard APIs
     "국내주식-037": {"real": "FHPTJ04400000", "paper": None},  # Foreign institution total
     "국내주식-038": {"real": "HHKST03900300", "paper": None},  # Psearch title
@@ -52,7 +60,10 @@ TR_IDS = {
     "국내주식-203": {"real": "HHKCM113004C6", "paper": None},  # Intstock stocklist by group
     "국내주식-204": {"real": "HHKCM113004C7", "paper": None},  # Intstock grouplist
     "국내주식-205": {"real": "FHKST11300006", "paper": None},  # Intstock multprice
-    "종목별 투자자매매동향(일별)": {"real": "FHPTJ04160001", "paper": None},  # Investor trade by stock daily
+    "종목별 투자자매매동향(일별)": {
+        "real": "FHPTJ04160001",
+        "paper": None,
+    },  # Investor trade by stock daily
 }
 
 
@@ -76,11 +87,15 @@ def _get_tr_id(api_id: str, is_paper_trading: bool = False) -> str:
     tr_id_info = TR_IDS[api_id]
 
     if is_paper_trading:
-        if tr_id_info["paper"] is None:
+        paper_tr_id = tr_id_info["paper"]
+        if paper_tr_id is None:
             raise ValueError(f"Paper trading is not supported for {api_id}")
-        return tr_id_info["paper"]
+        return paper_tr_id
 
-    return tr_id_info["real"]
+    real_tr_id = tr_id_info["real"]
+    if real_tr_id is None:
+        raise ValueError(f"Real trading TR_ID missing for {api_id}")
+    return real_tr_id
 
 
 def get_program_trade_by_stock(

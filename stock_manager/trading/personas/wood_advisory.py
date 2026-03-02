@@ -29,19 +29,46 @@ from .models import (
 
 _INNOVATION_SECTORS: set[str] = {
     # Technology
-    "technology", "it", "software", "semiconductor", "electronics",
-    "internet", "communication", "telecom", "platform",
+    "technology",
+    "it",
+    "software",
+    "semiconductor",
+    "electronics",
+    "internet",
+    "communication",
+    "telecom",
+    "platform",
     # Biotech / Healthcare
-    "biotech", "biotechnology", "healthcare", "pharmaceutical", "pharma",
-    "medical", "life sciences", "bio",
+    "biotech",
+    "biotechnology",
+    "healthcare",
+    "pharmaceutical",
+    "pharma",
+    "medical",
+    "life sciences",
+    "bio",
     # Fintech
-    "fintech", "financial technology", "digital finance",
+    "fintech",
+    "financial technology",
+    "digital finance",
     # Clean Energy
-    "energy", "clean energy", "solar", "renewable", "ev",
-    "electric vehicle", "battery", "hydrogen",
+    "energy",
+    "clean energy",
+    "solar",
+    "renewable",
+    "ev",
+    "electric vehicle",
+    "battery",
+    "hydrogen",
     # Emerging
-    "ai", "artificial intelligence", "robotics", "autonomous",
-    "space", "quantum", "blockchain", "metaverse",
+    "ai",
+    "artificial intelligence",
+    "robotics",
+    "autonomous",
+    "space",
+    "quantum",
+    "blockchain",
+    "metaverse",
 }
 
 _REVENUE_GROWTH_DISRUPTION = 30.0  # Disruption velocity threshold (%)
@@ -69,7 +96,6 @@ def _assess_adoption_curve(snapshot: MarketSnapshot) -> tuple[str, float]:
         (stage_name, stage_score) where stage_score contributes to innovation.
     """
     growth = snapshot.revenue_growth_yoy
-    margin = snapshot.operating_margin
 
     if growth > 50:
         # Hypergrowth: early stage disruption

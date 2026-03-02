@@ -161,7 +161,11 @@ class TestKISRestClientAuthenticate:
         mock_http_client = MagicMock(spec=httpx.Client)
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {"access_token": "token_mock", "token_type": "Bearer", "expires_in": 86400}
+        mock_response.json.return_value = {
+            "access_token": "token_mock",
+            "token_type": "Bearer",
+            "expires_in": 86400,
+        }
         mock_http_client.post.return_value = mock_response
 
         client = KISRestClient(config=config, client=mock_http_client)
@@ -188,7 +192,11 @@ class TestKISRestClientAuthenticate:
         mock_http_client = MagicMock(spec=httpx.Client)
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {"access_token": "token_real", "token_type": "Bearer", "expires_in": 86400}
+        mock_response.json.return_value = {
+            "access_token": "token_real",
+            "token_type": "Bearer",
+            "expires_in": 86400,
+        }
         mock_http_client.post.return_value = mock_response
 
         client = KISRestClient(config=config, client=mock_http_client)
@@ -667,7 +675,7 @@ class TestKISRestClientContextManager:
     ) -> None:
         """Test context manager properly closes even on exception."""
         try:
-            with KISRestClient(config=kis_config, client=mock_httpx_client) as client:
+            with KISRestClient(config=kis_config, client=mock_httpx_client):
                 raise ValueError("Test exception")
         except ValueError:
             pass

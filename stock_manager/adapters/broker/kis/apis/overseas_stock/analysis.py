@@ -763,7 +763,7 @@ def get_overseas_collateral_stocks(
 
     tr_id = "CTLN4050R"
 
-    params = {}
+    params: dict[str, Any] = {}
 
     return client.make_request(
         method="GET",
@@ -872,7 +872,7 @@ def get_overseas_breaking_news(
 
     tr_id = "FHKST01011801"
 
-    params = {}
+    params: dict[str, Any] = {}
 
     return client.make_request(
         method="GET",

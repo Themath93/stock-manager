@@ -13,7 +13,13 @@ TR_ID Reference:
 - Paper Trading: Simulation environment TR_IDs (limited support)
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, TypedDict
+
+
+class TrIdInfo(TypedDict):
+    real: str | None
+    paper: str | None
+
 
 # API Endpoints
 _BASE_URL = "https://api.koreainvestment.com"
@@ -21,32 +27,31 @@ _DOMESTIC_STOCK_BASE = "/uapi/domestic-stock/v1/quotations"
 _ELW_BASE = "/uapi/elw/v1"
 
 # TR_ID Constants
-TR_IDS = {
+TR_IDS: dict[str, TrIdInfo] = {
     # Both real and paper trading supported
     "v1_국내주식-014": {"real": "FHKEW15010000", "paper": "FHKEW15010000"},  # ELW current price
-
     # Real trading only (paper trading not supported)
-    "국내주식-166": {"real": "FHKEW15100000", "paper": None},     # ELW condition search
-    "국내주식-167": {"real": "FHPEW02770000", "paper": None},     # ELW up/down rate ranking
-    "국내주식-168": {"real": "FHPEW02780000", "paper": None},     # ELW volume ranking
-    "국내주식-169": {"real": "FHPEW02790000", "paper": None},     # ELW indicator ranking
-    "국내주식-170": {"real": "FHPEW02850000", "paper": None},     # ELW sensitivity ranking
-    "국내주식-171": {"real": "FHPEW02870000", "paper": None},     # ELW quick change stocks
-    "국내주식-172": {"real": "FHPEW02740100", "paper": None},     # ELW indicator trend (conclusion)
-    "국내주식-173": {"real": "FHPEW02740200", "paper": None},     # ELW indicator trend (daily)
-    "국내주식-174": {"real": "FHPEW02740300", "paper": None},     # ELW indicator trend (minute)
-    "국내주식-175": {"real": "FHPEW02830100", "paper": None},     # ELW sensitivity trend (conclusion)
-    "국내주식-176": {"real": "FHPEW02830200", "paper": None},     # ELW sensitivity trend (daily)
-    "국내주식-177": {"real": "FHPEW02840100", "paper": None},     # ELW volatility trend (conclusion)
-    "국내주식-178": {"real": "FHPEW02840200", "paper": None},     # ELW volatility trend (daily)
-    "국내주식-179": {"real": "FHPEW02840300", "paper": None},     # ELW volatility trend (minute)
-    "국내주식-180": {"real": "FHPEW02840400", "paper": None},     # ELW volatility trend (tick)
-    "국내주식-181": {"real": "FHKEW154800C0", "paper": None},     # ELW newly listed stocks
-    "국내주식-182": {"real": "FHPEW03760000", "paper": None},     # ELW LP trading trend
-    "국내주식-183": {"real": "FHKEW151701C0", "paper": None},     # ELW compare stocks
-    "국내주식-184": {"real": "FHKEW154700C0", "paper": None},     # ELW expiration stocks
-    "국내주식-185": {"real": "FHKEW154100C0", "paper": None},     # ELW underlying asset list
-    "국내주식-186": {"real": "FHKEW154101C0", "paper": None},     # ELW underlying asset price
+    "국내주식-166": {"real": "FHKEW15100000", "paper": None},  # ELW condition search
+    "국내주식-167": {"real": "FHPEW02770000", "paper": None},  # ELW up/down rate ranking
+    "국내주식-168": {"real": "FHPEW02780000", "paper": None},  # ELW volume ranking
+    "국내주식-169": {"real": "FHPEW02790000", "paper": None},  # ELW indicator ranking
+    "국내주식-170": {"real": "FHPEW02850000", "paper": None},  # ELW sensitivity ranking
+    "국내주식-171": {"real": "FHPEW02870000", "paper": None},  # ELW quick change stocks
+    "국내주식-172": {"real": "FHPEW02740100", "paper": None},  # ELW indicator trend (conclusion)
+    "국내주식-173": {"real": "FHPEW02740200", "paper": None},  # ELW indicator trend (daily)
+    "국내주식-174": {"real": "FHPEW02740300", "paper": None},  # ELW indicator trend (minute)
+    "국내주식-175": {"real": "FHPEW02830100", "paper": None},  # ELW sensitivity trend (conclusion)
+    "국내주식-176": {"real": "FHPEW02830200", "paper": None},  # ELW sensitivity trend (daily)
+    "국내주식-177": {"real": "FHPEW02840100", "paper": None},  # ELW volatility trend (conclusion)
+    "국내주식-178": {"real": "FHPEW02840200", "paper": None},  # ELW volatility trend (daily)
+    "국내주식-179": {"real": "FHPEW02840300", "paper": None},  # ELW volatility trend (minute)
+    "국내주식-180": {"real": "FHPEW02840400", "paper": None},  # ELW volatility trend (tick)
+    "국내주식-181": {"real": "FHKEW154800C0", "paper": None},  # ELW newly listed stocks
+    "국내주식-182": {"real": "FHPEW03760000", "paper": None},  # ELW LP trading trend
+    "국내주식-183": {"real": "FHKEW151701C0", "paper": None},  # ELW compare stocks
+    "국내주식-184": {"real": "FHKEW154700C0", "paper": None},  # ELW expiration stocks
+    "국내주식-185": {"real": "FHKEW154100C0", "paper": None},  # ELW underlying asset list
+    "국내주식-186": {"real": "FHKEW154101C0", "paper": None},  # ELW underlying asset price
 }
 
 
@@ -70,11 +75,15 @@ def _get_tr_id(api_id: str, is_paper_trading: bool = False) -> str:
     tr_id_info = TR_IDS[api_id]
 
     if is_paper_trading:
-        if tr_id_info["paper"] is None:
+        paper_tr_id = tr_id_info["paper"]
+        if paper_tr_id is None:
             raise ValueError(f"Paper trading is not supported for {api_id}")
-        return tr_id_info["paper"]
+        return paper_tr_id
 
-    return tr_id_info["real"]
+    real_tr_id = tr_id_info["real"]
+    if real_tr_id is None:
+        raise ValueError(f"Real trading TR_ID missing for {api_id}")
+    return real_tr_id
 
 
 def inquire_elw_price(

@@ -148,14 +148,14 @@ class CrossoverEvent(NamedTuple):
     """A moving average crossover event.
 
     Attributes:
-        index:    Bar index where the crossover occurred.
+        bar_index: Bar index where the crossover occurred.
         type:     "golden_cross" (fast > slow) or "dead_cross" (fast < slow).
         price:    Closing price at crossover bar.
         fast_ma:  Fast MA value at crossover.
         slow_ma:  Slow MA value at crossover.
     """
 
-    index: int
+    bar_index: int
     type: str
     price: float
     fast_ma: float
@@ -230,8 +230,8 @@ class IndicatorSnapshot:
     stoch_k: float | None = None
     stoch_d: float | None = None
     volume_ratio_val: float | None = None
-    is_trending: bool | None = None        # True when ADX > 25
-    is_high_volume: bool | None = None     # True when volume_ratio > 1.5
+    is_trending: bool | None = None  # True when ADX > 25
+    is_high_volume: bool | None = None  # True when volume_ratio > 1.5
 
 
 # ─── Core calculation functions ───────────────────────────────────────────────
@@ -594,7 +594,7 @@ def detect_crossovers(
     Examples:
         >>> events = detect_crossovers(closes, 5, 20)
         >>> if events and events[-1].type == "golden_cross":
-        ...     print(f"Golden cross at bar {events[-1].index}")
+    ...     print(f"Golden cross at bar {events[-1].bar_index}")
     """
     calc = ema if use_ema else sma
     fast_ma = calc(prices, fast_period)
@@ -621,7 +621,9 @@ def detect_crossovers(
 # ─── OHLCV-based indicators ──────────────────────────────────────────────────
 
 
-def atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> IndicatorSeries:
+def atr(
+    highs: list[float], lows: list[float], closes: list[float], period: int = 14
+) -> IndicatorSeries:
     """Average True Range using Wilder's smoothing.
 
     TR = max(high-low, |high-prev_close|, |low-prev_close|)
@@ -657,7 +659,9 @@ def atr(highs: list[float], lows: list[float], closes: list[float], period: int 
     return result
 
 
-def adx(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> IndicatorSeries:
+def adx(
+    highs: list[float], lows: list[float], closes: list[float], period: int = 14
+) -> IndicatorSeries:
     """Average Directional Index (ADX).
 
     Measures trend strength regardless of direction.
@@ -758,8 +762,11 @@ def obv(closes: list[float], volumes: list[int]) -> IndicatorSeries:
 
 
 def stochastic(
-    highs: list[float], lows: list[float], closes: list[float],
-    k_period: int = 14, d_period: int = 3,
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    k_period: int = 14,
+    d_period: int = 3,
 ) -> tuple[IndicatorSeries, IndicatorSeries]:
     """Stochastic Oscillator (%K and %D).
 
@@ -777,8 +784,8 @@ def stochastic(
     k_series: IndicatorSeries = [None] * n
 
     for i in range(k_period - 1, n):
-        window_highs = highs[i - k_period + 1: i + 1]
-        window_lows = lows[i - k_period + 1: i + 1]
+        window_highs = highs[i - k_period + 1 : i + 1]
+        window_lows = lows[i - k_period + 1 : i + 1]
         highest = max(window_highs)
         lowest = min(window_lows)
 
@@ -810,7 +817,7 @@ def volume_ratio(volumes: list[int], period: int = 20) -> IndicatorSeries:
     result: IndicatorSeries = [None] * n
 
     for i in range(period - 1, n):
-        window = volumes[i - period + 1: i + 1]
+        window = volumes[i - period + 1 : i + 1]
         avg = sum(window) / period
         if avg > 0:
             result[i] = float(volumes[i]) / avg
@@ -1000,7 +1007,8 @@ def parse_kis_ohlcv(output: list[dict]) -> OHLCVSeries:
           stck_lwpr->low, stck_clpr->close, acml_vol->volume.
     """
     valid = [
-        item for item in output
+        item
+        for item in output
         if item.get("stck_clpr") and item["stck_clpr"].strip() not in ("", "0")
     ]
     return [

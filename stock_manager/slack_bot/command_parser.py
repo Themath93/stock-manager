@@ -1,7 +1,8 @@
 """Parse /sm slash command text into structured parameters."""
+
 from __future__ import annotations
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 _VALID_SUBCOMMANDS = {"start", "stop", "status", "config", "help"}
 
@@ -62,9 +63,7 @@ def parse_command(text: str) -> ParsedCommand:
             if i >= len(args):
                 result.error = "--symbols requires a value"
                 return result
-            result.symbols = tuple(
-                s.strip().upper() for s in args[i].split(",") if s.strip()
-            )
+            result.symbols = tuple(s.strip().upper() for s in args[i].split(",") if s.strip())
         elif flag == "--duration":
             i += 1
             if i >= len(args):

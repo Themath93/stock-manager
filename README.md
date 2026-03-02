@@ -54,6 +54,13 @@ stock_manager/
 └── tests/                        # 단위/통합 테스트
 ```
 
+## 지식 맵 (Harness)
+
+- `docs/knowledge-map.md`: 에이전트/개발자 공통 진입 지도 (entry point, 모듈 경계, 검증 명령).
+- `docs/quality-gates.md`: lint/type/test/build 품질 게이트의 현재 강제 위치(CI/local/manual) 매트릭스.
+- `docs/harness-engineering-plan.md`: 로직 변경 없이 harness 성숙도를 높이는 단계별 계획.
+- `docs/harness-week1-execution-plan.md`: Audit 결과 기반 1주 실행 계획(작업, 완료 기준, 증거).
+
 ## Consensus 트레이딩 파이프라인
 
 ### 10+1 페르소나 시스템
@@ -102,7 +109,7 @@ MONITORING → SELL_PENDING → SOLD
 ```
 
 ## 사전 요구 사항
-- Python 3.13+
+- Python 3.10+
 - 의존성/테스크 실행용 `uv` (또는 동등한 환경 도구)
 - 선택 사항: 모드에 따라 PostgreSQL, Slack 앱 토큰, 브로커 키.
 
@@ -199,7 +206,7 @@ stock-manager setup
 
 - 모의 모드 알림은 `[MOCK]` 접두사로 구분됩니다.
 - 에러, 실행 공지, 리스크 이벤트, 상태 전환 알림을 포함합니다.
-- 포맷 상세는 `ai_developer_guides/SLACK_NOTIFICATION_GUIDE.md`를 참고하세요.
+- 포맷/경로 개요는 `docs/knowledge-map.md`와 `stock_manager/notifications/formatters.py`를 참고하세요.
 
 Slack 사용 여부는 환경 변수로 제어하며, 사용 시 필수 키는 `doctor`에서 확인합니다.
 
@@ -227,7 +234,7 @@ uv run pytest --no-cov tests/unit/test_cli_main.py -q
 uv run pytest --no-cov tests/unit/test_doctor.py -q
 ```
 
-전체 테스트 실행 시 저장소는 글로벌 커버리지 게이트(`--cov-fail-under=80`)를 적용합니다.
+전체 테스트 실행 시 저장소는 글로벌 커버리지 게이트(`--cov-fail-under=85`)를 적용합니다.
 작은 변경은 위와 같이 `--no-cov`로 핵심 테스트만 빠르게 검증할 수 있습니다.
 
 권장 커버리지 점검 항목:
@@ -242,7 +249,7 @@ uv run pytest --no-cov tests/unit/test_doctor.py -q
 uv run pytest
 
 # 커버리지 포함
-uv run pytest --cov=stock_manager --cov-fail-under=80
+uv run pytest --cov=stock_manager --cov-fail-under=85
 
 # 특정 모듈 테스트
 uv run pytest tests/unit/test_consensus_pipeline.py -v
@@ -281,7 +288,7 @@ KIS_USE_MOCK=false uv run stock-manager trade buy 005930 1 --price 70000 --execu
 
 ### 개발 환경
 
-- Python 3.13 이상 필요
+- Python 3.10 이상 필요
 - 패키지 및 태스크 실행에 `uv`를 사용합니다.
 
 ```bash

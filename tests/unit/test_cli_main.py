@@ -66,6 +66,7 @@ def test_trade_execute_blocks_live_without_confirm_live(monkeypatch) -> None:
 
 def test_trade_execute_blocks_live_without_promotion_gate_even_with_confirm_live(
     monkeypatch,
+    tmp_path,
 ) -> None:
     runner = CliRunner()
     client = MagicMock()
@@ -76,6 +77,7 @@ def test_trade_execute_blocks_live_without_promotion_gate_even_with_confirm_live
         account_product_code="01",
     )
     monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
         build_app(),
@@ -561,7 +563,7 @@ def test_run_returns_nonzero_when_engine_start_fails(monkeypatch) -> None:
     assert "Run failed:" in result.stdout
 
 
-def test_run_blocks_live_without_promotion_gate(monkeypatch) -> None:
+def test_run_blocks_live_without_promotion_gate(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     runtime = SimpleNamespace(
         config=SimpleNamespace(use_mock=False),
@@ -570,6 +572,7 @@ def test_run_blocks_live_without_promotion_gate(monkeypatch) -> None:
         account_product_code="01",
     )
     monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+    monkeypatch.chdir(tmp_path)
 
     class ForbiddenEngine:
         def __init__(self, **kwargs) -> None:

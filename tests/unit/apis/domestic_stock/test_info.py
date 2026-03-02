@@ -6,7 +6,6 @@ Following Kent Beck's TDD methodology:
 - REFACTOR: Improve while keeping tests green
 """
 
-from typing import Any, Dict
 from unittest.mock import MagicMock
 
 import pytest
