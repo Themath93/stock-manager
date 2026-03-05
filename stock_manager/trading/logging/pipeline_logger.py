@@ -10,7 +10,7 @@ File naming: {prefix}-{YYYYMMDD}.ndjson
 import json
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -40,9 +40,9 @@ class PipelineJsonLogger:
         Adds timestamp and session_id automatically. Uses default=str
         for serializing Decimal, datetime, and enum values.
         """
-        event["timestamp"] = datetime.now().isoformat()
+        event["timestamp"] = datetime.now(timezone.utc).isoformat()
         event["session_id"] = self._session_id
-        today = datetime.now().strftime("%Y%m%d")
+        today = datetime.now(timezone.utc).strftime("%Y%m%d")
         filepath = self._log_dir / f"{self._prefix}-{today}.ndjson"
         with self._lock:
             with open(filepath, "a", encoding="utf-8") as f:

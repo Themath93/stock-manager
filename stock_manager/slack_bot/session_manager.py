@@ -147,6 +147,46 @@ class SessionManager:
             "uptime_sec": uptime_sec,
         }
 
+    def get_balance(self) -> dict | None:
+        """Get account balance, or None if not running."""
+        with self._lock:
+            engine = self._engine
+            if self._state != SessionState.RUNNING or engine is None:
+                return None
+        return engine.get_balance()
+
+    def get_daily_orders(self) -> dict | None:
+        """Get today's order history, or None if not running."""
+        with self._lock:
+            engine = self._engine
+            if self._state != SessionState.RUNNING or engine is None:
+                return None
+        return engine.get_daily_orders()
+
+    def get_positions(self) -> dict | None:
+        """Get all positions, or None if not running."""
+        with self._lock:
+            engine = self._engine
+            if self._state != SessionState.RUNNING or engine is None:
+                return None
+        return {
+            sym: {
+                "symbol": sym,
+                "quantity": pos.quantity,
+                "entry_price": pos.entry_price,
+                "status": pos.status.value,
+            }
+            for sym, pos in engine.get_positions().items()
+        }
+
+    def liquidate_all(self) -> list[dict] | None:
+        """Liquidate all positions, or None if not running."""
+        with self._lock:
+            engine = self._engine
+            if self._state != SessionState.RUNNING or engine is None:
+                return None
+        return engine.liquidate_all()
+
     def _run_engine(self, params: SessionParams) -> None:
         """Background thread that runs the engine."""
         engine: TradingEngine | None = None

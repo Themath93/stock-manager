@@ -55,14 +55,14 @@ class LynchPersona(InvestorPersona):
     @staticmethod
     def _check_earnings_growth_range(snapshot: MarketSnapshot) -> bool:
         """Ideal growth: 20-50 % (fast but not unsustainably hot)."""
-        return 20.0 <= snapshot.earnings_growth_yoy <= 50.0
+        return 15.0 <= snapshot.earnings_growth_yoy <= 40.0
 
     @staticmethod
     def _check_pe_below_avg(snapshot: MarketSnapshot) -> bool:
         """P/E below market average (use KOSPI P/E if available, else 15)."""
         if snapshot.per <= 0:
             return False
-        market_pe = snapshot.kospi_per if snapshot.kospi_per else 15.0
+        market_pe = snapshot.kospi_per if snapshot.kospi_per else 12.0  # KOSPI 10-year average P/E
         return snapshot.per < market_pe
 
     @staticmethod

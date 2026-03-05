@@ -136,3 +136,29 @@ class TestParseCommand:
     def test_duration_missing_value(self):
         result = parse_command("start --duration")
         assert result.error is not None
+
+    def test_balance_parsed(self):
+        result = parse_command("balance")
+        assert result.subcommand == "balance"
+        assert result.error is None
+
+    def test_orders_parsed(self):
+        result = parse_command("orders")
+        assert result.subcommand == "orders"
+        assert result.error is None
+
+    def test_sell_all_parsed(self):
+        result = parse_command("sell-all")
+        assert result.subcommand == "sell-all"
+        assert result.error is None
+        assert result.confirm is False
+
+    def test_sell_all_with_confirm(self):
+        result = parse_command("sell-all --confirm")
+        assert result.subcommand == "sell-all"
+        assert result.confirm is True
+        assert result.error is None
+
+    def test_sell_all_without_confirm_default_false(self):
+        result = parse_command("sell-all")
+        assert result.confirm is False

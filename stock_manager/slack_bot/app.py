@@ -80,7 +80,7 @@ def create_slack_app(session_manager) -> Any:
         if not _check_user_allowed(user_id):
             respond(
                 response_type="ephemeral",
-                **format_error("You are not authorized to use this bot. Contact the admin.")
+                **format_error("이 봇을 사용할 권한이 없습니다. 관리자에게 문의하세요.")
             )
             return
 
@@ -95,7 +95,7 @@ def create_slack_app(session_manager) -> Any:
         except Exception as exc:
             logger.error("Unhandled error in /sm: %s", exc, exc_info=True)
             try:
-                respond(response_type="ephemeral", **format_error(f"Internal error: {exc}"))
+                respond(response_type="ephemeral", **format_error(f"내부 오류: {exc}"))
             except Exception:
                 pass
 
@@ -111,7 +111,9 @@ def _dispatch_command(*, text: str, user_id: str, respond, session_manager) -> N
     from stock_manager.slack_bot.command_parser import parse_command
     from stock_manager.slack_bot.formatters import (
         format_started, format_stopped, format_status,
-        format_config, format_error, format_help
+        format_config, format_error, format_help,
+        format_balance, format_orders,
+        format_sell_all_preview, format_sell_all_result,
     )
 
     cmd = parse_command(text)
@@ -152,8 +154,32 @@ def _dispatch_command(*, text: str, user_id: str, respond, session_manager) -> N
             session_manager=session_manager,
             format_config=format_config,
         )
+    elif cmd.subcommand == "balance":
+        _handle_balance(
+            respond=respond,
+            session_manager=session_manager,
+            format_balance=format_balance,
+            format_error=format_error,
+        )
+    elif cmd.subcommand == "orders":
+        _handle_orders(
+            respond=respond,
+            session_manager=session_manager,
+            format_orders=format_orders,
+            format_error=format_error,
+        )
+    elif cmd.subcommand == "sell-all":
+        _handle_sell_all(
+            cmd=cmd,
+            user_id=user_id,
+            respond=respond,
+            session_manager=session_manager,
+            format_sell_all_preview=format_sell_all_preview,
+            format_sell_all_result=format_sell_all_result,
+            format_error=format_error,
+        )
     else:
-        respond(response_type="ephemeral", **format_error(f"Unknown subcommand: {cmd.subcommand}. Try /sm help"))
+        respond(response_type="ephemeral", **format_error(f"알 수 없는 명령어: {cmd.subcommand}. /sm help를 입력하세요"))
 
 
 def _handle_start(*, cmd, user_id, respond, session_manager, format_started, format_error):
@@ -162,7 +188,7 @@ def _handle_start(*, cmd, user_id, respond, session_manager, format_started, for
     if not _check_rate_limit(user_id):
         respond(
             response_type="ephemeral",
-            **format_error(f"Please wait {int(_RATE_LIMIT_COOLDOWN_SEC)} seconds before starting again.")
+            **format_error(f"다시 시작하려면 {int(_RATE_LIMIT_COOLDOWN_SEC)}초 후에 시도하세요.")
         )
         return
 
@@ -183,19 +209,19 @@ def _handle_start(*, cmd, user_id, respond, session_manager, format_started, for
         respond(response_type="ephemeral", **format_error(str(e)))
         return
     except ValueError as e:
-        respond(response_type="ephemeral", **format_error(f"Blocked: {e}"))
+        respond(response_type="ephemeral", **format_error(f"차단됨: {e}"))
         return
     except Exception as e:
-        respond(response_type="ephemeral", **format_error(f"Failed to start session: {e}"))
+        respond(response_type="ephemeral", **format_error(f"세션 시작 실패: {e}"))
         return
 
     # Build params_info for formatter
     mode = "MOCK" if (cmd.is_mock is True or (cmd.is_mock is None)) else "LIVE"
     params_info = {
         "strategy": cmd.strategy or "default",
-        "symbols": ", ".join(cmd.symbols) if cmd.symbols else "auto-discover",
+        "symbols": ", ".join(cmd.symbols) if cmd.symbols else "자동 탐색",
         "mode": mode,
-        "duration": f"{cmd.duration_sec}s" if cmd.duration_sec > 0 else "until stopped",
+        "duration": f"{cmd.duration_sec}s" if cmd.duration_sec > 0 else "수동 종료까지",
     }
     respond(response_type="in_channel", **format_started(params_info))
 
@@ -203,13 +229,13 @@ def _handle_start(*, cmd, user_id, respond, session_manager, format_started, for
 def _handle_stop(*, respond, session_manager, format_stopped, format_error):
     """Handle /sm stop command."""
     if not session_manager.is_running:
-        respond(response_type="ephemeral", **format_error("No active trading session."))
+        respond(response_type="ephemeral", **format_error("활성 트레이딩 세션이 없습니다."))
         return
 
     try:
         session_manager.stop_session()
     except Exception as e:
-        respond(response_type="ephemeral", **format_error(f"Failed to stop session: {e}"))
+        respond(response_type="ephemeral", **format_error(f"세션 종료 실패: {e}"))
         return
 
     session_info = session_manager.get_session_info()
@@ -229,9 +255,79 @@ def _handle_config(*, respond, session_manager, format_config):
     slack_config = SlackConfig()
 
     session_info = session_manager.get_session_info()
+    params = session_info.get("params", {})
     config_info = {
         "slack_enabled": slack_config.enabled,
-        "default_channel": slack_config.default_channel or "(not set)",
+        "default_channel": slack_config.default_channel or "(미설정)",
         "session_state": session_info.get("state", "STOPPED"),
+        "strategy": params.get("strategy", "N/A"),
+        "symbols": params.get("symbols", "N/A"),
+        "mode": params.get("mode", "N/A"),
+        "order_quantity": params.get("order_quantity", "N/A"),
+        "run_interval_sec": params.get("run_interval_sec", "N/A"),
     }
     respond(response_type="ephemeral", **format_config(config_info))
+
+
+def _handle_balance(*, respond, session_manager, format_balance, format_error):
+    """Handle /sm balance command."""
+    if not session_manager.is_running:
+        respond(response_type="ephemeral", **format_error("활성 트레이딩 세션이 없습니다."))
+        return
+
+    balance_data = session_manager.get_balance()
+    if balance_data is None:
+        respond(response_type="ephemeral", **format_error("잔고 조회에 실패했습니다."))
+        return
+
+    respond(response_type="ephemeral", **format_balance(balance_data))
+
+
+def _handle_orders(*, respond, session_manager, format_orders, format_error):
+    """Handle /sm orders command."""
+    if not session_manager.is_running:
+        respond(response_type="ephemeral", **format_error("활성 트레이딩 세션이 없습니다."))
+        return
+
+    orders_data = session_manager.get_daily_orders()
+    if orders_data is None:
+        respond(response_type="ephemeral", **format_error("주문 내역 조회에 실패했습니다."))
+        return
+
+    respond(response_type="ephemeral", **format_orders(orders_data))
+
+
+def _handle_sell_all(
+    *, cmd, user_id, respond, session_manager,
+    format_sell_all_preview, format_sell_all_result, format_error,
+):
+    """Handle /sm sell-all command."""
+    if not session_manager.is_running:
+        respond(response_type="ephemeral", **format_error("활성 트레이딩 세션이 없습니다."))
+        return
+
+    if not cmd.confirm:
+        # Preview mode
+        positions = session_manager.get_positions()
+        if positions is None:
+            respond(response_type="ephemeral", **format_error("포지션 조회에 실패했습니다."))
+            return
+        respond(response_type="ephemeral", **format_sell_all_preview(positions))
+        return
+
+    # Execution mode — rate limit check
+    if not _check_rate_limit(user_id):
+        respond(
+            response_type="ephemeral",
+            **format_error(f"다시 시도하려면 {int(_RATE_LIMIT_COOLDOWN_SEC)}초 후에 시도하세요.")
+        )
+        return
+
+    try:
+        results = session_manager.liquidate_all()
+        if results is None:
+            respond(response_type="ephemeral", **format_error("일괄 매도에 실패했습니다."))
+            return
+        respond(response_type="in_channel", **format_sell_all_result(results))
+    except Exception as exc:
+        respond(response_type="ephemeral", **format_error(f"일괄 매도 오류: {exc}"))

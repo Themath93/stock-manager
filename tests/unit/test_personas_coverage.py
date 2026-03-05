@@ -197,7 +197,7 @@ def test_dalio_persona_paths() -> None:
             atr_14=2.0,
             rsi_14=75.0,
             adx_14=10.0,
-            price_52w_high=Decimal("103"),
+            price_52w_high=Decimal("102"),
             sma_50=200.0,
         )
     )
@@ -268,8 +268,8 @@ def test_graham_persona_paths() -> None:
             market_cap=Decimal("3000000000000"),
             current_ratio=2.1,
             debt_to_equity=0.9,
-            years_positive_earnings=1,
-            years_dividends_paid=1,
+            years_positive_earnings=0,
+            years_dividends_paid=0,
             earnings_growth_yoy=3.0,
             per=30.0,
             pbr=2.0,
@@ -514,7 +514,10 @@ def test_soros_persona_paths(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_templeton_persona_paths() -> None:
     persona = TempletonPersona()
-    buy_vote = persona.screen_rule(_make_snapshot(pbr=0.8, per=9.0))
+    buy_vote = persona.screen_rule(_make_snapshot(
+        pbr=0.5, per=7.0, dividend_yield=4.0,
+        price_52w_high=Decimal("200"), current_price=Decimal("100"),
+    ))
     hold_vote = persona.screen_rule(
         _make_snapshot(
             pbr=2.0,

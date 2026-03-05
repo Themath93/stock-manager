@@ -70,6 +70,12 @@ Exit criteria:
 3. Add module-level "entry notes" for core directories.
 4. Add ADR index and initial records.
 
+## Related Documents
+
+- [quality-gates.md](quality-gates.md) — Phase 3 산출물: 품질 게이트 강제 위치 매트릭스.
+- [harness-week1-execution-plan.md](harness-week1-execution-plan.md) — Phase 1 실행 계획: 일별 작업 및 완료 기준.
+- [adr/README.md](adr/README.md) — Phase 4 산출물: ADR 인덱스 및 아키텍처 결정 기록.
+
 ## Success Metrics
 
 - Navigation latency: core task entry path found within 2 link hops.

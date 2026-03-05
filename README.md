@@ -56,10 +56,14 @@ stock_manager/
 
 ## 지식 맵 (Harness)
 
-- `docs/knowledge-map.md`: 에이전트/개발자 공통 진입 지도 (entry point, 모듈 경계, 검증 명령).
-- `docs/quality-gates.md`: lint/type/test/build 품질 게이트의 현재 강제 위치(CI/local/manual) 매트릭스.
-- `docs/harness-engineering-plan.md`: 로직 변경 없이 harness 성숙도를 높이는 단계별 계획.
-- `docs/harness-week1-execution-plan.md`: Audit 결과 기반 1주 실행 계획(작업, 완료 기준, 증거).
+- [docs/knowledge-map.md](docs/knowledge-map.md): 에이전트/개발자 공통 진입 지도 (entry point, 모듈 경계, 검증 명령).
+- [docs/quality-gates.md](docs/quality-gates.md): lint/type/test/build 품질 게이트의 현재 강제 위치(CI/local/manual) 매트릭스.
+- [docs/harness-engineering-plan.md](docs/harness-engineering-plan.md): 로직 변경 없이 harness 성숙도를 높이는 단계별 계획.
+- [docs/harness-week1-execution-plan.md](docs/harness-week1-execution-plan.md): Audit 결과 기반 1주 실행 계획(작업, 완료 기준, 증거).
+- [docs/glossary.md](docs/glossary.md): 핵심 도메인 용어 24개 정의 (Order, Position, Persona, Vote 등).
+- [docs/execution-diagrams.md](docs/execution-diagrams.md): Mermaid 기반 시스템 아키텍처 및 실행 흐름 다이어그램.
+- [docs/adr/README.md](docs/adr/README.md): 아키텍처 의사결정 기록 (ADR) 인덱스.
+- [AGENTS.md](AGENTS.md): 개발 워크플로우, 빌드/테스트 명령, 코딩 스타일 가이드.
 
 ## Consensus 트레이딩 파이프라인
 

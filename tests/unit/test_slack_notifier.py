@@ -278,6 +278,109 @@ class TestFaultTolerance:
             notifier.notify(event)
 
 
+class TestCriticalNotificationRetry:
+    """Test CRITICAL notification retry behavior."""
+
+    def test_critical_notification_retries_on_failure(self):
+        """CRITICAL notifications should retry up to 3 times."""
+        config = SlackConfig(
+            enabled=True,
+            bot_token="test-bot-token",
+            default_channel="#trading",
+            _env_file=None,
+        )
+        with patch("slack_sdk.WebClient") as mock_client_class:
+            mock_client = MagicMock()
+            # Fail twice, succeed third time
+            mock_client.chat_postMessage.side_effect = [
+                Exception("Network error"),
+                Exception("Timeout"),
+                MagicMock(),  # Success
+            ]
+            mock_client_class.return_value = mock_client
+
+            notifier = SlackNotifier(config)
+
+            event = NotificationEvent(
+                event_type="engine.critical_failure",
+                level=NotificationLevel.CRITICAL,
+                title="Critical Failure",
+                details={},
+            )
+            with patch("time.sleep"):
+                notifier.notify(event)
+
+            assert mock_client.chat_postMessage.call_count == 3
+
+    def test_info_notification_no_retry(self):
+        """INFO notifications should NOT retry on failure."""
+        config = SlackConfig(
+            enabled=True,
+            bot_token="test-bot-token",
+            default_channel="#trading",
+            _env_file=None,
+        )
+        with patch("slack_sdk.WebClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.chat_postMessage.side_effect = Exception("Network error")
+            mock_client_class.return_value = mock_client
+
+            notifier = SlackNotifier(config)
+
+            event = NotificationEvent(
+                event_type="test.info",
+                level=NotificationLevel.INFO,
+                title="Info Event",
+                details={},
+            )
+            notifier.notify(event)
+
+            # Only 1 attempt, no retry
+            assert mock_client.chat_postMessage.call_count == 1
+
+
+class TestHealthCheck:
+    """Test SlackNotifier health_check method."""
+
+    def test_health_check_returns_true_on_success(self):
+        """health_check() should return True when auth_test succeeds."""
+        config = SlackConfig(
+            enabled=True,
+            bot_token="test-bot-token",
+            default_channel="#trading",
+            _env_file=None,
+        )
+        with patch("slack_sdk.WebClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.auth_test.return_value = {"ok": True}
+            mock_client_class.return_value = mock_client
+
+            notifier = SlackNotifier(config)
+            assert notifier.health_check() is True
+
+    def test_health_check_returns_false_on_failure(self):
+        """health_check() should return False when auth_test fails."""
+        config = SlackConfig(
+            enabled=True,
+            bot_token="test-bot-token",
+            default_channel="#trading",
+            _env_file=None,
+        )
+        with patch("slack_sdk.WebClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.auth_test.side_effect = Exception("invalid_auth")
+            mock_client_class.return_value = mock_client
+
+            notifier = SlackNotifier(config)
+            assert notifier.health_check() is False
+
+    def test_health_check_returns_false_when_no_client(self):
+        """health_check() should return False when client is not initialized."""
+        config = SlackConfig(enabled=False, _env_file=None)
+        notifier = SlackNotifier(config)
+        assert notifier.health_check() is False
+
+
 class TestAsyncQueueMode:
     """Test async queue mode behavior."""
 

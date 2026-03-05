@@ -8,7 +8,7 @@ ConsensusEvaluator, CircuitBreaker, VoteParser, HybridPersona, PipelineJsonLogge
 import json
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -575,7 +575,7 @@ class TestPositionMonitor:
         entry.buy_price = Decimal("100")
         entry.buy_quantity = 10
         # Set entered_at to 31 days ago
-        entry.entered_at = datetime.now() - timedelta(days=31)
+        entry.entered_at = datetime.now(timezone.utc) - timedelta(days=31)
         result = monitor.check(entry, Decimal("100"))
         assert result == "MAX_HOLDING"
 
@@ -1108,7 +1108,7 @@ class TestPipelineJsonLogger:
             logger = PipelineJsonLogger(log_dir=Path(tmp_dir))
             logger.log_state_change("AAPL", "WATCHLIST", "SCREENING", "starting")
 
-            today = datetime.now().strftime("%Y%m%d")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
             filepath = Path(tmp_dir) / f"pipeline-{today}.ndjson"
             assert filepath.exists()
 
@@ -1134,7 +1134,7 @@ class TestPipelineJsonLogger:
                 stop_loss=Decimal("140.00"),
             )
 
-            today = datetime.now().strftime("%Y%m%d")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
             filepath = Path(tmp_dir) / f"pipeline-{today}.ndjson"
             with open(filepath) as f:
                 data = json.loads(f.readline())
@@ -1150,7 +1150,7 @@ class TestPipelineJsonLogger:
             logger = PipelineJsonLogger(log_dir=Path(tmp_dir), prefix="trading")
             logger.log_state_change("TEST", "A", "B", "test")
 
-            today = datetime.now().strftime("%Y%m%d")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
             expected = Path(tmp_dir) / f"trading-{today}.ndjson"
             assert expected.exists()
 
@@ -1162,7 +1162,7 @@ class TestPipelineJsonLogger:
             for i in range(10):
                 logger.log_state_change(f"SYM{i}", "A", "B", f"reason{i}")
 
-            today = datetime.now().strftime("%Y%m%d")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
             filepath = Path(tmp_dir) / f"pipeline-{today}.ndjson"
             with open(filepath) as f:
                 lines = f.readlines()
@@ -1173,7 +1173,7 @@ class TestPipelineJsonLogger:
             logger = PipelineJsonLogger(log_dir=Path(tmp_dir))
             logger.log_error("AAPL", RuntimeError("test error"), {"state": "EVALUATING"})
 
-            today = datetime.now().strftime("%Y%m%d")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
             filepath = Path(tmp_dir) / f"pipeline-{today}.ndjson"
             with open(filepath) as f:
                 data = json.loads(f.readline())
@@ -1194,7 +1194,7 @@ class TestPipelineJsonLogger:
                 categories={"value": 3, "growth": 2},
             )
 
-            today = datetime.now().strftime("%Y%m%d")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
             filepath = Path(tmp_dir) / f"pipeline-{today}.ndjson"
             with open(filepath) as f:
                 data = json.loads(f.readline())
@@ -1214,7 +1214,7 @@ class TestPipelineJsonLogger:
                 return_pct=20.0,
             )
 
-            today = datetime.now().strftime("%Y%m%d")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
             filepath = Path(tmp_dir) / f"pipeline-{today}.ndjson"
             with open(filepath) as f:
                 data = json.loads(f.readline())

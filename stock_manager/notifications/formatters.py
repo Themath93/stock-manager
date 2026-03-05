@@ -43,6 +43,10 @@ EVENT_EMOJI_MAP: dict[str, str] = {
     "pipeline.sell_triggered": "🔔",
     "pipeline.trade_profit": "🎉",
     "pipeline.trade_loss": "📛",
+    "error.stop_loss_failed": "🚨",
+    "error.take_profit_failed": "🚨",
+    "error.state_persistence_failed": "💾",
+    "error.buy_submission_failed": "🚨",
 }
 
 
@@ -65,6 +69,8 @@ def format_notification(event: NotificationEvent) -> dict[str, Any]:
         "recovery": format_recovery_event,
         "pipeline": format_pipeline_event,
         "consensus": format_consensus_event,
+        "error": format_error_detail,
+        "strategy": format_error_detail,
     }
 
     formatter = dispatchers.get(prefix, _format_generic_event)
@@ -79,17 +85,17 @@ def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
 
     if event.event_type == "engine.started":
         fields = [
-            _mrkdwn_field("*Status:*", "Running"),
+            _mrkdwn_field("*상태:*", "실행 중"),
             _mrkdwn_field(
-                "*Mode:*", "Paper Trading" if details.get("is_paper_trading") else "Live Trading"
+                "*모드:*", "모의투자" if details.get("is_paper_trading") else "실전투자"
             ),
-            _mrkdwn_field("*Positions Loaded:*", str(details.get("position_count", 0))),
-            _mrkdwn_field("*Recovery:*", str(details.get("recovery_result", "N/A"))),
+            _mrkdwn_field("*로딩된 포지션:*", str(details.get("position_count", 0))),
+            _mrkdwn_field("*복구:*", str(details.get("recovery_result", "N/A"))),
         ]
     else:  # engine.stopped
         fields = [
-            _mrkdwn_field("*Status:*", "Stopped"),
-            _mrkdwn_field("*Open Positions:*", str(details.get("position_count", 0))),
+            _mrkdwn_field("*상태:*", "중지"),
+            _mrkdwn_field("*미체결 포지션:*", str(details.get("position_count", 0))),
         ]
 
     text = f"{mode_prefix}{emoji} {event.title}"
@@ -119,20 +125,20 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
 
     if event.event_type == "order.filled":
         fields = [
-            _mrkdwn_field("*Symbol:*", symbol),
-            _mrkdwn_field("*Side:*", f"{side_emoji} {str(side).upper()}"),
-            _mrkdwn_field("*Quantity:*", str(quantity)),
-            _mrkdwn_field("*Price:*", _format_currency(price) if price else "Market"),
+            _mrkdwn_field("*종목:*", symbol),
+            _mrkdwn_field("*매매 방향:*", f"{side_emoji} {str(side).upper()}"),
+            _mrkdwn_field("*수량:*", str(quantity)),
+            _mrkdwn_field("*가격:*", _format_currency(price) if price else "시장가"),
         ]
         broker_id = details.get("broker_order_id")
         if broker_id:
-            fields.append(_mrkdwn_field("*Broker Order ID:*", str(broker_id)))
+            fields.append(_mrkdwn_field("*브로커 주문 ID:*", str(broker_id)))
     else:  # order.rejected
         fields = [
-            _mrkdwn_field("*Symbol:*", symbol),
-            _mrkdwn_field("*Side:*", f"{side_emoji} {str(side).upper()}"),
-            _mrkdwn_field("*Quantity:*", str(quantity)),
-            _mrkdwn_field("*Reason:*", details.get("reason", "Unknown")),
+            _mrkdwn_field("*종목:*", symbol),
+            _mrkdwn_field("*매매 방향:*", f"{side_emoji} {str(side).upper()}"),
+            _mrkdwn_field("*수량:*", str(quantity)),
+            _mrkdwn_field("*사유:*", details.get("reason", "알 수 없음")),
         ]
 
     text = f"{mode_prefix}{emoji} {event.title}: {side_emoji} {side} {quantity}x {symbol}"
@@ -159,10 +165,10 @@ def format_position_event(event: NotificationEvent) -> dict[str, Any]:
     trigger_price = details.get("trigger_price")
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Entry Price:*", _format_currency(entry_price) if entry_price else "N/A"),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*매입가:*", _format_currency(entry_price) if entry_price else "N/A"),
         _mrkdwn_field(
-            "*Trigger Price:*", _format_currency(trigger_price) if trigger_price else "N/A"
+            "*발동가:*", _format_currency(trigger_price) if trigger_price else "N/A"
         ),
     ]
 
@@ -174,7 +180,7 @@ def format_position_event(event: NotificationEvent) -> dict[str, Any]:
             diff = trigger - entry
             pct = (diff / entry * 100) if entry else Decimal("0")
             pnl_str = f"{'+' if diff >= 0 else ''}{_format_currency(int(diff))} ({pct:+.1f}%)"
-            fields.append(_mrkdwn_field("*P&L per share:*", pnl_str))
+            fields.append(_mrkdwn_field("*주당 손익:*", pnl_str))
         except (ValueError, ArithmeticError):
             pass
 
@@ -198,14 +204,14 @@ def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
     details = event.details
 
     fields = [
-        _mrkdwn_field("*Status:*", "DIRTY"),
-        _mrkdwn_field("*Orphan Positions:*", str(len(details.get("orphan_positions", [])))),
-        _mrkdwn_field("*Missing Positions:*", str(len(details.get("missing_positions", [])))),
-        _mrkdwn_field("*Quantity Mismatches:*", str(len(details.get("quantity_mismatches", {})))),
+        _mrkdwn_field("*상태:*", "불일치"),
+        _mrkdwn_field("*고아 포지션:*", str(len(details.get("orphan_positions", [])))),
+        _mrkdwn_field("*누락 포지션:*", str(len(details.get("missing_positions", [])))),
+        _mrkdwn_field("*수량 불일치:*", str(len(details.get("quantity_mismatches", {})))),
     ]
 
     discrepancy_count = details.get("discrepancy_count", 0)
-    text = f"{mode_prefix}{emoji} {event.title}: {discrepancy_count} discrepancies found"
+    text = f"{mode_prefix}{emoji} {event.title}: {discrepancy_count}건 불일치 발견"
     blocks = [
         {
             "type": "header",
@@ -226,22 +232,22 @@ def format_recovery_event(event: NotificationEvent) -> dict[str, Any]:
 
     if event.event_type == "recovery.reconciled":
         fields = [
-            _mrkdwn_field("*Result:*", "RECONCILED"),
-            _mrkdwn_field("*Orphan Positions:*", str(len(details.get("orphan_positions", [])))),
-            _mrkdwn_field("*Missing Positions:*", str(len(details.get("missing_positions", [])))),
+            _mrkdwn_field("*결과:*", "조정 완료"),
+            _mrkdwn_field("*고아 포지션:*", str(len(details.get("orphan_positions", [])))),
+            _mrkdwn_field("*누락 포지션:*", str(len(details.get("missing_positions", [])))),
             _mrkdwn_field(
-                "*Quantity Mismatches:*", str(len(details.get("quantity_mismatches", {})))
+                "*수량 불일치:*", str(len(details.get("quantity_mismatches", {})))
             ),
         ]
     else:  # recovery.failed
         errors = details.get("errors", [])
         fields = [
-            _mrkdwn_field("*Result:*", "FAILED"),
-            _mrkdwn_field("*Error Count:*", str(len(errors))),
+            _mrkdwn_field("*결과:*", "실패"),
+            _mrkdwn_field("*오류 수:*", str(len(errors))),
         ]
         if errors:
             error_text = "\n".join(f"- {e}" for e in errors[:5])
-            fields.append(_mrkdwn_field("*Errors:*", error_text))
+            fields.append(_mrkdwn_field("*오류 목록:*", error_text))
 
     text = f"{mode_prefix}{emoji} {event.title}"
     blocks = [
@@ -294,10 +300,10 @@ def format_consensus_buy_signal(event: NotificationEvent) -> dict[str, Any]:
     categories_str = ", ".join(categories) if categories else "N/A"
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Buy Votes:*", votes_str),
-        _mrkdwn_field("*Avg Conviction:*", conviction_str),
-        _mrkdwn_field("*Categories:*", categories_str),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*매수 투표:*", votes_str),
+        _mrkdwn_field("*평균 확신도:*", conviction_str),
+        _mrkdwn_field("*카테고리:*", categories_str),
     ]
 
     # Build per-persona vote lines
@@ -363,10 +369,10 @@ def format_buy_filled(event: NotificationEvent) -> dict[str, Any]:
     conviction_str = f"{conviction:.2f}" if conviction is not None else "N/A"
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Quantity:*", str(quantity)),
-        _mrkdwn_field("*Executed Price:*", _format_currency(price) if price else "N/A"),
-        _mrkdwn_field("*Conviction Score:*", conviction_str),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*수량:*", str(quantity)),
+        _mrkdwn_field("*체결가:*", _format_currency(price) if price else "N/A"),
+        _mrkdwn_field("*확신도:*", conviction_str),
     ]
 
     text = f"{mode_prefix}{emoji} {event.title}: {symbol} {quantity}x @ {_format_currency(price) if price else 'N/A'}"
@@ -410,7 +416,7 @@ def format_position_summary(event: NotificationEvent) -> dict[str, Any]:
         entry_str = _format_currency(entry) if entry else "N/A"
         current_str = _format_currency(current) if current else "N/A"
         position_lines.append(
-            f"*{sym}* | Entry: {entry_str} | Current: {current_str} | P&L: {pnl_pct_str} | Days: {holding_days}"
+            f"*{sym}* | 매입: {entry_str} | 현재: {current_str} | 손익: {pnl_pct_str} | 보유일: {holding_days}"
         )
 
     text = f"{mode_prefix}{emoji} {event.title}: {len(positions)} positions"
@@ -432,7 +438,7 @@ def format_position_summary(event: NotificationEvent) -> dict[str, Any]:
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "_No open positions._"},
+                "text": {"type": "mrkdwn", "text": "_보유 포지션 없음._"},
             }
         )
 
@@ -455,10 +461,10 @@ def format_condition_warning(event: NotificationEvent) -> dict[str, Any]:
     progress_str = f"{progress:.0%}" if isinstance(progress, float) else str(progress) if progress is not None else "N/A"
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Condition:*", str(condition)),
-        _mrkdwn_field("*Progress:*", progress_str),
-        _mrkdwn_field("*Threshold:*", str(threshold)),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*조건:*", str(condition)),
+        _mrkdwn_field("*진행도:*", progress_str),
+        _mrkdwn_field("*기준값:*", str(threshold)),
     ]
 
     text = f"{mode_prefix}{emoji} {event.title}: {symbol} - {condition}"
@@ -489,10 +495,10 @@ def format_sell_triggered(event: NotificationEvent) -> dict[str, Any]:
     pnl_str = _format_currency(current_pnl) if current_pnl is not None else "N/A"
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Exit Reason:*", str(exit_reason)),
-        _mrkdwn_field("*Trigger Value:*", trigger_str),
-        _mrkdwn_field("*Current P&L:*", pnl_str),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*매도 사유:*", str(exit_reason)),
+        _mrkdwn_field("*발동값:*", trigger_str),
+        _mrkdwn_field("*현재 손익:*", pnl_str),
     ]
 
     text = f"{mode_prefix}{emoji} {event.title}: {symbol} - {exit_reason}"
@@ -524,12 +530,12 @@ def format_trade_profit(event: NotificationEvent) -> dict[str, Any]:
     return_str = f"{return_pct:+.1f}%" if return_pct is not None else "N/A"
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Entry Price:*", _format_currency(entry_price) if entry_price else "N/A"),
-        _mrkdwn_field("*Exit Price:*", _format_currency(exit_price) if exit_price else "N/A"),
-        _mrkdwn_field("*P&L:*", _format_currency(pnl) if pnl is not None else "N/A"),
-        _mrkdwn_field("*Return:*", return_str),
-        _mrkdwn_field("*Holding Days:*", str(holding_days)),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*매입가:*", _format_currency(entry_price) if entry_price else "N/A"),
+        _mrkdwn_field("*매도가:*", _format_currency(exit_price) if exit_price else "N/A"),
+        _mrkdwn_field("*손익:*", _format_currency(pnl) if pnl is not None else "N/A"),
+        _mrkdwn_field("*수익률:*", return_str),
+        _mrkdwn_field("*보유일:*", str(holding_days)),
     ]
 
     text = f"{mode_prefix}{emoji} {event.title}: {symbol} {return_str}"
@@ -561,12 +567,12 @@ def format_trade_loss(event: NotificationEvent) -> dict[str, Any]:
     return_str = f"{return_pct:+.1f}%" if return_pct is not None else "N/A"
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Entry Price:*", _format_currency(entry_price) if entry_price else "N/A"),
-        _mrkdwn_field("*Exit Price:*", _format_currency(exit_price) if exit_price else "N/A"),
-        _mrkdwn_field("*P&L:*", _format_currency(pnl) if pnl is not None else "N/A"),
-        _mrkdwn_field("*Return:*", return_str),
-        _mrkdwn_field("*Holding Days:*", str(holding_days)),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*매입가:*", _format_currency(entry_price) if entry_price else "N/A"),
+        _mrkdwn_field("*매도가:*", _format_currency(exit_price) if exit_price else "N/A"),
+        _mrkdwn_field("*손익:*", _format_currency(pnl) if pnl is not None else "N/A"),
+        _mrkdwn_field("*수익률:*", return_str),
+        _mrkdwn_field("*보유일:*", str(holding_days)),
     ]
 
     text = f"{mode_prefix}{emoji} {event.title}: {symbol} {return_str}"
@@ -580,6 +586,94 @@ def format_trade_loss(event: NotificationEvent) -> dict[str, Any]:
     ]
 
     return {"text": text, "blocks": blocks, "color": "#E01E5A"}
+
+
+def format_error_detail(event: NotificationEvent) -> dict[str, Any]:
+    """Format detailed error events with traceback and recovery info."""
+    emoji = _event_to_emoji(event)
+    mode_prefix = _mock_prefix(event)
+    details = event.details
+
+    symbol = _format_symbol_label(details) if details.get("symbol") else None
+    error_type = details.get("error_type", "Exception")
+    error_category = details.get("error_category", "시스템")
+    operation = details.get("operation", "")
+    recoverable = details.get("recoverable", False)
+    error_message = details.get("error_message", "")
+    tb = details.get("traceback", "")
+    recovery_suggestion = details.get("recovery_suggestion", "")
+    session_uptime = details.get("session_uptime_sec")
+
+    # Section 1: Header
+    title_text = f"{mode_prefix}{emoji} {event.title}"
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": title_text},
+        },
+    ]
+
+    # Section 2: Key fields
+    fields = []
+    if symbol:
+        fields.append(_mrkdwn_field("*종목:*", symbol))
+    fields.append(_mrkdwn_field("*오류 유형:*", f"`{error_type}`"))
+    fields.append(_mrkdwn_field("*오류 분류:*", error_category))
+    if operation:
+        fields.append(_mrkdwn_field("*작업:*", operation))
+    fields.append(_mrkdwn_field("*재시도 가능:*", "예" if recoverable else "아니오"))
+
+    # Position info if available
+    entry_price = details.get("entry_price")
+    quantity = details.get("quantity")
+    if entry_price and quantity:
+        fields.append(_mrkdwn_field("*포지션:*", f"{quantity}주 @ {entry_price} KRW"))
+
+    blocks.append({"type": "section", "fields": fields})
+
+    # Section 3: Error message
+    if error_message:
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"```{error_message}```"},
+        })
+
+    # Section 4: Traceback (truncated to 1500 chars)
+    if tb:
+        tb_display = tb[:1500] if len(tb) > 1500 else tb
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"```{tb_display}```"},
+        })
+
+    # Section 5: Recovery suggestion
+    if recovery_suggestion:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"💡 *조치 방안:* {recovery_suggestion}"}],
+        })
+
+    # Section 6: Timestamp + uptime
+    ts = event.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+    uptime_str = ""
+    if session_uptime is not None:
+        hours, rem = divmod(int(session_uptime), 3600)
+        mins, secs = divmod(rem, 60)
+        parts = []
+        if hours:
+            parts.append(f"{hours}h")
+        if mins:
+            parts.append(f"{mins}m")
+        parts.append(f"{secs}s")
+        uptime_str = f" | 세션 가동: {' '.join(parts)}"
+    blocks.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"{ts} | `{event.event_type}`{uptime_str}"}],
+    })
+
+    text = f"{mode_prefix}{emoji} {event.title}"
+    return {"text": text, "blocks": blocks, "color": _level_to_color(event.level)}
 
 
 def format_pipeline_event(event: NotificationEvent) -> dict[str, Any]:
@@ -721,15 +815,15 @@ def format_pipeline_state_change(
         List of Block Kit block dicts.
     """
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*From:*", from_state),
-        _mrkdwn_field("*To:*", to_state),
-        _mrkdwn_field("*Reason:*", reason),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*이전:*", from_state),
+        _mrkdwn_field("*이후:*", to_state),
+        _mrkdwn_field("*사유:*", reason),
     ]
     return [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"Pipeline State Change: {symbol}"},
+            "text": {"type": "plain_text", "text": f"파이프라인 상태 변경: {symbol}"},
         },
         {"type": "section", "fields": fields},
     ]
@@ -758,23 +852,23 @@ def format_consensus_result(
     Returns:
         List of Block Kit block dicts.
     """
-    verdict = "PASSED" if passed else "REJECTED"
+    verdict = "통과" if passed else "거부"
     emoji = "📊" if passed else "📉"
     votes_str = f"{buy_count}/{total_count}"
     conviction_str = f"{avg_conviction:.2f}"
     categories_str = ", ".join(f"{k}:{v}" for k, v in categories.items()) or "N/A"
 
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Verdict:*", verdict),
-        _mrkdwn_field("*Buy Votes:*", votes_str),
-        _mrkdwn_field("*Avg Conviction:*", conviction_str),
-        _mrkdwn_field("*Categories:*", categories_str),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*판정:*", verdict),
+        _mrkdwn_field("*매수 투표:*", votes_str),
+        _mrkdwn_field("*평균 확신도:*", conviction_str),
+        _mrkdwn_field("*카테고리:*", categories_str),
     ]
     return [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"{emoji} Consensus Result: {symbol}"},
+            "text": {"type": "plain_text", "text": f"{emoji} 합의 결과: {symbol}"},
         },
         {"type": "section", "fields": fields},
     ]
@@ -800,15 +894,15 @@ def format_buy_executed(
         List of Block Kit block dicts.
     """
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Price:*", _format_currency(price)),
-        _mrkdwn_field("*Quantity:*", str(quantity)),
-        _mrkdwn_field("*Order Type:*", order_type),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*가격:*", _format_currency(price)),
+        _mrkdwn_field("*수량:*", str(quantity)),
+        _mrkdwn_field("*주문 유형:*", order_type),
     ]
     return [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"💰 Buy Executed: {symbol}"},
+            "text": {"type": "plain_text", "text": f"💰 매수 체결: {symbol}"},
         },
         {"type": "section", "fields": fields},
     ]
@@ -837,16 +931,16 @@ def format_sell_executed(
     """
     return_str = f"{return_pct:+.1f}%"
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Reason:*", reason),
-        _mrkdwn_field("*Price:*", _format_currency(price)),
-        _mrkdwn_field("*P&L:*", _format_currency(pnl)),
-        _mrkdwn_field("*Return:*", return_str),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*사유:*", reason),
+        _mrkdwn_field("*가격:*", _format_currency(price)),
+        _mrkdwn_field("*손익:*", _format_currency(pnl)),
+        _mrkdwn_field("*수익률:*", return_str),
     ]
     return [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"🔔 Sell Executed: {symbol}"},
+            "text": {"type": "plain_text", "text": f"🔔 매도 체결: {symbol}"},
         },
         {"type": "section", "fields": fields},
     ]
@@ -872,18 +966,35 @@ def format_pipeline_error(
         List of Block Kit block dicts.
     """
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Error Type:*", error_type),
-        _mrkdwn_field("*Message:*", error_message),
-        _mrkdwn_field("*State:*", state),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*오류 유형:*", error_type),
+        _mrkdwn_field("*메시지:*", error_message),
+        _mrkdwn_field("*상태:*", state),
     ]
-    return [
+    blocks: list[dict] = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"🚨 Pipeline Error: {symbol}"},
+            "text": {"type": "plain_text", "text": f"🚨 파이프라인 오류: {symbol}"},
         },
         {"type": "section", "fields": fields},
     ]
+
+    # Optional enrichment from error context
+    traceback_str = kwargs.get("traceback")
+    recovery = kwargs.get("recovery_suggestion")
+    if traceback_str:
+        tb_display = traceback_str[:1500] if len(traceback_str) > 1500 else traceback_str
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"```{tb_display}```"},
+        })
+    if recovery:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"💡 *조치 방안:* {recovery}"}],
+        })
+
+    return blocks
 
 
 def format_daily_summary(
@@ -908,17 +1019,17 @@ def format_daily_summary(
     losing_trades = total_trades - winning_trades
     win_rate = f"{winning_trades / total_trades:.0%}" if total_trades > 0 else "N/A"
     fields = [
-        _mrkdwn_field("*Date:*", date),
-        _mrkdwn_field("*Total Trades:*", str(total_trades)),
-        _mrkdwn_field("*Winning:*", str(winning_trades)),
-        _mrkdwn_field("*Losing:*", str(losing_trades)),
-        _mrkdwn_field("*Win Rate:*", win_rate),
-        _mrkdwn_field("*Total P&L:*", _format_currency(total_pnl)),
+        _mrkdwn_field("*날짜:*", date),
+        _mrkdwn_field("*총 거래:*", str(total_trades)),
+        _mrkdwn_field("*수익:*", str(winning_trades)),
+        _mrkdwn_field("*손실:*", str(losing_trades)),
+        _mrkdwn_field("*승률:*", win_rate),
+        _mrkdwn_field("*총 손익:*", _format_currency(total_pnl)),
     ]
     return [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"📋 Daily Summary: {date}"},
+            "text": {"type": "plain_text", "text": f"📋 일일 요약: {date}"},
         },
         {"type": "section", "fields": fields},
     ]
@@ -950,17 +1061,17 @@ def format_trade_complete(
     return_str = f"{return_pct:+.1f}%"
     emoji = "🎉" if return_pct >= 0 else "📛"
     fields = [
-        _mrkdwn_field("*Symbol:*", symbol),
-        _mrkdwn_field("*Entry Price:*", _format_currency(entry_price)),
-        _mrkdwn_field("*Exit Price:*", _format_currency(exit_price)),
-        _mrkdwn_field("*P&L:*", _format_currency(pnl)),
-        _mrkdwn_field("*Return:*", return_str),
-        _mrkdwn_field("*Holding Days:*", str(holding_days)),
+        _mrkdwn_field("*종목:*", symbol),
+        _mrkdwn_field("*매입가:*", _format_currency(entry_price)),
+        _mrkdwn_field("*매도가:*", _format_currency(exit_price)),
+        _mrkdwn_field("*손익:*", _format_currency(pnl)),
+        _mrkdwn_field("*수익률:*", return_str),
+        _mrkdwn_field("*보유일:*", str(holding_days)),
     ]
     return [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"{emoji} Trade Complete: {symbol}"},
+            "text": {"type": "plain_text", "text": f"{emoji} 거래 완료: {symbol}"},
         },
         {"type": "section", "fields": fields},
     ]
@@ -981,7 +1092,7 @@ _PIPELINE_FORMATTERS: dict[str, Any] = {
     "screening_complete": lambda **kw: [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Screening complete:* {kw.get('symbol', 'N/A')}"},
+            "text": {"type": "mrkdwn", "text": f"*스크리닝 완료:* {kw.get('symbol', 'N/A')}"},
         }
     ],
 }
@@ -1013,7 +1124,7 @@ def dispatch_pipeline_event(event_type: str, **kwargs: Any) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Pipeline event:* `{event_type}` — {kwargs.get('symbol', 'N/A')}",
+                "text": f"*파이프라인 이벤트:* `{event_type}` — {kwargs.get('symbol', 'N/A')}",
             },
         }
     ]
@@ -1039,7 +1150,7 @@ def dispatch_consensus_event(event_type: str, **kwargs: Any) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Consensus event:* `{event_type}` — {kwargs.get('symbol', 'N/A')}",
+                "text": f"*합의 이벤트:* `{event_type}` — {kwargs.get('symbol', 'N/A')}",
             },
         }
     ]

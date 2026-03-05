@@ -17,7 +17,7 @@ API endpoints used:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -152,8 +152,8 @@ class TechnicalDataFetcher:
         # --- 4. OHLCV history + technical indicators ---
         technicals = self._fetch_technicals(symbol)
 
-        # --- 5. Income statement (fetched for future use) ---
-        self._fetch_income_statement(symbol)
+        # --- 5. Income statement ---
+        income = self._fetch_income_statement(symbol)
 
         # --- 6. Growth ratios ---
         growth = self._fetch_growth_ratio(symbol)
@@ -164,6 +164,9 @@ class TechnicalDataFetcher:
         # --- 8. Stability ratios ---
         stability = self._fetch_stability_ratio(symbol)
 
+        # --- 9. Market context ---
+        vkospi = self._fetch_vkospi()
+
         # --- Assemble MarketSnapshot ---
         return MarketSnapshot(
             # Group 1: Price / Quote
@@ -171,14 +174,14 @@ class TechnicalDataFetcher:
             name=price_data.get("name", ""),
             market="KRX",
             sector=price_data.get("sector", ""),
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             current_price=_safe_decimal(price_data.get("current_price")),
             open_price=_safe_decimal(price_data.get("open_price")),
             high_price=_safe_decimal(price_data.get("high_price")),
             low_price=_safe_decimal(price_data.get("low_price")),
             prev_close=_safe_decimal(price_data.get("prev_close")),
             volume=_safe_int(price_data.get("volume")),
-            avg_volume_20d=_safe_int(price_data.get("avg_volume_20d")),
+            avg_volume_20d=technicals.get("avg_volume_20d", 0),
             # Group 2: Valuation
             market_cap=_safe_decimal(fin_ratio.get("market_cap")),
             per=_safe_float(fin_ratio.get("per")),
@@ -192,7 +195,7 @@ class TechnicalDataFetcher:
             debt_to_equity=_safe_float(stability.get("debt_to_equity")),
             operating_margin=_safe_float(profit.get("operating_margin")),
             net_margin=_safe_float(profit.get("net_margin")),
-            free_cash_flow=_safe_decimal(balance.get("free_cash_flow")),
+            free_cash_flow=_safe_decimal(income.get("operating_income", 0)),  # FCF proxy: operating income (KIS API lacks cash flow statement)
             # Group 4: Growth
             revenue_growth_yoy=_safe_float(growth.get("revenue_growth_yoy")),
             earnings_growth_yoy=_safe_float(growth.get("earnings_growth_yoy")),
@@ -220,6 +223,9 @@ class TechnicalDataFetcher:
             price_52w_low=_safe_decimal(price_data.get("price_52w_low")),
             years_positive_earnings=_safe_int(fin_ratio.get("years_positive_earnings")),
             years_dividends_paid=_safe_int(fin_ratio.get("years_dividends_paid")),
+            # Group 8: Market Context
+            vkospi=vkospi,
+            kospi_per=self._fetch_kospi_per(),
         )
 
     # ------------------------------------------------------------------
@@ -238,7 +244,6 @@ class TechnicalDataFetcher:
                 "low_price": output.get("stck_lwpr"),
                 "prev_close": output.get("stck_sdpr"),
                 "volume": output.get("acml_vol"),
-                "avg_volume_20d": output.get("vol_tnrt", 0),
                 "price_52w_high": output.get("stck_dryy_hgpr"),
                 "price_52w_low": output.get("stck_dryy_lwpr"),
                 "name": output.get("hts_kor_isnm", ""),
@@ -262,8 +267,8 @@ class TechnicalDataFetcher:
                 "bps": output.get("bps"),
                 "dividend_yield": output.get("dvd_yld"),
                 "market_cap": output.get("hts_avls"),
-                "years_positive_earnings": 0,
-                "years_dividends_paid": 0,
+                "years_positive_earnings": 1 if _safe_float(output.get("eps")) > 0 else 0,  # KIS API limitation: only current year EPS available
+                "years_dividends_paid": 1 if _safe_float(output.get("dvd_yld")) > 0 else 0,  # KIS API limitation: only current dividend yield available
             }
         except Exception:
             logger.exception("Failed to fetch financial ratio for %s", symbol)
@@ -284,7 +289,6 @@ class TechnicalDataFetcher:
                 "inventory": output.get("ivtm"),
                 "accounts_receivable": output.get("trad_rciv"),
                 "shares_outstanding": output.get("lstg_stqt"),
-                "free_cash_flow": 0,
             }
         except Exception:
             logger.exception("Failed to fetch balance sheet for %s", symbol)
@@ -293,8 +297,8 @@ class TechnicalDataFetcher:
     def _fetch_technicals(self, symbol: str) -> dict[str, Any]:
         """Fetch OHLCV history and compute technical indicators."""
         try:
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=400)).strftime("%Y%m%d")
+            end_date = datetime.now(timezone.utc).strftime("%Y%m%d")
+            start_date = (datetime.now(timezone.utc) - timedelta(days=400)).strftime("%Y%m%d")
 
             response = inquire_period_price(
                 self.client,
@@ -320,6 +324,13 @@ class TechnicalDataFetcher:
 
             snap = compute_snapshot_ohlcv(symbol, ohlcv)
 
+            # Compute actual 20-day average volume from OHLCV
+            if len(ohlcv) >= 20:
+                recent_20 = ohlcv[-20:]
+                avg_vol = sum(bar.volume for bar in recent_20) // 20
+            else:
+                avg_vol = sum(bar.volume for bar in ohlcv) // max(len(ohlcv), 1)
+
             return {
                 "sma_20": snap.sma20 or 0.0,
                 "sma_50": snap.sma60 or 0.0,  # Use SMA-60 as proxy for SMA-50
@@ -329,10 +340,29 @@ class TechnicalDataFetcher:
                 "bollinger_position": snap.bb_pct_b or 0.0,
                 "adx_14": snap.adx14 or 0.0,
                 "atr_14": snap.atr14 or 0.0,
+                "avg_volume_20d": avg_vol,
             }
         except Exception:
             logger.exception("Failed to fetch technicals for %s", symbol)
             return {}
+
+    def _fetch_vkospi(self) -> float | None:
+        """Fetch VKOSPI (Korean VIX) as market stress indicator."""
+        try:
+            response = inquire_current_price(self.client, "580003")
+            output = _get_output(response)
+            value = _safe_float(output.get("stck_prpr"), default=0.0)
+            return value if value > 0 else None
+        except Exception:
+            logger.warning("Failed to fetch VKOSPI")
+            return None
+
+    def _fetch_kospi_per(self) -> float:
+        """Fetch KOSPI market average P/E ratio.
+
+        Returns configurable default as KIS API does not expose market-wide P/E directly.
+        """
+        return 12.0  # KOSPI 10-year average P/E
 
     def _fetch_income_statement(self, symbol: str) -> dict[str, Any]:
         """Fetch income statement data."""

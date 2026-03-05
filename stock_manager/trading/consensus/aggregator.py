@@ -43,10 +43,10 @@ class VoteAggregator:
 
     def __init__(
         self,
-        threshold: int = 7,
-        quorum_pct: float = 0.6,
-        min_conviction: float = 0.5,
-        min_category_diversity: int = 2,
+        threshold: int = 6,
+        quorum_pct: float = 0.70,
+        min_conviction: float = 0.60,
+        min_category_diversity: int = 3,
     ) -> None:
         self.threshold = threshold
         self.quorum_pct = quorum_pct

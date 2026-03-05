@@ -26,9 +26,9 @@ from .models import MarketSnapshot, PersonaCategory, PersonaVote, VoteAction
 # ---------------------------------------------------------------------------
 
 _DRAWDOWN_MIN = 0.30           # Minimum drawdown from 52w high (30%)
-_PE_MAX = 10.0                 # Maximum P/E for deep value
-_PB_MAX = 1.0                  # Maximum P/B (trading below book value)
-_DIVIDEND_YIELD_MIN = 2.0      # Minimum dividend yield (market avg proxy)
+_PE_MAX = 8.0                  # Maximum P/E for deep value
+_PB_MAX = 0.7                  # Maximum P/B (trading below book value)
+_DIVIDEND_YIELD_MIN = 3.0      # Minimum dividend yield (market avg proxy)
 _CONVICTION_PER_CRITERIA = 1 / 6
 
 

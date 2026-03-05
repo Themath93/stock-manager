@@ -18,12 +18,12 @@ Alfred is the Strategic Orchestrator for Claude Code. All tasks must be delegate
 
 ### Project Start Links
 
-- `AGENTS.md`
-- `docs/knowledge-map.md`
-- `docs/quality-gates.md`
-- `docs/harness-engineering-plan.md`
-- `docs/harness-week1-execution-plan.md`
-- `docs/adr/README.md`
+- [AGENTS.md](AGENTS.md)
+- [docs/knowledge-map.md](docs/knowledge-map.md)
+- [docs/quality-gates.md](docs/quality-gates.md)
+- [docs/harness-engineering-plan.md](docs/harness-engineering-plan.md)
+- [docs/harness-week1-execution-plan.md](docs/harness-week1-execution-plan.md)
+- [docs/adr/README.md](docs/adr/README.md)
 
 ---
 

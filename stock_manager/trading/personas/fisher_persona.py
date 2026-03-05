@@ -25,8 +25,8 @@ from .models import MarketSnapshot, PersonaCategory, PersonaVote, VoteAction
 # ---------------------------------------------------------------------------
 
 _REVENUE_GROWTH_MIN = 15.0     # Minimum revenue growth YoY (%)
-_DEBT_EQUITY_MAX = 0.3         # Conservative balance sheet
-_ROE_MIN = 20.0                # Superior capital allocation
+_DEBT_EQUITY_MAX = 0.5         # Conservative balance sheet
+_ROE_MIN = 15.0                # Superior capital allocation
 _MARGIN_MIN = 5.0              # Minimum operating margin (%)
 _EARNINGS_GROWTH_MIN = 0.0     # Positive earnings growth
 _CONVICTION_PER_CRITERIA = 1 / 6

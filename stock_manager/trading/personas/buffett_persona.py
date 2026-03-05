@@ -12,9 +12,9 @@ from .models import MarketSnapshot, PersonaCategory, PersonaVote, VoteAction
 
 # Thresholds
 _MIN_ROE = 15.0            # %
-_MAX_DEBT_TO_EQUITY = 0.5
-_MIN_NET_MARGIN = 20.0     # %
-_MIN_YEARS_EARNINGS = 10
+_MAX_DEBT_TO_EQUITY = 1.0
+_MIN_NET_MARGIN = 12.0     # %
+_MIN_YEARS_EARNINGS = 1
 _MIN_YEARS_DIVIDENDS = 5
 _MIN_OPERATING_MARGIN = 15.0  # % (sustained margins proxy)
 

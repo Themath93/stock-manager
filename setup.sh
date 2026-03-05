@@ -36,7 +36,7 @@ print_header() {
     echo ""
     echo "  ${BOLD}============================================${RESET}"
     echo "  ${BOLD}  Stock Manager - Interactive Setup Wizard${RESET}"
-    echo "  ${BOLD}  v0.1.0${RESET}"
+    echo "  ${BOLD}  v0.2.0${RESET}"
     echo "  ${BOLD}============================================${RESET}"
     echo ""
 }
@@ -176,6 +176,13 @@ try_slack_auth() {
 phase_1_prerequisites() {
     print_step "System Prerequisites"
 
+    # Docker environment detection
+    IS_DOCKER=false
+    if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
+        IS_DOCKER=true
+        print_info "Docker 환경 감지됨"
+    fi
+
     # Check Python >= 3.10
     print_info "Checking Python version..."
     PYTHON_CMD=""
@@ -247,6 +254,16 @@ phase_1_prerequisites() {
         print_error "Failed to import stock_manager after install"; return 1
     fi
 
+    # Data directory (used by sqlite_backend for data/state.db)
+    print_info "Checking data directory..."
+    mkdir -p "${SCRIPT_DIR}/data"
+    print_success "data/ 디렉터리 확인 완료"
+
+    # Logs directory
+    print_info "Checking logs directory..."
+    mkdir -p "${SCRIPT_DIR}/logs"
+    print_success "logs/ 디렉터리 확인 완료"
+
     # State directory
     print_info "Checking state directory..."
     mkdir -p "$STATE_DIR"
@@ -287,44 +304,82 @@ phase_2_env_config() {
         print_warning "Virtual environment python not found; using Bash prompts."
     fi
 
-    # -- KIS API Credentials --
-    echo ""; print_info "-- KIS API Credentials (Required) --"
-
-    local app_key
-    app_key="$(prompt_secret "Enter KIS App Key")"
-    while [[ -z "$app_key" ]]; do
-        print_error "App Key cannot be empty."; app_key="$(prompt_secret "Enter KIS App Key")"
-    done
-    set_env_var "KIS_APP_KEY" "$app_key"
-    print_success "KIS_APP_KEY set ($(mask_secret "$app_key"))"
-
-    local app_secret
-    app_secret="$(prompt_secret "Enter KIS App Secret")"
-    while [[ -z "$app_secret" ]]; do
-        print_error "App Secret cannot be empty."; app_secret="$(prompt_secret "Enter KIS App Secret")"
-    done
-    set_env_var "KIS_APP_SECRET" "$app_secret"
-    print_success "KIS_APP_SECRET set ($(mask_secret "$app_secret"))"
-
-    # Trading mode
+    # -- KIS Trading Mode --
+    echo ""; print_info "-- KIS Trading Mode --"
+    local kis_use_mock="true"
     if prompt_yes_no "Use paper trading (recommended for testing)?" "y"; then
-        set_env_var "KIS_USE_MOCK" "true"; print_success "Paper trading mode enabled"
+        kis_use_mock="true"; print_success "Paper trading mode enabled"
     else
         echo ""; print_warning "REAL TRADING MODE: Actual money will be used for transactions."
         if prompt_yes_no "Are you sure you want to enable real trading?" "n"; then
-            set_env_var "KIS_USE_MOCK" "false"; print_warning "Real trading mode enabled"
+            kis_use_mock="false"; print_warning "Real trading mode enabled"
         else
-            set_env_var "KIS_USE_MOCK" "true"; print_success "Paper trading mode enabled (reverted)"
+            kis_use_mock="true"; print_success "Paper trading mode enabled (reverted)"
         fi
     fi
+    set_env_var "KIS_USE_MOCK" "$kis_use_mock"
 
-    # Account
-    local account_num
-    account_num="$(prompt_input "Enter Account Number")"
-    while [[ -z "$account_num" ]]; do
-        print_error "Account number cannot be empty."; account_num="$(prompt_input "Enter Account Number")"
-    done
-    set_env_var "KIS_ACCOUNT_NUMBER" "$account_num"; print_success "KIS_ACCOUNT_NUMBER set"
+    # -- KIS API Credentials --
+    echo ""; print_info "-- KIS API Credentials --"
+
+    if [ "$kis_use_mock" = "true" ]; then
+        # Mock 자격증명만 요청
+        print_info "Mock(모의투자) 모드: mock 전용 자격증명을 입력하세요."
+
+        local mock_key
+        mock_key="$(prompt_secret "Enter KIS Mock App Key")"
+        while [[ -z "$mock_key" ]]; do
+            print_error "Mock App Key cannot be empty."; mock_key="$(prompt_secret "Enter KIS Mock App Key")"
+        done
+        set_env_var "KIS_MOCK_APP_KEY" "$mock_key"
+        print_success "KIS_MOCK_APP_KEY set ($(mask_secret "$mock_key"))"
+
+        local mock_secret
+        mock_secret="$(prompt_secret "Enter KIS Mock Secret")"
+        while [[ -z "$mock_secret" ]]; do
+            print_error "Mock Secret cannot be empty."; mock_secret="$(prompt_secret "Enter KIS Mock Secret")"
+        done
+        set_env_var "KIS_MOCK_SECRET" "$mock_secret"
+        print_success "KIS_MOCK_SECRET set ($(mask_secret "$mock_secret"))"
+
+        local mock_account
+        mock_account="$(prompt_input "Enter Mock Account Number")"
+        while [[ -z "$mock_account" ]]; do
+            print_error "Mock account number cannot be empty."; mock_account="$(prompt_input "Enter Mock Account Number")"
+        done
+        set_env_var "KIS_MOCK_ACCOUNT_NUMBER" "$mock_account"
+        print_success "KIS_MOCK_ACCOUNT_NUMBER set"
+
+        # 실제 자격증명은 placeholder로 설정 (KISConfig가 요구하지 않지만 .env 완성도)
+        set_env_var "KIS_APP_KEY" "not-used-in-mock"
+        set_env_var "KIS_APP_SECRET" "not-used-in-mock"
+        set_env_var "KIS_ACCOUNT_NUMBER" "not-used-in-mock"
+    else
+        # 실제 자격증명 요청 (기존 로직)
+        local app_key
+        app_key="$(prompt_secret "Enter KIS App Key")"
+        while [[ -z "$app_key" ]]; do
+            print_error "App Key cannot be empty."; app_key="$(prompt_secret "Enter KIS App Key")"
+        done
+        set_env_var "KIS_APP_KEY" "$app_key"
+        print_success "KIS_APP_KEY set ($(mask_secret "$app_key"))"
+
+        local app_secret
+        app_secret="$(prompt_secret "Enter KIS App Secret")"
+        while [[ -z "$app_secret" ]]; do
+            print_error "App Secret cannot be empty."; app_secret="$(prompt_secret "Enter KIS App Secret")"
+        done
+        set_env_var "KIS_APP_SECRET" "$app_secret"
+        print_success "KIS_APP_SECRET set ($(mask_secret "$app_secret"))"
+
+        local account_num
+        account_num="$(prompt_input "Enter Account Number")"
+        while [[ -z "$account_num" ]]; do
+            print_error "Account number cannot be empty."; account_num="$(prompt_input "Enter Account Number")"
+        done
+        set_env_var "KIS_ACCOUNT_NUMBER" "$account_num"
+        print_success "KIS_ACCOUNT_NUMBER set"
+    fi
 
     local product_code
     product_code="$(prompt_input "Account Product Code" "01")"
@@ -366,6 +421,18 @@ phase_2_env_config() {
         local alert_ch; alert_ch="$(prompt_input "Alert Channel (leave empty for default)" "$default_ch")"
         set_env_var "SLACK_ALERT_CHANNEL" "$alert_ch"
 
+        # Slack App Token (Socket Mode)
+        if prompt_yes_no "Use Socket Mode (requires App-Level Token)?" "n"; then
+            local app_token
+            app_token="$(prompt_secret "Enter Slack App Token (xapp-...)")"
+            while [[ -z "$app_token" ]] || [[ "${app_token:0:5}" != "xapp-" ]]; do
+                print_error "App token must start with 'xapp-'."
+                app_token="$(prompt_secret "Enter Slack App Token (xapp-...)")"
+            done
+            set_env_var "SLACK_APP_TOKEN" "$app_token"
+            print_success "SLACK_APP_TOKEN set ($(mask_secret "$app_token"))"
+        fi
+
         echo ""; print_info "Minimum notification level:"
         print_info "  1) DEBUG  2) INFO  3) WARNING  4) ERROR"
         local level_choice; level_choice="$(prompt_input "Choose level" "2")"
@@ -386,6 +453,10 @@ phase_2_env_config() {
         4) set_env_var "LOG_LEVEL" "ERROR" ;; *) set_env_var "LOG_LEVEL" "INFO" ;;
     esac
 
+    local log_dir
+    log_dir="$(prompt_input "Log directory" "logs")"
+    set_env_var "LOG_DIR" "$log_dir"
+
     echo ""; print_success "Environment saved to .env"
 }
 
@@ -399,6 +470,26 @@ phase_3_kis_api_test() {
     app_key="$(get_env_var "KIS_APP_KEY")"
     app_secret="$(get_env_var "KIS_APP_SECRET")"
     kis_use_mock="$(get_env_var "KIS_USE_MOCK")"
+
+    # Mock 모드: API 연결 테스트 대신 mock 자격증명 유효성만 확인
+    if [[ "$kis_use_mock" == "true" ]]; then
+        print_info "Mock 모드 감지 — API 연결 테스트를 스킵합니다."
+        local mock_key mock_secret mock_acct
+        mock_key="$(get_env_var "KIS_MOCK_APP_KEY")"
+        mock_secret="$(get_env_var "KIS_MOCK_SECRET")"
+        mock_acct="$(get_env_var "KIS_MOCK_ACCOUNT_NUMBER")"
+        if [[ -n "$mock_key" ]] && [[ -n "$mock_secret" ]] && [[ -n "$mock_acct" ]]; then
+            print_success "Mock 자격증명 확인 완료 (KIS_MOCK_APP_KEY, KIS_MOCK_SECRET, KIS_MOCK_ACCOUNT_NUMBER)"
+            LAST_KIS_TOKEN_OK="mock"
+        else
+            print_error "Mock 자격증명이 불완전합니다."
+            [[ -z "$mock_key" ]] && print_error "  KIS_MOCK_APP_KEY 누락"
+            [[ -z "$mock_secret" ]] && print_error "  KIS_MOCK_SECRET 누락"
+            [[ -z "$mock_acct" ]] && print_error "  KIS_MOCK_ACCOUNT_NUMBER 누락"
+            if prompt_yes_no "Continue with remaining setup?" "y"; then return 0; else return 1; fi
+        fi
+        return 0
+    fi
 
     if [[ -z "$app_key" ]] || [[ -z "$app_secret" ]]; then
         print_error "KIS_APP_KEY or KIS_APP_SECRET not found in .env"
@@ -640,25 +731,38 @@ phase_5_health_check() {
         else echo "  ${RED}[FAIL]${RESET} Environment file (.env) - missing required vars"; HC_FAIL=$((HC_FAIL + 1)); fi
     else echo "  ${RED}[FAIL]${RESET} Environment file (.env) - not found"; HC_FAIL=$((HC_FAIL + 1)); fi
 
-    # 5. KIS API token
+    # 5. KIS API token / Mock credentials
     local kis_key kis_secret kis_mock
     kis_key="$(get_env_var "KIS_APP_KEY")"; kis_secret="$(get_env_var "KIS_APP_SECRET")"
     kis_mock="$(get_env_var "KIS_USE_MOCK")"
-    resolve_kis_urls "$kis_mock"
-    if [[ -n "$kis_key" ]] && [[ -n "$kis_secret" ]]; then
-        # Avoid hammering OAuth endpoint: KIS may rate-limit token issuance (e.g. 1/min).
-        if [[ "$LAST_KIS_TOKEN_OK" == "true" ]]; then
-            echo "  ${GREEN}[PASS]${RESET} KIS API Authentication (${_KIS_TRADING_MODE} trading)"; HC_PASS=$((HC_PASS + 1))
+    if [[ "$kis_mock" == "true" ]]; then
+        # Mock 모드: mock 자격증명 존재 확인으로 대체
+        local hc_mock_key hc_mock_secret hc_mock_acct
+        hc_mock_key="$(get_env_var "KIS_MOCK_APP_KEY")"
+        hc_mock_secret="$(get_env_var "KIS_MOCK_SECRET")"
+        hc_mock_acct="$(get_env_var "KIS_MOCK_ACCOUNT_NUMBER")"
+        if [[ -n "$hc_mock_key" ]] && [[ -n "$hc_mock_secret" ]] && [[ -n "$hc_mock_acct" ]]; then
+            echo "  ${GREEN}[PASS]${RESET} KIS Mock Credentials (paper trading)"; HC_PASS=$((HC_PASS + 1))
         else
-            local hc_token; hc_token="$(try_kis_token "$kis_key" "$kis_secret" "$_KIS_BASE_URL" "$_KIS_OAUTH_PATH")"
-            if [[ -n "$hc_token" ]]; then
-                echo "  ${GREEN}[PASS]${RESET} KIS API Authentication (${_KIS_TRADING_MODE} trading)"; HC_PASS=$((HC_PASS + 1))
-            else
-                echo "  ${RED}[FAIL]${RESET} KIS API Authentication (${_KIS_TRADING_MODE} trading)"; HC_FAIL=$((HC_FAIL + 1))
-            fi
+            echo "  ${RED}[FAIL]${RESET} KIS Mock Credentials - incomplete"; HC_FAIL=$((HC_FAIL + 1))
         fi
     else
-        echo "  ${RED}[FAIL]${RESET} KIS API Authentication - credentials missing"; HC_FAIL=$((HC_FAIL + 1))
+        resolve_kis_urls "$kis_mock"
+        if [[ -n "$kis_key" ]] && [[ -n "$kis_secret" ]]; then
+            # Avoid hammering OAuth endpoint: KIS may rate-limit token issuance (e.g. 1/min).
+            if [[ "$LAST_KIS_TOKEN_OK" == "true" ]]; then
+                echo "  ${GREEN}[PASS]${RESET} KIS API Authentication (${_KIS_TRADING_MODE} trading)"; HC_PASS=$((HC_PASS + 1))
+            else
+                local hc_token; hc_token="$(try_kis_token "$kis_key" "$kis_secret" "$_KIS_BASE_URL" "$_KIS_OAUTH_PATH")"
+                if [[ -n "$hc_token" ]]; then
+                    echo "  ${GREEN}[PASS]${RESET} KIS API Authentication (${_KIS_TRADING_MODE} trading)"; HC_PASS=$((HC_PASS + 1))
+                else
+                    echo "  ${RED}[FAIL]${RESET} KIS API Authentication (${_KIS_TRADING_MODE} trading)"; HC_FAIL=$((HC_FAIL + 1))
+                fi
+            fi
+        else
+            echo "  ${RED}[FAIL]${RESET} KIS API Authentication - credentials missing"; HC_FAIL=$((HC_FAIL + 1))
+        fi
     fi
 
     # 6. Slack (if configured)
@@ -676,10 +780,52 @@ phase_5_health_check() {
         echo "  ${GREEN}[PASS]${RESET} State Directory (${STATE_DIR}/)"; HC_PASS=$((HC_PASS + 1))
     else echo "  ${RED}[FAIL]${RESET} State Directory (${STATE_DIR}/)"; HC_FAIL=$((HC_FAIL + 1)); fi
 
+    # --- Optional checks (WARN only, do not affect PASS/FAIL) ---
+    local HC_OPTIONAL_PASS=0 HC_OPTIONAL_WARN=0
+    echo ""
+    echo "  ${BOLD}-- Optional Checks --${RESET}"
+
+    # O1. data/ directory
+    if [[ -d "${SCRIPT_DIR}/data" ]] && touch "${SCRIPT_DIR}/data/.hc_test" 2>/dev/null && rm -f "${SCRIPT_DIR}/data/.hc_test"; then
+        echo "  ${GREEN}[OPTIONAL]${RESET} data/ 디렉터리 (쓰기 가능)"; HC_OPTIONAL_PASS=$((HC_OPTIONAL_PASS + 1))
+    else
+        echo "  ${YELLOW}[WARN]${RESET} data/ 디렉터리 없음 또는 쓰기 불가"; HC_OPTIONAL_WARN=$((HC_OPTIONAL_WARN + 1))
+    fi
+
+    # O2. logs/ directory
+    if [[ -d "${SCRIPT_DIR}/logs" ]] && touch "${SCRIPT_DIR}/logs/.hc_test" 2>/dev/null && rm -f "${SCRIPT_DIR}/logs/.hc_test"; then
+        echo "  ${GREEN}[OPTIONAL]${RESET} logs/ 디렉터리 (쓰기 가능)"; HC_OPTIONAL_PASS=$((HC_OPTIONAL_PASS + 1))
+    else
+        echo "  ${YELLOW}[WARN]${RESET} logs/ 디렉터리 없음 또는 쓰기 불가"; HC_OPTIONAL_WARN=$((HC_OPTIONAL_WARN + 1))
+    fi
+
+    # O3. Health endpoint import
+    if "${VENV_DIR}/bin/python" -c "from stock_manager.api.health import get_health" &>/dev/null 2>&1; then
+        echo "  ${GREEN}[OPTIONAL]${RESET} Health endpoint (stock_manager.api.health)"; HC_OPTIONAL_PASS=$((HC_OPTIONAL_PASS + 1))
+    else
+        echo "  ${YELLOW}[WARN]${RESET} Health endpoint import 실패 (stock_manager.api.health)"; HC_OPTIONAL_WARN=$((HC_OPTIONAL_WARN + 1))
+    fi
+
+    # O4. Notification backend import
+    if "${VENV_DIR}/bin/python" -c "from stock_manager.notifications.backends import SlackNotifier" &>/dev/null 2>&1; then
+        echo "  ${GREEN}[OPTIONAL]${RESET} Notification backend (stock_manager.notifications.backends)"; HC_OPTIONAL_PASS=$((HC_OPTIONAL_PASS + 1))
+    else
+        echo "  ${YELLOW}[WARN]${RESET} Notification backend import 실패 (stock_manager.notifications.backends)"; HC_OPTIONAL_WARN=$((HC_OPTIONAL_WARN + 1))
+    fi
+
+    # O5. Risk module import
+    if "${VENV_DIR}/bin/python" -c "import stock_manager.trading.risk" &>/dev/null 2>&1; then
+        echo "  ${GREEN}[OPTIONAL]${RESET} Risk module (stock_manager.trading.risk)"; HC_OPTIONAL_PASS=$((HC_OPTIONAL_PASS + 1))
+    else
+        echo "  ${YELLOW}[WARN]${RESET} Risk module import 실패 (stock_manager.trading.risk)"; HC_OPTIONAL_WARN=$((HC_OPTIONAL_WARN + 1))
+    fi
+
     # Summary
     local total_checked=$((HC_PASS + HC_FAIL))
+    echo ""
     echo "  ${BOLD}================================================${RESET}"
     echo "  Result: ${GREEN}${HC_PASS}/${total_checked} passed${RESET}, ${RED}${HC_FAIL} failed${RESET}, ${DIM}${HC_SKIP} skipped${RESET}"
+    echo "  Optional: ${GREEN}${HC_OPTIONAL_PASS} passed${RESET}, ${YELLOW}${HC_OPTIONAL_WARN} warnings${RESET}"
     echo "  ${BOLD}================================================${RESET}"
 
     echo ""
@@ -696,6 +842,16 @@ phase_5_health_check() {
     if [[ "$mock_val" == "true" ]]; then print_info "Paper trading mode: ${GREEN}enabled${RESET}"
     else print_info "Real trading mode: ${YELLOW}enabled${RESET}"; fi
     print_info "State directory: ${STATE_DIR}/"
+
+    if [[ "$IS_DOCKER" == "true" ]]; then
+        echo ""
+        print_info "Docker 환경에서 실행 중입니다."
+        if [[ -f "${SCRIPT_DIR}/docker-compose.yml" ]] || [[ -f "${SCRIPT_DIR}/compose.yml" ]]; then
+            print_info "docker-compose.yml 감지됨 — 'docker compose up' 으로 실행하세요."
+        else
+            print_info "docker-compose.yml 미감지 — 필요 시 생성을 권장합니다."
+        fi
+    fi
 
     [[ $HC_FAIL -gt 0 ]] && return 1
     return 0

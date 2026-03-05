@@ -141,6 +141,7 @@ class TradingConfig:
     risk_enforcement_mode: Literal["off", "warn", "enforce"] = "warn"
     portfolio_value: Decimal = Decimal("0")
     daily_loss_limit_pct: Decimal = Decimal("0.01")
+    market_hours_enabled: bool = True
 
     strategy: "Strategy | None" = None
     strategy_symbols: tuple[str, ...] = ()

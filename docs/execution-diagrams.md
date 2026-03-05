@@ -1,5 +1,7 @@
 # Stock Manager 실행 다이어그램
 
+> 관련 문서: [knowledge-map.md](knowledge-map.md) | [glossary.md](glossary.md) | [README.md](../README.md)
+
 ## 목차
 1. [시스템 아키텍처 개요](#1-시스템-아키텍처-개요)
 2. [초기화 흐름](#2-초기화-흐름)

@@ -29,6 +29,11 @@ Scope:
 |---|---|---|
 | Full-suite tests are not in PR blocking path | 일부 통합/느린 회귀가 PR 단계에서 늦게 발견될 수 있음 | Keep fast PR gates and use `.github/workflows/nightly-full-suite.yml` for broad coverage |
 
+## Related Decisions
+
+- [ADR-0001: Mock-first safety gate](adr/0001-mock-first-safety-gate.md) — Drift/GC gate의 mock-first 정책 근거.
+- [ADR-0002: Coverage threshold 85%](adr/0002-coverage-threshold-85.md) — 85% 커버리지 임계값 결정 근거.
+
 ## Verification Checklist
 
 - [ ] Coverage threshold is consistent in CI, pytest config, and root docs.

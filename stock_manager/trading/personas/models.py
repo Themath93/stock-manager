@@ -7,7 +7,7 @@ used across all investor personas.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
@@ -85,7 +85,7 @@ class MarketSnapshot:
     name: str = ""
     market: str = ""
     sector: str = ""
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     current_price: Decimal = Decimal("0")
     open_price: Decimal = Decimal("0")
     high_price: Decimal = Decimal("0")

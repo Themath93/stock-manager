@@ -7,7 +7,7 @@ The trailing stop ratchets up monotonically (never decreases).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from stock_manager.trading.pipeline.state import PipelineEntry
@@ -89,7 +89,7 @@ class PositionMonitor:
             return "TRAILING_STOP"
 
         # 4. Time-based exit
-        holding_days = (datetime.now() - entry.entered_at).days
+        holding_days = (datetime.now(timezone.utc) - entry.entered_at).days
         if holding_days >= self._max_holding_days:
             return "MAX_HOLDING"
 

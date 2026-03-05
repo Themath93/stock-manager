@@ -33,3 +33,9 @@ Negative:
    - Rejected due to safety risk.
 2. Remove promotion gate and rely only on manual reviewer checks.
    - Rejected due to low reproducibility and auditability.
+
+## See Also
+
+- [ADR-0002](0002-coverage-threshold-85.md) — 커버리지 임계값 정책 (동반 품질 정책)
+- [quality-gates.md](../quality-gates.md) — 품질 게이트 강제 위치 매트릭스
+- [knowledge-map.md](../knowledge-map.md) — 안전 불변량 섹션에서 참조

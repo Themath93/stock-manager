@@ -18,8 +18,8 @@ def _read_lines(path: Path) -> list[dict]:
 
 def _get_log_file(log_dir: Path, prefix: str = "pipeline") -> Path:
     """Return the daily log file path from log_dir."""
-    from datetime import datetime
-    today = datetime.now().strftime("%Y%m%d")
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
     return log_dir / f"{prefix}-{today}.ndjson"
 
 

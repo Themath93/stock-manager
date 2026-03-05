@@ -4,7 +4,7 @@ from __future__ import annotations
 import shlex
 from dataclasses import dataclass
 
-_VALID_SUBCOMMANDS = {"start", "stop", "status", "config", "help"}
+_VALID_SUBCOMMANDS = {"start", "stop", "status", "config", "help", "balance", "orders", "sell-all"}
 
 
 @dataclass
@@ -16,6 +16,7 @@ class ParsedCommand:
     is_mock: bool | None = None
     order_quantity: int = 1
     run_interval_sec: float = 60.0
+    confirm: bool = False
     error: str | None = None  # set if parsing failed
 
 
@@ -78,6 +79,8 @@ def parse_command(text: str) -> ParsedCommand:
             result.is_mock = True
         elif flag == "--no-mock":
             result.is_mock = False
+        elif flag == "--confirm":
+            result.confirm = True
         elif flag == "--order-quantity":
             i += 1
             if i >= len(args):

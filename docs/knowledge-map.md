@@ -40,20 +40,20 @@ Scope policy:
 5. Engine executes strategies/pipeline through trading services and broker adapter.
 6. Monitoring and reconciliation loops enforce ongoing consistency and risk controls.
 
-Reference diagram: `docs/execution-diagrams.md`.
+Reference diagram: [execution-diagrams.md](execution-diagrams.md).
 
 ## 4) Safety Invariants (Knowledge-Level)
 
 These are map-level constraints that must stay visible to all agents:
 
-- Mock-first operation: `KIS_USE_MOCK=true` is the default development path.
+- Mock-first operation: `KIS_USE_MOCK=true` is the default development path. See [ADR-0001](adr/0001-mock-first-safety-gate.md).
 - Live trading requires explicit execution and promotion-gate pass.
 - Runtime state persistence path is local and should never be committed as source.
 - Credentials live in `.env` only; no secret material in git.
 
 Primary references:
-- `README.md`
-- `AGENTS.md`
+- [README.md](../README.md)
+- [AGENTS.md](../AGENTS.md)
 - `stock_manager/qa/mock_gate.py`
 
 ## 5) Verification Map
