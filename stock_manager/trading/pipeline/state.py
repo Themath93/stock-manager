@@ -6,7 +6,7 @@ evaluation -> consensus -> buy -> monitor -> sell lifecycle.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum, auto
 from typing import Any
@@ -67,7 +67,7 @@ class PipelineEntry:
 
     symbol: str
     state: PipelineState = PipelineState.WATCHLIST
-    entered_at: datetime = field(default_factory=datetime.now)
+    entered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     consensus_result: Any = None  # ConsensusResult (avoid circular import)
     buy_price: Decimal | None = None
     buy_quantity: int | None = None
@@ -93,4 +93,4 @@ class PipelineEntry:
             )
         self.history.append((self.state, self.entered_at))
         self.state = new_state
-        self.entered_at = datetime.now()
+        self.entered_at = datetime.now(timezone.utc)

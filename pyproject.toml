@@ -23,6 +23,7 @@ dependencies = [
   "slack-sdk>=3.27",
   "typer>=0.12",
   "websocket-client>=1.7",
+  "requests>=2.31",
 ]
 
 [project.optional-dependencies]
@@ -87,13 +88,30 @@ type = "forbidden"
 source_modules = ["stock_manager.adapters"]
 forbidden_modules = ["stock_manager.trading"]
 
+[[tool.importlinter.contracts]]
+id = "trading_must_not_import_cli"
+name = "Trading layer must not import CLI layer"
+type = "forbidden"
+source_modules = ["stock_manager.trading"]
+forbidden_modules = ["stock_manager.cli"]
+
+[[tool.importlinter.contracts]]
+id = "trading_must_not_import_notifications"
+name = "Trading layer must not import notifications"
+type = "forbidden"
+source_modules = ["stock_manager.trading"]
+forbidden_modules = ["stock_manager.notifications"]
+
 [tool.coverage.run]
 omit = [
   "*/stock_manager/adapters/*",
+  "*/stock_manager/api/*",
   "*/stock_manager/cli/*",
   "*/stock_manager/config/*",
+  "*/stock_manager/dashboard/*",
   "*/stock_manager/main.py",
   "*/stock_manager/notifications/*",
+  "*/stock_manager/storage/*",
   "*/stock_manager/trading/reflexivity/*",
   "*/stock_manager/trading/strategies/graham.py",
 ]
@@ -101,10 +119,13 @@ omit = [
 [tool.coverage.report]
 omit = [
   "*/stock_manager/adapters/*",
+  "*/stock_manager/api/*",
   "*/stock_manager/cli/*",
   "*/stock_manager/config/*",
+  "*/stock_manager/dashboard/*",
   "*/stock_manager/main.py",
   "*/stock_manager/notifications/*",
+  "*/stock_manager/storage/*",
   "*/stock_manager/trading/reflexivity/*",
   "*/stock_manager/trading/strategies/graham.py",
 ]

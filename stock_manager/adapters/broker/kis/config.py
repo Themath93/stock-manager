@@ -75,6 +75,7 @@ class KISConfig(BaseSettings):
     token_cache_enabled: bool = True
     token_cache_path: str | None = None
     # Request stabilization controls
+    request_rate_limit_per_sec: int = 8
     request_retry_enabled: bool = True
     request_max_attempts: int = 3
     request_initial_backoff_ms: int = 200

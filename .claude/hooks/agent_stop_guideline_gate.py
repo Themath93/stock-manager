@@ -14,6 +14,49 @@ import tempfile
 DONE_TOKEN = "[GUIDELINE_DOUBLE_CHECK_DONE]"
 MAX_BLOCKS_PER_SESSION = 1
 
+_CONFIG_FILENAME = "quality-checklist.json"
+
+_DEFAULT_CONFIG: dict[str, object] = {
+    "done_token": DONE_TOKEN,
+    "max_blocks_per_session": MAX_BLOCKS_PER_SESSION,
+    "header_message": (
+        "개발 완료 전 품질 체크리스트를 확인해주세요.\n"
+        "다음 항목을 점검한 뒤 다시 완료 응답하세요:"
+    ),
+    "checklist": [
+        "TDD 방식의 테스트코드 구성은 했나요? (새 기능 → 테스트 추가, 버그 수정 → 재현 테스트 작성)",
+        "지식맵(AGENTS.md, CLAUDE.md, docs/)은 변경사항에 맞게 최신화 했나요?",
+        "요구사항을 모두 만족했나요? 원래 요청 대비 누락 항목이 없는지 확인",
+        "검증(ruff check, mypy, pytest)을 실행했고 모두 통과했나요?",
+    ],
+    "show_done_token_instruction": True,
+    "show_change_count": True,
+}
+
+
+def _load_config() -> dict[str, object]:
+    config_path = Path(__file__).resolve().parent / _CONFIG_FILENAME
+    try:
+        parsed = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return dict(_DEFAULT_CONFIG)
+    if not isinstance(parsed, dict):
+        return dict(_DEFAULT_CONFIG)
+    merged = dict(_DEFAULT_CONFIG)
+    if isinstance(parsed.get("done_token"), str) and parsed["done_token"].strip():
+        merged["done_token"] = parsed["done_token"]
+    if isinstance(parsed.get("max_blocks_per_session"), int) and parsed["max_blocks_per_session"] >= 1:
+        merged["max_blocks_per_session"] = parsed["max_blocks_per_session"]
+    if isinstance(parsed.get("header_message"), str):
+        merged["header_message"] = parsed["header_message"]
+    if isinstance(parsed.get("checklist"), list) and all(isinstance(i, str) for i in parsed["checklist"]):
+        merged["checklist"] = parsed["checklist"]
+    if isinstance(parsed.get("show_done_token_instruction"), bool):
+        merged["show_done_token_instruction"] = parsed["show_done_token_instruction"]
+    if isinstance(parsed.get("show_change_count"), bool):
+        merged["show_change_count"] = parsed["show_change_count"]
+    return merged
+
 
 def _load_payload() -> dict[str, object]:
     raw = sys.stdin.read().strip()
@@ -47,17 +90,18 @@ def _git_change_count(cwd: Path) -> int:
     return sum(1 for line in result.stdout.splitlines() if line.strip())
 
 
-def _build_block_output(change_count: int) -> dict[str, str]:
-    reason = (
-        "개발 완료 전 가이드라인 더블체크가 필요합니다.\n"
-        "다음 항목을 확인한 뒤 다시 완료 응답하세요:\n"
-        "1) 어떤 가이드라인 파일(예: AGENTS.md, CLAUDE.md)을 준수했는지\n"
-        "2) 어떤 검증(테스트/타입체크/빌드/진단)을 실행했고 결과가 무엇인지\n"
-        "3) 남아있는 리스크/가정이 있는지\n"
-        "4) 응답 마지막에 [GUIDELINE_DOUBLE_CHECK_DONE] 토큰을 추가\n"
-        f"(현재 변경 파일 감지: {change_count})"
-    )
-    return {"decision": "block", "reason": reason}
+def _build_block_output(change_count: int, config: dict[str, object]) -> dict[str, str]:
+    parts: list[str] = [str(config["header_message"])]
+    checklist = config["checklist"]
+    if not isinstance(checklist, list):
+        checklist = []
+    for i, item in enumerate(checklist, start=1):
+        parts.append(f"{i}) {item}")
+    if config.get("show_done_token_instruction"):
+        parts.append(f"{len(checklist) + 1}) 응답 마지막에 {config['done_token']} 토큰을 추가")
+    if config.get("show_change_count"):
+        parts.append(f"(현재 변경 파일 감지: {change_count})")
+    return {"decision": "block", "reason": "\n".join(parts)}
 
 
 def _latest_assistant_text(transcript_path: Path) -> str:
@@ -99,12 +143,12 @@ def _latest_assistant_text(transcript_path: Path) -> str:
     return latest
 
 
-def _double_check_is_confirmed(payload: dict[str, object]) -> bool:
+def _double_check_is_confirmed(payload: dict[str, object], done_token: str) -> bool:
     transcript_path_value = payload.get("transcript_path")
     if not isinstance(transcript_path_value, str) or not transcript_path_value:
         return False
     latest_text = _latest_assistant_text(Path(transcript_path_value))
-    return DONE_TOKEN in latest_text
+    return done_token in latest_text
 
 
 def _state_dir_path() -> Path:
@@ -154,12 +198,12 @@ def _set_session_block_count(session_id: str, count: int) -> None:
         return
 
 
-def _should_block_this_stop(payload: dict[str, object]) -> bool:
+def _should_block_this_stop(payload: dict[str, object], max_blocks: int) -> bool:
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         return True
     current_count = _session_block_count(session_id)
-    if current_count >= MAX_BLOCKS_PER_SESSION:
+    if current_count >= max_blocks:
         return False
     _set_session_block_count(session_id, current_count + 1)
     return True
@@ -185,13 +229,15 @@ def main() -> int:
     if change_count <= 0:
         return 0
 
-    if _double_check_is_confirmed(payload):
+    config = _load_config()
+
+    if _double_check_is_confirmed(payload, str(config["done_token"])):
         return 0
 
-    if not _should_block_this_stop(payload):
+    if not _should_block_this_stop(payload, int(config["max_blocks_per_session"])):  # type: ignore[arg-type]
         return 0
 
-    print(json.dumps(_build_block_output(change_count), ensure_ascii=True))
+    print(json.dumps(_build_block_output(change_count, config), ensure_ascii=True))
     return 0
 
 

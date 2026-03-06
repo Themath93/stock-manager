@@ -16,6 +16,8 @@ Scope:
 | Gate | Command | Local (manual) | CI (blocking) | Source of Truth |
 |---|---|---|---|---|
 | Lint | `uv run ruff check` | Yes | Yes | `.github/workflows/ci.yml`, `pyproject.toml` |
+| KIS Endpoint Policy | `uv run python scripts/validate_kis_endpoint_policy.py` | Yes | Yes | `.github/workflows/ci.yml`, `scripts/validate_kis_endpoint_policy.py`, `docs/kis-endpoint-guardrails.md` |
+| KIS Payload/Rate Guardrails | `uv run pytest tests/unit/test_client.py tests/unit/apis/domestic_stock/test_basic.py tests/unit/test_fetcher_rate_payload_policy.py --no-cov -q` | Yes | Yes | `tests/unit/test_client.py`, `tests/unit/apis/domestic_stock/test_basic.py`, `tests/unit/test_fetcher_rate_payload_policy.py`, `docs/kis-openapi/*.md` |
 | Type Check | `uv run mypy stock_manager` | Yes | Yes | `.github/workflows/ci.yml`, `pyproject.toml` |
 | Unit Tests + Coverage | `uv run pytest tests/unit tests/fixtures --cov=stock_manager --cov-fail-under=85` | Yes | Yes | `.github/workflows/ci.yml`, `pyproject.toml` |
 | Full Tests | `uv run pytest` | Yes | Yes (nightly) | `.github/workflows/nightly-full-suite.yml`, `pyproject.toml`, `AGENTS.md`, `README.md` |
@@ -28,6 +30,12 @@ Scope:
 | Gap | Impact | Planned Action |
 |---|---|---|
 | Full-suite tests are not in PR blocking path | 일부 통합/느린 회귀가 PR 단계에서 늦게 발견될 수 있음 | Keep fast PR gates and use `.github/workflows/nightly-full-suite.yml` for broad coverage |
+
+## Related Decisions
+
+- [ADR-0001: Mock-first safety gate](adr/0001-mock-first-safety-gate.md) — Drift/GC gate의 mock-first 정책 근거.
+- [ADR-0002: Coverage threshold 85%](adr/0002-coverage-threshold-85.md) — 85% 커버리지 임계값 결정 근거.
+- [ADR-0009: KIS endpoint authority and mode isolation](adr/0009-kis-endpoint-authority-and-mode-isolation.md) — mock/real endpoint drift 방지 근거.
 
 ## Verification Checklist
 

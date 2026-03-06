@@ -9,6 +9,7 @@ This module provides the main TradingEngine class that coordinates:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
@@ -219,6 +220,11 @@ class TradingEngine:
 
         self._restore_risk_controls()
 
+        # Run preflight checks
+        preflight_errors = self._run_preflight_checks()
+        if preflight_errors:
+            raise RuntimeError(f"Preflight checks failed: {'; '.join(preflight_errors)}")
+
         # Run startup reconciliation
         recovery_report = startup_reconciliation(
             local_state=self._state,
@@ -264,6 +270,7 @@ class TradingEngine:
         self._reconciler.start()
 
         self._running = True
+        self._start_monotonic = time.monotonic()
 
         self._start_strategy_orchestration()
         logger.info("TradingEngine started successfully")
@@ -373,6 +380,21 @@ class TradingEngine:
         self._ensure_running()
         self._ensure_trading_allowed()
 
+        # Market hours check - block buys outside trading hours
+        if self.config.market_hours_enabled and not self._is_market_open():
+            reason = "Market is closed (trading hours: 09:00-15:20 KST, weekdays)"
+            self._notify(
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Market Closed",
+                symbol=symbol,
+                side="BUY",
+                quantity=quantity,
+                price=price,
+                reason=reason,
+            )
+            return OrderResult(success=False, order_id="", message=reason)
+
         logger.info(
             f"Buy order requested: {symbol} qty={quantity} price={price}",
             extra={
@@ -398,17 +420,31 @@ class TradingEngine:
             side="buy",
         )
         if not risk_result.approved:
-            self._notify(
-                "order.rejected",
-                NotificationLevel.WARNING,
-                "Order Rejected",
-                symbol=symbol,
-                side="BUY",
-                quantity=quantity,
-                price=price,
-                reason=risk_result.reason,
-            )
-            return OrderResult(success=False, order_id="", message=risk_result.reason)
+            if self.config.risk_enforcement_mode == "enforce":
+                self._notify(
+                    "order.rejected",
+                    NotificationLevel.WARNING,
+                    "Order Rejected",
+                    symbol=symbol,
+                    side="BUY",
+                    quantity=quantity,
+                    price=price,
+                    reason=risk_result.reason,
+                )
+                return OrderResult(success=False, order_id="", message=risk_result.reason)
+            elif self.config.risk_enforcement_mode == "warn":
+                logger.warning(f"Risk check failed (warn mode): {risk_result.reason}")
+                self._notify(
+                    "risk.warning",
+                    NotificationLevel.WARNING,
+                    "Risk Warning",
+                    symbol=symbol,
+                    side="BUY",
+                    quantity=quantity,
+                    price=price,
+                    reason=risk_result.reason,
+                )
+                # Continue with order despite risk warning
 
         order_quantity = risk_result.adjusted_quantity or quantity
 
@@ -456,13 +492,13 @@ class TradingEngine:
 
         return result
 
-    def sell(self, symbol: str, quantity: int, price: int) -> OrderResult:
+    def sell(self, symbol: str, quantity: int, price: int | None = None) -> OrderResult:
         """Place a sell order to exit a position.
 
         Args:
             symbol: Stock symbol code
             quantity: Number of shares to sell
-            price: Limit price per share (KRW)
+            price: Limit price per share (KRW), or None for market order
 
         Returns:
             OrderResult: Result of the order placement
@@ -486,7 +522,7 @@ class TradingEngine:
             self._record_realized_pnl(
                 position=position_before_sell,
                 sold_quantity=quantity,
-                sold_price=price,
+                sold_price=price or 0,
             )
             # Remove symbol from monitoring if position fully closed
             position = self._position_manager.get_position(symbol)
@@ -540,6 +576,92 @@ class TradingEngine:
         """
         return self._position_manager.get_position(symbol)
 
+    def get_balance(self) -> dict:
+        """Get account balance via broker API.
+
+        Returns:
+            Balance response dict with output1 (holdings) and output2 (summary)
+
+        Raises:
+            RuntimeError: If engine is not running
+        """
+        self._ensure_running()
+        return self._inquire_balance()
+
+    def get_daily_orders(self) -> dict:
+        """Get today's order/execution history via broker API.
+
+        Returns:
+            Daily order conclusion response dict with output1 (orders)
+
+        Raises:
+            RuntimeError: If engine is not running
+        """
+        self._ensure_running()
+
+        from datetime import date
+        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
+            inquire_daily_ccld,
+        )
+
+        request_config = inquire_daily_ccld(
+            cano=self.account_number,
+            acnt_prdt_cd=self.account_product_code,
+            ord_dt=date.today().strftime("%Y%m%d"),
+            is_paper_trading=self.is_paper_trading,
+        )
+
+        return self.client.make_request(
+            method="GET",
+            path=request_config["url_path"],
+            params=request_config["params"],
+            headers={"tr_id": request_config["tr_id"]},
+        )
+
+    def liquidate_all(self) -> list[dict]:
+        """Market-sell all open positions.
+
+        Iterates all OPEN/OPEN_RECONCILED positions and places market sell orders.
+        Continues even if individual orders fail.
+
+        Returns:
+            List of result dicts per position:
+            {symbol, quantity, entry_price, success, message, broker_order_id}
+
+        Raises:
+            RuntimeError: If engine is not running
+        """
+        self._ensure_running()
+        from stock_manager.trading.models import PositionStatus
+
+        positions = self._position_manager.get_all_positions()
+        results: list[dict] = []
+
+        for symbol, pos in positions.items():
+            if pos.status not in (PositionStatus.OPEN, PositionStatus.OPEN_RECONCILED):
+                continue
+
+            result_entry: dict = {
+                "symbol": symbol,
+                "quantity": pos.quantity,
+                "entry_price": pos.entry_price,
+                "success": False,
+                "message": "",
+                "broker_order_id": None,
+            }
+
+            try:
+                order_result = self.sell(symbol=symbol, quantity=pos.quantity, price=None)
+                result_entry["success"] = order_result.success
+                result_entry["message"] = order_result.message or ""
+                result_entry["broker_order_id"] = order_result.broker_order_id
+            except Exception as exc:
+                result_entry["message"] = str(exc)
+
+            results.append(result_entry)
+
+        return results
+
     def get_status(self) -> EngineStatus:
         """Get current engine status.
 
@@ -552,13 +674,17 @@ class TradingEngine:
             if self._running
             else False
         )
+        rate_limiter_available = self._rate_limiter.available
+        client_rate_available = getattr(self.client, "request_rate_limiter_available", None)
+        if isinstance(client_rate_available, int):
+            rate_limiter_available = client_rate_available
 
         return EngineStatus(
             running=self._running,
             position_count=len(self._position_manager.get_all_positions()),
             price_monitor_running=self._price_monitor.is_running,
             reconciler_running=reconciler_running,
-            rate_limiter_available=self._rate_limiter.available,
+            rate_limiter_available=rate_limiter_available,
             state_path=str(self.state_path),
             is_paper_trading=self.is_paper_trading,
             trading_enabled=self._trading_enabled,
@@ -575,7 +701,21 @@ class TradingEngine:
         if not self._running:
             return False
 
-        return self._price_monitor.is_running and self._rate_limiter.available > 0
+        if self._rate_limiter.available <= 0:
+            return False
+
+        has_positions = bool(self._position_manager.get_all_positions())
+        if not has_positions:
+            return True
+
+        if self._price_monitor.is_running:
+            return True
+
+        adapter = self._broker_adapter
+        if adapter is not None and bool(getattr(self.config, "websocket_monitoring_enabled", False)):
+            return bool(getattr(adapter, "websocket_connected", False))
+
+        return False
 
     # Internal helper methods
 
@@ -826,6 +966,12 @@ class TradingEngine:
             logger.debug(f"State persisted to {self.state_path}")
         except Exception as e:
             logger.error(f"Failed to persist state: {e}", exc_info=True)
+            self._notify(
+                "error.state_persistence_failed",
+                NotificationLevel.WARNING,
+                "상태 저장 실패",
+                **self._build_error_context(e, operation="state_persistence"),
+            )
 
     def _update_state(self):
         """Sync positions from position manager to state."""
@@ -1014,6 +1160,12 @@ class TradingEngine:
                 logger.error(f"Stop-loss order failed for {symbol}: {result.message}")
         except Exception as e:
             logger.error(f"Failed to execute stop-loss for {symbol}: {e}", exc_info=True)
+            self._notify(
+                "error.stop_loss_failed",
+                NotificationLevel.ERROR,
+                "손절 실행 실패",
+                **self._build_error_context(e, symbol=symbol, operation="stop_loss"),
+            )
 
     def _handle_take_profit(self, symbol: str):
         """Auto-sell position when take-profit is triggered.
@@ -1050,6 +1202,12 @@ class TradingEngine:
                 logger.error(f"Take-profit order failed for {symbol}: {result.message}")
         except Exception as e:
             logger.error(f"Failed to execute take-profit for {symbol}: {e}", exc_info=True)
+            self._notify(
+                "error.take_profit_failed",
+                NotificationLevel.ERROR,
+                "익절 실행 실패",
+                **self._build_error_context(e, symbol=symbol, operation="take_profit"),
+            )
 
     def _handle_discrepancy(self, result):
         """Log position reconciliation discrepancies.
@@ -1078,6 +1236,57 @@ class TradingEngine:
             missing_positions=result.missing_positions,
             quantity_mismatches=result.quantity_mismatches,
         )
+
+    def _run_preflight_checks(self) -> list[str]:
+        """Run pre-start validation checks.
+
+        Returns:
+            List of error messages. Empty list means all checks passed.
+        """
+        errors: list[str] = []
+
+        # 1. Balance inquiry → auto-set portfolio_value
+        try:
+            balance = self._inquire_balance()
+            output2 = balance.get("output2", [{}])
+            if output2:
+                total = output2[0].get("dnca_tot_amt") or output2[0].get(
+                    "tot_evlu_amt", "0"
+                )
+                self._risk_manager.portfolio_value = Decimal(total)
+                if self._risk_manager.portfolio_value <= 0:
+                    errors.append("Portfolio value is 0 or negative")
+        except Exception as e:
+            errors.append(f"Balance inquiry failed: {e}")
+
+        # 2. Slack notification connectivity test
+        health_check_fn = getattr(self.notifier, "health_check", None)
+        if health_check_fn is not None:
+            if not health_check_fn():
+                errors.append("Slack notification health check failed")
+
+        # 3. Market hours info (warning only, not an error)
+        if self.config.market_hours_enabled and not self._is_market_open():
+            logger.warning(
+                "Engine starting outside market hours - buy orders will be blocked"
+            )
+
+        return errors
+
+    def _is_market_open(self) -> bool:
+        """Check if Korean stock market is currently open.
+
+        Returns True only during weekday 09:00-15:20 KST.
+        15:20 cutoff gives 10-minute buffer before 15:30 close.
+        """
+        now = datetime.now(ZoneInfo("Asia/Seoul"))
+        # Weekdays only (0=Monday, 6=Sunday)
+        if now.weekday() >= 5:
+            return False
+        current_time = now.time()
+        market_open = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+        market_close = current_time.replace(hour=15, minute=20, second=0, microsecond=0)
+        return market_open <= current_time <= market_close
 
     def _ensure_running(self):
         """Raise RuntimeError if engine is not running."""
@@ -1169,14 +1378,15 @@ class TradingEngine:
         with self._strategy_lock:
             try:
                 scores = strategy.screen(symbols)
-            except Exception:
+            except Exception as e:
                 logger.error("Strategy screen failed", exc_info=True)
                 self._notify(
                     "strategy.error",
                     NotificationLevel.ERROR,
-                    "Strategy Error",
+                    "전략 스크리닝 오류",
                     strategy=type(strategy).__name__,
                     symbols=symbols,
+                    **self._build_error_context(e, operation="strategy_screen"),
                 )
                 return
 
@@ -1205,8 +1415,14 @@ class TradingEngine:
                     price = self._get_current_price(symbol)
                     self.buy(symbol, qty, price)
                     submitted += 1
-                except Exception:
+                except Exception as e:
                     logger.error("Buy submission failed", extra={"symbol": symbol}, exc_info=True)
+                    self._notify(
+                        "error.buy_submission_failed",
+                        NotificationLevel.ERROR,
+                        "매수 주문 제출 실패",
+                        **self._build_error_context(e, symbol=symbol, operation="buy_submission"),
+                    )
 
     def _should_process_auto_exit(self, symbol: str, *, trigger_type: str) -> bool:
         cooldown = float(getattr(self.config, "auto_exit_cooldown_sec", 1.0) or 0.0)
@@ -1269,6 +1485,66 @@ class TradingEngine:
         if isinstance(value, str):
             return value.lower() == expected.value
         return False
+
+    def _build_error_context(self, exc: Exception, *, symbol: str | None = None, operation: str = "", **extra) -> dict:
+        """Build standardized error context for notifications."""
+        import traceback as tb_module
+        category = self._classify_error(exc)
+        frames = tb_module.format_exception(type(exc), exc, exc.__traceback__)
+        tb_str = "".join(frames[-4:])  # last 3 frames + exception line
+        if len(tb_str) > 1500:
+            tb_str = tb_str[:1500] + "\n... (truncated)"
+
+        ctx: dict = {
+            "error_type": type(exc).__name__,
+            "error_category": category,
+            "error_message": str(exc),
+            "traceback": tb_str,
+            "operation": operation,
+            "recoverable": self._is_recoverable(exc),
+            "recovery_suggestion": self._get_recovery_suggestion(exc, category),
+            **extra,
+        }
+        if symbol:
+            ctx["symbol"] = symbol
+            position = self._position_manager.get_position(symbol)
+            if position:
+                ctx["entry_price"] = str(position.entry_price)
+                ctx["quantity"] = str(position.quantity)
+                ctx["current_price"] = str(position.current_price) if position.current_price else None
+        if self._running:
+            import time as _time
+            ctx["session_uptime_sec"] = _time.monotonic() - getattr(self, '_start_monotonic', _time.monotonic())
+        return ctx
+
+    @staticmethod
+    def _classify_error(exc: Exception) -> str:
+        """Classify exception into Korean error category."""
+        name = type(exc).__name__.lower()
+        if any(k in name for k in ("connection", "timeout", "socket", "http", "network")):
+            return "네트워크"
+        if any(k in name for k in ("broker", "api", "kis", "auth")):
+            return "브로커 API"
+        if any(k in name for k in ("value", "key", "index", "attribute", "type")):
+            return "로직 오류"
+        return "시스템"
+
+    @staticmethod
+    def _is_recoverable(exc: Exception) -> bool:
+        """Determine if the error is likely recoverable."""
+        name = type(exc).__name__.lower()
+        return any(k in name for k in ("connection", "timeout", "socket", "http", "network", "rate"))
+
+    @staticmethod
+    def _get_recovery_suggestion(exc: Exception, category: str) -> str:
+        """Return Korean recovery suggestion based on error category."""
+        suggestions = {
+            "네트워크": "네트워크 연결 상태를 확인하고, 잠시 후 자동 재시도됩니다.",
+            "브로커 API": "브로커 API 상태 및 인증 토큰을 확인하세요.",
+            "로직 오류": "입력값과 설정을 확인하세요. 문제가 지속되면 로그를 검토하세요.",
+            "시스템": "시스템 리소스(메모리/디스크)를 확인하세요.",
+        }
+        return suggestions.get(category, "로그를 확인하고 필요시 엔진을 재시작하세요.")
 
     def _notify(self, event_type: str, level: NotificationLevel, title: str, **details) -> None:
         """Send notification, swallowing any errors."""

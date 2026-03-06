@@ -19,7 +19,6 @@ class TrIdInfo(TypedDict):
 
 
 # API Endpoints
-_BASE_URL = "https://api.koreainvestment.com"
 _RANKING_BASE = "/uapi/domestic-stock/v1/ranking"
 _QUOTATIONS_BASE = "/uapi/domestic-stock/v1/quotations"
 

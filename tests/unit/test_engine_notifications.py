@@ -23,7 +23,14 @@ def mock_notifier():
 @pytest.fixture
 def mock_client():
     """Create a mock KIS client."""
-    return Mock()
+    client = Mock()
+    client.make_request.return_value = {
+        "rt_cd": "0",
+        "msg_cd": "0",
+        "output": {"stck_prpr": "70000"},
+        "output2": [{"dnca_tot_amt": "10000000"}],
+    }
+    return client
 
 
 @pytest.fixture
@@ -32,6 +39,7 @@ def trading_engine(mock_client, mock_notifier, tmp_path):
     config = TradingConfig(
         rate_limit_per_sec=10,
         polling_interval_sec=1.0,
+        market_hours_enabled=False,
     )
     engine = TradingEngine(
         client=mock_client,

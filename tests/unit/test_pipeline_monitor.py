@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from stock_manager.trading.pipeline.monitor import PositionMonitor
@@ -32,7 +32,7 @@ def _entry_in_monitoring(
     e.buy_quantity = buy_quantity
     e.current_price = buy_price
     if entered_days_ago:
-        e.entered_at = datetime.now() - timedelta(days=entered_days_ago)
+        e.entered_at = datetime.now(timezone.utc) - timedelta(days=entered_days_ago)
     return e
 
 

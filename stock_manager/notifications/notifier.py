@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class _SlackClient(Protocol):
     def chat_postMessage(self, **kwargs: Any) -> Any: ...
+    def auth_test(self, **kwargs: Any) -> Any: ...
 
 
 class SlackNotifier:
@@ -164,26 +165,46 @@ class SlackNotifier:
             finally:
                 self._queue.task_done()
 
+    def health_check(self) -> bool:
+        """Test Slack API connectivity. Called during engine preflight checks."""
+        if self._client is None:
+            return False
+        try:
+            self._client.auth_test()
+            return True
+        except Exception:
+            return False
+
     def _send_sync(self, event: NotificationEvent) -> None:
         """Synchronous send path shared by direct and async worker modes."""
         client = self._client
         if client is None:
             return
-        try:
-            formatted = format_notification(event)
-            channel = self._resolve_channel(event)
 
-            with self._lock:
-                client.chat_postMessage(
-                    channel=channel,
-                    text=formatted["text"],
-                    attachments=[
-                        {
-                            "color": formatted["color"],
-                            "blocks": formatted["blocks"],
-                        }
-                    ],
-                )
-            logger.debug(f"Slack notification sent: {event.event_type}")
-        except Exception as e:
-            logger.warning(f"Slack notification failed: {e}", exc_info=False)
+        max_retries = 3 if event.level >= NotificationLevel.CRITICAL else 1
+
+        for attempt in range(max_retries):
+            try:
+                formatted = format_notification(event)
+                channel = self._resolve_channel(event)
+
+                with self._lock:
+                    client.chat_postMessage(
+                        channel=channel,
+                        text=formatted["text"],
+                        attachments=[
+                            {
+                                "color": formatted["color"],
+                                "blocks": formatted["blocks"],
+                            }
+                        ],
+                    )
+                logger.debug(f"Slack notification sent: {event.event_type}")
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    import time
+
+                    time.sleep(1)
+                    continue
+                logger.warning(f"Slack notification failed: {e}", exc_info=False)

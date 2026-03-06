@@ -646,6 +646,23 @@ def test_runtime_context_mock_mode_uses_mock_account_when_present(monkeypatch) -
     assert runtime.account_product_code == "01"
 
 
+def test_runtime_context_use_mock_override_takes_precedence_over_env(monkeypatch) -> None:
+    monkeypatch.setenv("KIS_USE_MOCK", "false")
+    monkeypatch.setenv("KIS_MOCK_APP_KEY", "mock_key_abc")
+    monkeypatch.setenv("KIS_MOCK_SECRET", "mock_secret_def")
+    monkeypatch.setenv("KIS_MOCK_ACCOUNT_NUMBER", "87654321")
+    monkeypatch.setenv("KIS_ACCOUNT_PRODUCT_CODE", "01")
+
+    monkeypatch.setenv("KIS_APP_KEY", "real_key")
+    monkeypatch.setenv("KIS_APP_SECRET", "real_secret")
+    monkeypatch.setenv("KIS_ACCOUNT_NUMBER", "12345678")
+
+    runtime = trading_commands._build_runtime_context(use_mock_override=True)
+
+    assert runtime.config.use_mock is True
+    assert runtime.account_number == "87654321"
+
+
 def test_runtime_context_mock_mode_blocks_real_account_fallback(monkeypatch) -> None:
     monkeypatch.setenv("KIS_USE_MOCK", "true")
     monkeypatch.setenv("KIS_MOCK_APP_KEY", "mock_key_abc")

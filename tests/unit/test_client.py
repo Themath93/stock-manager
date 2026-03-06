@@ -47,6 +47,14 @@ class TestKISRestClientInit:
 
         assert client.timeout == 60.0
 
+    def test_client_init_sets_global_request_rate_limiter(
+        self,
+        kis_config: KISConfig,
+    ) -> None:
+        """Client-level limiter should use configured requests-per-second."""
+        client = KISRestClient(config=kis_config)
+        assert client._request_rate_limiter.max_requests == kis_config.request_rate_limit_per_sec
+
     def test_client_init_with_custom_http_client(
         self,
         kis_config: KISConfig,
@@ -367,6 +375,8 @@ class TestKISRestClientMakeRequest:
         assert exc_info.value.status_code == 400
         assert exc_info.value.response_data is not None
         assert exc_info.value.response_data["msg_cd"] == "EGW00223"
+        assert "msg_cd=EGW00223" in str(exc_info.value)
+        assert "msg1=Invalid parameter value" in str(exc_info.value)
 
     def test_make_request_http_error_without_json_response(
         self,
@@ -487,6 +497,92 @@ class TestKISRestClientMakeRequest:
         assert result["rt_cd"] == "0"
         assert authenticated_kis_client._http_client.request.call_count == 2
 
+    def test_make_request_retries_http_500_egw00201_then_succeeds(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """EGW00201 in HTTP 500 body should be treated as rate-limit and retried."""
+        rate_limited = MagicMock()
+        rate_limited.status_code = 500
+        rate_limited.reason_phrase = "Internal Server Error"
+        rate_limited.json.return_value = {
+            "rt_cd": "1",
+            "msg_cd": "EGW00201",
+            "msg1": "초당 거래건수를 초과하였습니다.",
+        }
+        rate_limited.raise_for_status = MagicMock()
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            rate_limited,
+            success_response,
+        ]
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_retries_http_200_error_payload_egw00201_then_succeeds(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """EGW00201 in body-only error response should also trigger retry."""
+        rate_limited = MagicMock()
+        rate_limited.status_code = 200
+        rate_limited.raise_for_status = MagicMock()
+        rate_limited.json.return_value = {
+            "rt_cd": "1",
+            "msg_cd": "EGW00201",
+            "msg1": "초당 거래건수를 초과하였습니다.",
+        }
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            rate_limited,
+            success_response,
+        ]
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_raises_kis_rate_limit_error_after_max_attempts_on_egw00201(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """EGW00201 should surface as KISRateLimitError when retries are exhausted."""
+        authenticated_kis_client.config.request_max_attempts = 2
+        authenticated_kis_client.config.request_retry_enabled = True
+
+        rate_limited = MagicMock()
+        rate_limited.status_code = 200
+        rate_limited.raise_for_status = MagicMock()
+        rate_limited.json.return_value = {
+            "rt_cd": "1",
+            "msg_cd": "EGW00201",
+            "msg1": "초당 거래건수를 초과하였습니다.",
+        }
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            rate_limited,
+            rate_limited,
+        ]
+
+        with pytest.raises(KISRateLimitError, match="rate limit"):
+            authenticated_kis_client.make_request("GET", "/test")
+
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
     def test_make_request_auto_reauth_after_401(
         self,
         authenticated_kis_client: KISRestClient,
@@ -519,6 +615,37 @@ class TestKISRestClientMakeRequest:
         assert result["rt_cd"] == "0"
         assert authenticated_kis_client.authenticate.call_count == 1
         assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_rejects_cross_mode_absolute_origin(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Absolute URLs must match the configured mode origin."""
+        with pytest.raises(KISAPIError, match="Disallowed absolute endpoint origin"):
+            authenticated_kis_client.make_request(
+                "GET",
+                "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price",
+            )
+
+        authenticated_kis_client._http_client.request.assert_not_called()
+
+    def test_make_request_allows_absolute_url_for_current_mode_origin(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Absolute URLs are allowed only when they match configured origin."""
+        from tests.factories.mock_responses import MockResponseFactory
+
+        mock_response = MockResponseFactory.success_kis()
+        authenticated_kis_client._http_client.request.return_value = mock_response
+
+        result = authenticated_kis_client.make_request(
+            "GET",
+            "https://openapivts.koreainvestment.com:29443/uapi/domestic-stock/v1/quotations/inquire-price",
+        )
+
+        assert result["rt_cd"] == "0"
+        authenticated_kis_client._http_client.request.assert_called_once()
 
 
 class TestKISRestClientHelpers:
@@ -613,6 +740,21 @@ class TestKISRestClientHelpers:
         assert isinstance(error, KISAPIError)
         assert error.error_code == "UNKNOWN"
         assert "Unknown error" in str(error)
+
+    def test_sleep_before_retry_includes_jitter(self, kis_client: KISRestClient) -> None:
+        """Backoff should add jitter to reduce synchronized retries."""
+        kis_client.config.request_initial_backoff_ms = 200
+        kis_client.config.request_backoff_multiplier = 2.0
+
+        with patch(
+            "stock_manager.adapters.broker.kis.client.random.uniform",
+            return_value=0.05,
+        ) as mock_uniform:
+            with patch("stock_manager.adapters.broker.kis.client.time.sleep") as mock_sleep:
+                kis_client._sleep_before_retry(attempt=2)
+
+        mock_uniform.assert_called_once_with(0.0, 0.2)
+        mock_sleep.assert_called_once_with(pytest.approx(0.45))
 
     def test_is_authenticated(
         self,

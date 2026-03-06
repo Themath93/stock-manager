@@ -16,6 +16,7 @@ from decimal import Decimal
 from dataclasses import dataclass
 import logging
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from stock_manager.engine import TradingEngine, EngineStatus
 from stock_manager.trading import (
@@ -43,7 +44,12 @@ def mock_client():
     """Provide mock KIS client."""
     client = MagicMock(spec=KISRestClient)
     client.make_request = MagicMock(
-        return_value={"rt_cd": "0", "msg_cd": "0", "output": {"stck_prpr": "70000"}}
+        return_value={
+            "rt_cd": "0",
+            "msg_cd": "0",
+            "output": {"stck_prpr": "70000"},
+            "output2": [{"dnca_tot_amt": "10000000"}],
+        }
     )
     return client
 
@@ -58,6 +64,7 @@ def trading_config():
         max_position_size_pct=Decimal("0.10"),
         default_stop_loss_pct=Decimal("0.05"),
         default_take_profit_pct=Decimal("0.10"),
+        market_hours_enabled=False,
     )
 
 
@@ -958,7 +965,7 @@ class TestRealtimeBridge:
         )
 
         broker_adapter = MagicMock()
-        config = TradingConfig(websocket_monitoring_enabled=True, max_positions=5)
+        config = TradingConfig(websocket_monitoring_enabled=True, max_positions=5, market_hours_enabled=False)
         engine = TradingEngine(
             client=mock_client,
             config=config,
@@ -1119,7 +1126,9 @@ class TestTradingOperations:
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
-    def test_buy_rejects_when_risk_manager_disapproves(self, mock_reconcile, mock_load, engine):
+    def test_buy_rejects_when_risk_manager_disapproves(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
         mock_load.return_value = None
         mock_reconcile.return_value = RecoveryReport(
             result=RecoveryResult.CLEAN,
@@ -1130,6 +1139,14 @@ class TestTradingOperations:
             errors=[],
         )
 
+        config = TradingConfig(risk_enforcement_mode="enforce", market_hours_enabled=False)
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
         engine.start()
         engine._risk_manager.validate_order = MagicMock(
             return_value=RiskCheckResult(approved=False, reason="risk rejected")
@@ -1416,6 +1433,15 @@ class TestStatusAndHealth:
         assert status.is_paper_trading is True
         assert str(engine.state_path) in status.state_path
 
+    def test_get_status_prefers_client_global_rate_limiter(self, engine):
+        """Status should report client-level limiter availability when exposed."""
+        engine._running = True
+        engine.client.request_rate_limiter_available = 3
+
+        status = engine.get_status()
+
+        assert status.rate_limiter_available == 3
+
     def test_is_healthy_returns_true_when_healthy(self, engine):
         """Test that is_healthy() returns True when engine is healthy."""
         engine._running = True
@@ -1430,12 +1456,37 @@ class TestStatusAndHealth:
 
         assert engine.is_healthy() is False
 
-    def test_is_healthy_returns_false_when_monitors_stopped(self, engine):
-        """Test that is_healthy() returns False when monitors stopped."""
+    def test_is_healthy_returns_true_when_no_positions_even_if_monitor_stopped(self, engine):
+        """No-position sessions can be healthy without the polling monitor."""
         engine._running = True
+        with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                assert engine.is_healthy() is True
+
+    def test_is_healthy_returns_false_when_monitors_stopped_with_open_positions(
+        self, engine, mock_position
+    ):
+        """With open positions, monitor/realtime stream must be active."""
+        engine._running = True
+        engine._position_manager.open_position(mock_position)
         # Mock price monitor as not running
         with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
-            assert engine.is_healthy() is False
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                engine._broker_adapter = None
+                engine.config = SimpleNamespace(websocket_monitoring_enabled=False)
+                assert engine.is_healthy() is False
+
+    def test_is_healthy_returns_true_with_open_positions_when_websocket_connected(
+        self, engine, mock_position
+    ):
+        """WebSocket quote stream is a valid monitoring path when polling is disabled."""
+        engine._running = True
+        engine._position_manager.open_position(mock_position)
+        engine._broker_adapter = SimpleNamespace(websocket_connected=True)
+        engine.config = SimpleNamespace(websocket_monitoring_enabled=True)
+        with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                assert engine.is_healthy() is True
 
 
 # =============================================================================
@@ -1831,3 +1882,394 @@ class TestSupportCoverage:
 
         assert result.success is True
         assert order.broker_order_id == "B1"
+
+
+# =============================================================================
+# Market Hours Tests
+# =============================================================================
+
+
+class TestMarketHours:
+    """Test market hours trading restriction."""
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_rejected_outside_market_hours(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """Buy orders must be rejected on weekends and outside 09:00-15:20 KST."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        config = TradingConfig(market_hours_enabled=True)
+        eng = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        eng.start()
+        eng._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="TEST123")
+        )
+
+        # Saturday 10:00 KST
+        saturday = datetime(2026, 3, 7, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        with patch("stock_manager.engine.datetime") as mock_dt:
+            mock_dt.now = MagicMock(return_value=saturday)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = eng.buy("005930", 10, 70000)
+
+        assert result.success is False
+        assert "Market is closed" in result.message
+        eng._executor.buy.assert_not_called()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_allowed_during_market_hours(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """Buy orders should succeed during weekday 09:00-15:20 KST."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        config = TradingConfig(market_hours_enabled=True)
+        eng = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        eng.start()
+        eng._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="TEST123")
+        )
+
+        # Wednesday 10:00 KST
+        wednesday = datetime(2026, 3, 4, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        with patch("stock_manager.engine.datetime") as mock_dt:
+            mock_dt.now = MagicMock(return_value=wednesday)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = eng.buy("005930", 10, 70000)
+
+        assert result.success is True
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_sell_allowed_outside_market_hours(self, mock_reconcile, mock_load, engine):
+        """Sell (stop-loss) must work at any time."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        engine.start()
+        engine._executor.sell = MagicMock(
+            return_value=OrderResult(success=True, order_id="SELL123")
+        )
+
+        # Saturday 22:00 KST - sell should still work
+        saturday_night = datetime(2026, 3, 7, 22, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        with patch("stock_manager.engine.datetime") as mock_dt:
+            mock_dt.now = MagicMock(return_value=saturday_night)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = engine.sell("005930", 10, 70000)
+
+        assert result.success is True
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_market_hours_disabled_allows_anytime(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """When market_hours_enabled=False, buy orders pass at any time."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        config = TradingConfig(market_hours_enabled=False)
+        eng = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        eng.start()
+        eng._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="TEST123")
+        )
+
+        # Saturday - should still work because market_hours_enabled=False
+        saturday = datetime(2026, 3, 7, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        with patch("stock_manager.engine.datetime") as mock_dt:
+            mock_dt.now = MagicMock(return_value=saturday)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = eng.buy("005930", 10, 70000)
+
+        assert result.success is True
+
+
+# =============================================================================
+# Risk Enforcement Mode Tests
+# =============================================================================
+
+
+class TestRiskEnforcementMode:
+    """Test risk_enforcement_mode behavior in buy()."""
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_risk_enforce_mode_blocks_order(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """enforce mode: risk check failure blocks the order."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        config = TradingConfig(risk_enforcement_mode="enforce", market_hours_enabled=False)
+        eng = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        eng.start()
+        eng._risk_manager.validate_order = MagicMock(
+            return_value=RiskCheckResult(approved=False, reason="position too large")
+        )
+        eng._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="TEST123")
+        )
+
+        result = eng.buy("005930", 10, 70000)
+
+        assert result.success is False
+        assert "position too large" in result.message
+        eng._executor.buy.assert_not_called()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_risk_warn_mode_allows_with_warning(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """warn mode: risk check failure logs warning but allows order."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        config = TradingConfig(risk_enforcement_mode="warn", market_hours_enabled=False)
+        eng = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        eng.start()
+        eng._risk_manager.validate_order = MagicMock(
+            return_value=RiskCheckResult(approved=False, reason="position too large")
+        )
+        eng._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="TEST123")
+        )
+
+        result = eng.buy("005930", 10, 70000)
+
+        assert result.success is True
+        eng._executor.buy.assert_called_once()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_risk_off_mode_skips_check(self, mock_reconcile, mock_load, mock_client, tmp_path):
+        """off mode: risk check is skipped entirely."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        config = TradingConfig(risk_enforcement_mode="off", market_hours_enabled=False)
+        eng = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        eng.start()
+        eng._risk_manager.validate_order = MagicMock(
+            return_value=RiskCheckResult(approved=False, reason="should be skipped")
+        )
+        eng._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="TEST123")
+        )
+
+        result = eng.buy("005930", 10, 70000)
+
+        assert result.success is True
+        eng._executor.buy.assert_called_once()
+
+
+# =============================================================================
+# Preflight Checks Tests
+# =============================================================================
+
+
+class TestPreflightChecks:
+    """Test engine start() preflight validation."""
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_fails_when_balance_inquiry_fails(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        """Engine must not start if balance inquiry fails."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        # Make _inquire_balance fail
+        mock_client.make_request.side_effect = Exception("Connection refused")
+
+        eng = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+
+        with pytest.raises(RuntimeError, match="Preflight checks failed"):
+            eng.start()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_sets_portfolio_value_from_balance(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        """Engine should auto-set portfolio_value from balance inquiry."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        mock_client.make_request.return_value = {
+            "rt_cd": "0",
+            "output2": [{"dnca_tot_amt": "50000000"}],
+        }
+
+        eng = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+        eng.start()
+
+        assert eng._risk_manager.portfolio_value == Decimal("50000000")
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_fails_when_slack_health_check_fails(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        """Engine must not start if Slack health check fails."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        mock_notifier = MagicMock()
+        mock_notifier.health_check.return_value = False
+
+        eng = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+            notifier=mock_notifier,
+        )
+
+        with pytest.raises(RuntimeError, match="Slack notification health check failed"):
+            eng.start()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_warns_outside_market_hours(
+        self, mock_reconcile, mock_load, mock_client, tmp_path, caplog
+    ):
+        """Engine should warn (not block) when starting outside market hours."""
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        eng = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(market_hours_enabled=True),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=True,
+        )
+
+        # Simulate starting on a Saturday
+        saturday = datetime(2026, 3, 7, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        with patch("stock_manager.engine.datetime") as mock_dt:
+            mock_dt.now = MagicMock(return_value=saturday)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            with caplog.at_level(logging.WARNING):
+                eng.start()
+
+        assert "outside market hours" in caplog.text

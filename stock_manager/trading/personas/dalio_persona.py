@@ -11,10 +11,10 @@ from .base import InvestorPersona
 from .models import MarketSnapshot, PersonaCategory, PersonaVote, VoteAction
 
 # Thresholds
-_MAX_SECTOR_CORRELATION = 0.7
-_RSI_OVERBOUGHT = 70.0
-_ADX_TRENDING = 25.0
-_RISK_REWARD_MIN = 2.0  # ATR-based minimum risk/reward ratio
+_MAX_SECTOR_CORRELATION = 0.8
+_RSI_OVERBOUGHT = 75.0
+_ADX_TRENDING = 20.0
+_RISK_REWARD_MIN = 1.5  # ATR-based minimum risk/reward ratio
 
 
 class DalioPersona(InvestorPersona):
@@ -34,7 +34,7 @@ class DalioPersona(InvestorPersona):
         as an inverse proxy.  If VKOSPI is unavailable we pass the check.
         """
         if snapshot.vkospi is None:
-            return True
+            return False  # Missing data = cannot confirm low correlation
         # High VKOSPI implies high cross-asset correlation
         return snapshot.vkospi < (_MAX_SECTOR_CORRELATION * 100)
 

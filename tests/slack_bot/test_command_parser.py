@@ -122,11 +122,77 @@ class TestParseCommand:
         result = parse_command("start --run-interval notanumber")
         assert result.error is not None
 
+    def test_auto_discover_parsed(self):
+        result = parse_command("start --strategy consensus --auto-discover")
+        assert result.strategy_auto_discover is True
+        assert result.error is None
+
+    def test_discovery_limit_parsed(self):
+        result = parse_command("start --strategy consensus --discovery-limit 7")
+        assert result.strategy_discovery_limit == 7
+        assert result.error is None
+
+    def test_fallback_symbols_parsed(self):
+        result = parse_command(
+            "start --strategy consensus --auto-discover --fallback-symbols 005930,000660"
+        )
+        assert result.strategy_discovery_fallback_symbols == ("005930", "000660")
+        assert result.error is None
+
+    def test_auto_discover_requires_strategy(self):
+        result = parse_command("start --auto-discover --mock")
+        assert result.error == "--auto-discover requires --strategy."
+
+    def test_discovery_limit_requires_strategy(self):
+        result = parse_command("start --discovery-limit 7")
+        assert result.error == "--discovery-limit requires --strategy."
+
+    def test_fallback_symbols_requires_strategy(self):
+        result = parse_command("start --fallback-symbols 005930,000660")
+        assert result.error == "--fallback-symbols requires --strategy."
+
+    def test_fallback_symbols_requires_auto_discover(self):
+        result = parse_command("start --strategy consensus --fallback-symbols 005930,000660")
+        assert result.error == "--fallback-symbols requires --auto-discover."
+
+    def test_discovery_limit_must_be_positive(self):
+        result = parse_command("start --strategy consensus --discovery-limit 0")
+        assert result.error == "--discovery-limit must be a positive integer, got: 0"
+
+    def test_discovery_limit_must_be_integer(self):
+        result = parse_command("start --strategy consensus --discovery-limit abc")
+        assert result.error == "--discovery-limit must be an integer, got: abc"
+
+    def test_llm_mode_selective_parsed(self):
+        result = parse_command("start --strategy consensus --llm-mode selective")
+        assert result.llm_mode == "selective"
+        assert result.error is None
+
+    def test_llm_mode_requires_strategy(self):
+        result = parse_command("start --llm-mode selective --mock")
+        assert result.error == "--llm-mode requires --strategy."
+
+    def test_llm_mode_selective_requires_consensus_strategy(self):
+        result = parse_command("start --strategy graham --llm-mode selective")
+        assert result.error == "--llm-mode selective requires --strategy consensus."
+
+    def test_llm_mode_invalid_value(self):
+        result = parse_command("start --strategy consensus --llm-mode invalid")
+        assert result.error == "--llm-mode must be one of: off, selective (got: invalid)"
+
+    def test_llm_mode_missing_value(self):
+        result = parse_command("start --strategy consensus --llm-mode")
+        assert result.error == "--llm-mode requires a value"
+
     def test_default_values(self):
         result = parse_command("start")
         assert result.duration_sec == 0
         assert result.order_quantity == 1
         assert result.run_interval_sec == 60.0
+        assert result.strategy_auto_discover is False
+        assert result.strategy_discovery_limit == 20
+        assert result.strategy_discovery_fallback_symbols == ()
+        assert result.llm_mode == "off"
         assert result.is_mock is None
 
     def test_symbols_missing_value(self):
@@ -136,3 +202,37 @@ class TestParseCommand:
     def test_duration_missing_value(self):
         result = parse_command("start --duration")
         assert result.error is not None
+
+    def test_discovery_limit_missing_value(self):
+        result = parse_command("start --discovery-limit")
+        assert result.error == "--discovery-limit requires a value"
+
+    def test_fallback_symbols_missing_value(self):
+        result = parse_command("start --fallback-symbols")
+        assert result.error == "--fallback-symbols requires a value"
+
+    def test_balance_parsed(self):
+        result = parse_command("balance")
+        assert result.subcommand == "balance"
+        assert result.error is None
+
+    def test_orders_parsed(self):
+        result = parse_command("orders")
+        assert result.subcommand == "orders"
+        assert result.error is None
+
+    def test_sell_all_parsed(self):
+        result = parse_command("sell-all")
+        assert result.subcommand == "sell-all"
+        assert result.error is None
+        assert result.confirm is False
+
+    def test_sell_all_with_confirm(self):
+        result = parse_command("sell-all --confirm")
+        assert result.subcommand == "sell-all"
+        assert result.confirm is True
+        assert result.error is None
+
+    def test_sell_all_without_confirm_default_false(self):
+        result = parse_command("sell-all")
+        assert result.confirm is False

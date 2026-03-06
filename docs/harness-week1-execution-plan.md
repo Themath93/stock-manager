@@ -1,5 +1,7 @@
 # Harness Week-1 Execution Plan (No Logic Changes)
 
+> 상위 계획: [harness-engineering-plan.md](harness-engineering-plan.md)
+
 이 문서는 최근 Audit 결과를 기준으로, 1주 안에 수행할 수 있는 harness 개선 실행 계획이다.
 
 원칙:

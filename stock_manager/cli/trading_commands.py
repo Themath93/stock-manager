@@ -189,8 +189,11 @@ def _request_balance_with_mock_retry(
     raise RuntimeError("balance check failed: unknown error")
 
 
-def _build_runtime_context() -> RuntimeContext:
-    config = KISConfig()
+def _build_runtime_context(*, use_mock_override: bool | None = None) -> RuntimeContext:
+    if use_mock_override is None:
+        config = KISConfig()
+    else:
+        config = KISConfig(use_mock=use_mock_override)
     account_number, account_product_code = _normalize_account_settings(
         config.account_number or "",
         config.account_product_code or "",

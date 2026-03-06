@@ -74,7 +74,7 @@ def test_dispatch_command_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     respond.assert_called_once()
-    assert "Error" in respond.call_args.kwargs["text"]
+    assert "오류" in respond.call_args.kwargs["text"]
 
 
 def test_dispatch_command_unknown_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,7 +94,7 @@ def test_dispatch_command_unknown_subcommand(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     respond.assert_called_once()
-    assert "Unknown subcommand" in str(respond.call_args.kwargs)
+    assert "알 수 없는 명령어" in str(respond.call_args.kwargs)
 
 
 def test_handle_start_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,6 +141,7 @@ def test_handle_start_handles_runtime_error(monkeypatch: pytest.MonkeyPatch) -> 
 def test_handle_start_success(monkeypatch: pytest.MonkeyPatch) -> None:
     respond = MagicMock()
     session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
     cmd = ParsedCommand(
         subcommand="start",
         strategy="consensus",
@@ -149,22 +150,134 @@ def test_handle_start_success(monkeypatch: pytest.MonkeyPatch) -> None:
         is_mock=False,
         order_quantity=2,
         run_interval_sec=15.0,
+        llm_mode="off",
     )
 
     monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
 
     slack_app._handle_start(
         cmd=cmd,
         user_id="U1",
         respond=respond,
         session_manager=session_manager,
-        format_started=lambda payload: {"text": str(payload), "blocks": []},
+        format_started=_format_started,
         format_error=lambda msg: {"text": msg, "blocks": []},
     )
 
     session_manager.start_session.assert_called_once()
+    params = session_manager.start_session.call_args.args[0]
+    assert params.strategy_auto_discover is False
+    assert params.strategy_discovery_limit == 20
+    assert params.strategy_discovery_fallback_symbols == ()
+    assert params.llm_mode == "off"
     respond.assert_called_once()
     assert respond.call_args.kwargs["response_type"] == "in_channel"
+    assert captured_payload["mode"] == "LIVE"
+    assert captured_payload["symbols"] == "005930, 000660"
+    assert captured_payload["llm_mode"] == "off"
+
+
+def test_handle_start_auto_discover_updates_symbols_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
+    cmd = ParsedCommand(
+        subcommand="start",
+        strategy="consensus",
+        symbols=(),
+        is_mock=True,
+        strategy_auto_discover=True,
+        strategy_discovery_limit=7,
+        strategy_discovery_fallback_symbols=("005930", "000660"),
+        llm_mode="selective",
+    )
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    slack_app._handle_start(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_started=_format_started,
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    session_manager.start_session.assert_called_once()
+    params = session_manager.start_session.call_args.args[0]
+    assert params.strategy_auto_discover is True
+    assert params.strategy_discovery_limit == 7
+    assert params.strategy_discovery_fallback_symbols == ("005930", "000660")
+    assert params.llm_mode == "selective"
+    assert "자동 탐색 (limit=7, fallback=005930, 000660)" == captured_payload["symbols"]
+    assert captured_payload["llm_mode"] == "selective"
+
+
+def test_handle_start_no_symbols_auto_discover_off_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
+    cmd = ParsedCommand(
+        subcommand="start",
+        strategy="consensus",
+        symbols=(),
+        is_mock=True,
+        strategy_auto_discover=False,
+    )
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    slack_app._handle_start(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_started=_format_started,
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    assert captured_payload["symbols"] == "미지정 (자동 탐색 OFF)"
+
+
+def test_handle_start_mode_defaults_to_env_when_is_mock_unspecified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
+    cmd = ParsedCommand(subcommand="start", is_mock=None)
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    monkeypatch.setattr("stock_manager.adapters.broker.kis.config.KISConfig", lambda: SimpleNamespace(use_mock=False))
+
+    slack_app._handle_start(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_started=_format_started,
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    session_manager.start_session.assert_called_once()
+    assert captured_payload["mode"] == "LIVE"
 
 
 def test_handle_stop_paths() -> None:
@@ -178,7 +291,7 @@ def test_handle_stop_paths() -> None:
         format_stopped=lambda payload: {"text": str(payload), "blocks": []},
         format_error=lambda msg: {"text": msg, "blocks": []},
     )
-    assert "No active" in respond.call_args.kwargs["text"]
+    assert "활성 트레이딩 세션이 없습니다" in respond.call_args.kwargs["text"]
 
     respond.reset_mock()
     running_manager = MagicMock()
@@ -310,3 +423,294 @@ def test_create_slack_app_handles_unauthorized_user(monkeypatch: pytest.MonkeyPa
 
     ack.assert_called_once()
     assert respond.call_args.kwargs["response_type"] == "ephemeral"
+
+
+def test_handle_config_includes_trading_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_handle_config passes trading params from session_info to format_config."""
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.get_session_info.return_value = {
+        "state": "RUNNING",
+        "params": {
+            "strategy": "consensus",
+            "symbols": ["005930"],
+            "mode": "MOCK",
+            "order_quantity": 5,
+            "run_interval_sec": 15.0,
+            "strategy_auto_discover": True,
+            "strategy_discovery_limit": 7,
+            "strategy_discovery_fallback_symbols": ["005930", "000660"],
+            "llm_mode": "selective",
+        },
+    }
+
+    fake_config = SimpleNamespace(enabled=True, default_channel="#alerts")
+    monkeypatch.setattr("stock_manager.notifications.config.SlackConfig", lambda: fake_config)
+
+    captured = {}
+
+    def capture_config(payload):
+        captured.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    slack_app._handle_config(
+        respond=respond,
+        session_manager=session_manager,
+        format_config=capture_config,
+    )
+
+    assert captured["strategy"] == "consensus"
+    assert captured["symbols"] == ["005930"]
+    assert captured["mode"] == "MOCK"
+    assert captured["order_quantity"] == 5
+    assert captured["strategy_auto_discover"] is True
+    assert captured["strategy_discovery_limit"] == 7
+    assert captured["strategy_discovery_fallback_symbols"] == ["005930", "000660"]
+    assert captured["llm_mode"] == "selective"
+
+
+def test_handle_config_derives_mode_from_is_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.get_session_info.return_value = {
+        "state": "RUNNING",
+        "params": {
+            "strategy": "consensus",
+            "symbols": ["005930"],
+            "is_mock": True,
+        },
+    }
+
+    fake_config = SimpleNamespace(enabled=True, default_channel="#alerts")
+    monkeypatch.setattr("stock_manager.notifications.config.SlackConfig", lambda: fake_config)
+
+    captured: dict[str, object] = {}
+
+    def capture_config(payload):
+        captured.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    slack_app._handle_config(
+        respond=respond,
+        session_manager=session_manager,
+        format_config=capture_config,
+    )
+
+    assert captured["mode"] == "MOCK"
+
+
+# --- balance tests ---
+
+
+def test_handle_balance_requires_session() -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = False
+
+    slack_app._handle_balance(
+        respond=respond,
+        session_manager=session_manager,
+        format_balance=lambda d: {"text": str(d), "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    assert "활성 트레이딩 세션이 없습니다" in respond.call_args.kwargs["text"]
+
+
+def test_handle_balance_returns_ephemeral() -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    session_manager.get_balance.return_value = {"output1": [], "output2": []}
+
+    slack_app._handle_balance(
+        respond=respond,
+        session_manager=session_manager,
+        format_balance=lambda d: {"text": "ok", "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    assert respond.call_args.kwargs["response_type"] == "ephemeral"
+
+
+# --- orders tests ---
+
+
+def test_handle_orders_requires_session() -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = False
+
+    slack_app._handle_orders(
+        respond=respond,
+        session_manager=session_manager,
+        format_orders=lambda d: {"text": str(d), "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    assert "활성 트레이딩 세션이 없습니다" in respond.call_args.kwargs["text"]
+
+
+def test_handle_orders_returns_ephemeral() -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    session_manager.get_daily_orders.return_value = {"output1": []}
+
+    slack_app._handle_orders(
+        respond=respond,
+        session_manager=session_manager,
+        format_orders=lambda d: {"text": "ok", "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    assert respond.call_args.kwargs["response_type"] == "ephemeral"
+
+
+# --- sell-all tests ---
+
+
+def test_handle_sell_all_requires_session() -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = False
+    cmd = ParsedCommand(subcommand="sell-all")
+
+    slack_app._handle_sell_all(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_sell_all_preview=lambda d: {"text": str(d), "blocks": []},
+        format_sell_all_result=lambda d: {"text": str(d), "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    assert "활성 트레이딩 세션이 없습니다" in respond.call_args.kwargs["text"]
+
+
+def test_handle_sell_all_without_confirm_shows_preview() -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    session_manager.get_positions.return_value = {"005930": {"symbol": "005930", "quantity": 10, "entry_price": 70000, "status": "open"}}
+    cmd = ParsedCommand(subcommand="sell-all", confirm=False)
+
+    slack_app._handle_sell_all(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_sell_all_preview=lambda d: {"text": "preview", "blocks": []},
+        format_sell_all_result=lambda d: {"text": str(d), "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    assert respond.call_args.kwargs["response_type"] == "ephemeral"
+    assert respond.call_args.kwargs["text"] == "preview"
+    session_manager.liquidate_all.assert_not_called()
+
+
+def test_handle_sell_all_with_confirm_executes(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    session_manager.liquidate_all.return_value = [
+        {"symbol": "005930", "quantity": 10, "entry_price": 70000, "success": True, "message": "", "broker_order_id": "ORD1"}
+    ]
+    cmd = ParsedCommand(subcommand="sell-all", confirm=True)
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _uid: True)
+
+    slack_app._handle_sell_all(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_sell_all_preview=lambda d: {"text": str(d), "blocks": []},
+        format_sell_all_result=lambda d: {"text": "done", "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    assert respond.call_args.kwargs["response_type"] == "in_channel"
+    session_manager.liquidate_all.assert_called_once()
+
+
+def test_handle_sell_all_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    cmd = ParsedCommand(subcommand="sell-all", confirm=True)
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _uid: False)
+
+    slack_app._handle_sell_all(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_sell_all_preview=lambda d: {"text": str(d), "blocks": []},
+        format_sell_all_result=lambda d: {"text": str(d), "blocks": []},
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    respond.assert_called_once()
+    session_manager.liquidate_all.assert_not_called()
+
+
+# --- dispatch routing tests ---
+
+
+def test_dispatch_routes_balance(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    session_manager.get_balance.return_value = {"output1": [], "output2": []}
+
+    slack_app._dispatch_command(
+        text="balance",
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+    )
+
+    respond.assert_called_once()
+
+
+def test_dispatch_routes_orders(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    session_manager.get_daily_orders.return_value = {"output1": []}
+
+    slack_app._dispatch_command(
+        text="orders",
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+    )
+
+    respond.assert_called_once()
+
+
+def test_dispatch_routes_sell_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.is_running = True
+    session_manager.get_positions.return_value = {}
+
+    slack_app._dispatch_command(
+        text="sell-all",
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+    )
+
+    respond.assert_called_once()

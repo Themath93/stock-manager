@@ -1,5 +1,6 @@
 """Unit tests for SessionManager."""
 import time
+from types import SimpleNamespace
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,8 @@ from stock_manager.slack_bot.session_manager import (
     SessionParams,
     SessionState,
 )
+from stock_manager.trading.personas.dalio_persona import DalioPersona
+from stock_manager.trading.strategies.consensus import ConsensusStrategy
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -171,6 +174,10 @@ class TestGetSessionInfo:
             is_mock=True,
             order_quantity=2,
             run_interval_sec=30.0,
+            strategy_auto_discover=True,
+            strategy_discovery_limit=7,
+            strategy_discovery_fallback_symbols=("005930", "000660"),
+            llm_mode="selective",
         )
         manager._params = params
         manager._started_at = time.monotonic()
@@ -182,6 +189,10 @@ class TestGetSessionInfo:
         assert info["is_mock"] is True
         assert info["order_quantity"] == 2
         assert info["run_interval_sec"] == 30.0
+        assert info["strategy_auto_discover"] is True
+        assert info["strategy_discovery_limit"] == 7
+        assert info["strategy_discovery_fallback_symbols"] == ["005930", "000660"]
+        assert info["llm_mode"] == "selective"
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +200,188 @@ class TestGetSessionInfo:
 # ---------------------------------------------------------------------------
 
 class TestSessionManagerWithMockEngine:
+    def test_run_engine_passes_is_mock_override_to_runtime_builder(self):
+        manager = SessionManager()
+        params = SessionParams(is_mock=False)
+
+        mock_runtime = _make_mock_runtime(use_mock=False)
+        mock_engine = MagicMock()
+        mock_engine.is_healthy.return_value = True
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime) as mock_build_runtime, \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(None, ())), \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine), \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            assert _wait_for_state(manager, SessionState.RUNNING), (
+                f"Expected RUNNING, got {manager.state}"
+            )
+            mock_build_runtime.assert_called_once_with(use_mock_override=False)
+
+            manager.stop_session()
+            if manager._thread:
+                manager._thread.join(timeout=3.0)
+
+    def test_run_engine_uses_runtime_mode_for_engine(self):
+        manager = SessionManager()
+        params = SessionParams(is_mock=True)
+
+        # Simulate unexpected runtime mismatch from helper return value.
+        mock_runtime = _make_mock_runtime(use_mock=False)
+        mock_engine = MagicMock()
+        mock_engine.is_healthy.return_value = True
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(None, ())), \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine) as mock_trading_engine, \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            assert _wait_for_state(manager, SessionState.RUNNING), (
+                f"Expected RUNNING, got {manager.state}"
+            )
+            assert mock_trading_engine.call_args.kwargs["is_paper_trading"] is False
+
+            manager.stop_session()
+            if manager._thread:
+                manager._thread.join(timeout=3.0)
+
+    def test_run_engine_passes_strategy_discovery_params_to_trading_config(self):
+        manager = SessionManager()
+        params = SessionParams(
+            is_mock=True,
+            strategy="consensus",
+            strategy_auto_discover=True,
+            strategy_discovery_limit=7,
+            strategy_discovery_fallback_symbols=("005930", "000660"),
+        )
+
+        mock_runtime = _make_mock_runtime(use_mock=True)
+        mock_engine = MagicMock()
+        mock_engine.is_healthy.return_value = True
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(MagicMock(), ())), \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine) as mock_trading_engine, \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            assert _wait_for_state(manager, SessionState.RUNNING), (
+                f"Expected RUNNING, got {manager.state}"
+            )
+
+            config = mock_trading_engine.call_args.kwargs["config"]
+            assert config.strategy_auto_discover is True
+            assert config.strategy_discovery_limit == 7
+            assert config.strategy_discovery_fallback_symbols == ("005930", "000660")
+
+            manager.stop_session()
+            if manager._thread:
+                manager._thread.join(timeout=3.0)
+
+    def test_run_engine_selective_llm_replaces_single_dalio_persona(self):
+        manager = SessionManager()
+        params = SessionParams(
+            is_mock=True,
+            strategy="consensus",
+            llm_mode="selective",
+        )
+
+        mock_runtime = _make_mock_runtime(use_mock=True)
+        mock_engine = MagicMock()
+        mock_engine.is_healthy.return_value = True
+        dalio_hybrid = object()
+        consensus_strategy = ConsensusStrategy(
+            evaluator=SimpleNamespace(personas=[DalioPersona()])
+        )
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(consensus_strategy, ())), \
+             patch.object(
+                 SessionManager,
+                 "_build_dalio_hybrid_persona",
+                 return_value=dalio_hybrid,
+             ) as mock_build_hybrid, \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine) as mock_trading_engine, \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            assert _wait_for_state(manager, SessionState.RUNNING), (
+                f"Expected RUNNING, got {manager.state}"
+            )
+
+            mock_build_hybrid.assert_called_once()
+            configured_strategy = mock_trading_engine.call_args.kwargs["config"].strategy
+            assert configured_strategy.evaluator.personas[0] is dalio_hybrid
+
+            manager.stop_session()
+            if manager._thread:
+                manager._thread.join(timeout=3.0)
+
+    def test_run_engine_selective_llm_blocks_non_consensus_strategy(self):
+        crash_events: list[Exception] = []
+
+        def on_crash(exc: Exception) -> None:
+            crash_events.append(exc)
+
+        manager = SessionManager(on_crash=on_crash)
+        params = SessionParams(
+            is_mock=True,
+            strategy="graham",
+            llm_mode="selective",
+        )
+
+        mock_runtime = _make_mock_runtime(use_mock=True)
+        mock_engine = MagicMock()
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(MagicMock(), ())), \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine), \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            assert _wait_for_state(manager, SessionState.ERROR), (
+                f"Expected ERROR, got {manager.state}"
+            )
+
+        assert len(crash_events) == 1
+        assert "requires --strategy consensus" in str(crash_events[0])
+        mock_engine.start.assert_not_called()
+
+    def test_mode_mismatch_guard_sets_error_state(self):
+        crash_events: list[Exception] = []
+
+        def on_crash(exc: Exception) -> None:
+            crash_events.append(exc)
+
+        manager = SessionManager(on_crash=on_crash)
+        params = SessionParams(is_mock=False)
+
+        mock_runtime = _make_mock_runtime(use_mock=False)
+        mock_engine = MagicMock()
+        mock_engine.is_paper_trading = True
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(None, ())), \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine), \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            assert _wait_for_state(manager, SessionState.ERROR), (
+                f"Expected ERROR, got {manager.state}"
+            )
+
+        assert len(crash_events) == 1
+        assert "mode mismatch" in str(crash_events[0]).lower()
+        mock_engine.start.assert_not_called()
+
     def test_start_session_transitions_to_running(self):
         manager = SessionManager()
         params = SessionParams(is_mock=True)

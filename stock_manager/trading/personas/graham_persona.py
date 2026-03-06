@@ -38,15 +38,15 @@ class GrahamPersona(InvestorPersona):
 
     @staticmethod
     def _check_financial(snapshot: MarketSnapshot) -> bool:
-        return snapshot.current_ratio >= 2.0 and snapshot.debt_to_equity < 1.0
+        return snapshot.current_ratio >= 1.5 and snapshot.debt_to_equity < 1.0
 
     @staticmethod
     def _check_stability(snapshot: MarketSnapshot) -> bool:
-        return snapshot.years_positive_earnings >= 10
+        return snapshot.years_positive_earnings >= 1
 
     @staticmethod
     def _check_dividends(snapshot: MarketSnapshot) -> bool:
-        return snapshot.years_dividends_paid >= 20
+        return snapshot.years_dividends_paid >= 1
 
     @staticmethod
     def _check_growth(snapshot: MarketSnapshot) -> bool:
@@ -54,11 +54,11 @@ class GrahamPersona(InvestorPersona):
 
     @staticmethod
     def _check_pe(snapshot: MarketSnapshot) -> bool:
-        return 0 < snapshot.per <= 15.0
+        return 0 < snapshot.per <= 12.0
 
     @staticmethod
     def _check_pb(snapshot: MarketSnapshot) -> bool:
-        return snapshot.pbr <= 1.5
+        return snapshot.pbr <= 1.0
 
     # -- InvestorPersona interface -----------------------------------------
 

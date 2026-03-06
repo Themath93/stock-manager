@@ -32,6 +32,41 @@ class TestGetTrId:
             info._get_tr_id("v1_국내주식-029", is_paper_trading=True)
 
 
+class TestEndpointPathPolicy:
+    """Ensure API wrappers always use relative paths."""
+
+    @pytest.fixture
+    def mock_client(self) -> MagicMock:
+        client = MagicMock()
+        client.make_request.return_value = {"rt_cd": "0", "output": {}}
+        return client
+
+    @pytest.mark.parametrize(
+        ("func_name", "kwargs"),
+        [
+            ("get_search_info", {}),
+            ("get_balance_sheet", {"fid_input_iscd": "005930"}),
+            ("get_financial_ratio", {"fid_input_iscd": "005930"}),
+            ("get_credit_by_company", {}),
+            ("get_paidin_capin", {}),
+            ("get_estimate_perform", {}),
+            ("get_lendable_by_company", {}),
+        ],
+    )
+    def test_info_endpoints_are_relative(
+        self,
+        mock_client: MagicMock,
+        func_name: str,
+        kwargs: dict[str, str],
+    ) -> None:
+        func = getattr(info, func_name)
+        func(mock_client, **kwargs)
+
+        path = mock_client.make_request.call_args.kwargs["path"]
+        assert path.startswith("/")
+        assert "://" not in path
+
+
 class TestSearchInfoAPIs:
     """Tests for product/stock info APIs."""
 
@@ -103,7 +138,7 @@ class TestFinancialStatementAPIs:
 
     def test_get_income_statement_success(self, mock_client: MagicMock) -> None:
         """Test get_income_statement makes correct API call."""
-        result = info.get_income_statement(mock_client)
+        result = info.get_income_statement(mock_client, fid_input_iscd="005930")
 
         assert result["rt_cd"] == "0"
         call_args = mock_client.make_request.call_args
@@ -112,7 +147,7 @@ class TestFinancialStatementAPIs:
 
     def test_get_financial_ratio_success(self, mock_client: MagicMock) -> None:
         """Test get_financial_ratio makes correct API call."""
-        result = info.get_financial_ratio(mock_client)
+        result = info.get_financial_ratio(mock_client, fid_input_iscd="005930")
 
         assert result["rt_cd"] == "0"
         call_args = mock_client.make_request.call_args
@@ -121,7 +156,7 @@ class TestFinancialStatementAPIs:
 
     def test_get_profit_ratio_success(self, mock_client: MagicMock) -> None:
         """Test get_profit_ratio makes correct API call."""
-        result = info.get_profit_ratio(mock_client)
+        result = info.get_profit_ratio(mock_client, fid_input_iscd="005930")
 
         assert result["rt_cd"] == "0"
         call_args = mock_client.make_request.call_args
@@ -130,7 +165,7 @@ class TestFinancialStatementAPIs:
 
     def test_get_other_major_ratios_success(self, mock_client: MagicMock) -> None:
         """Test get_other_major_ratios makes correct API call."""
-        result = info.get_other_major_ratios(mock_client)
+        result = info.get_other_major_ratios(mock_client, fid_input_iscd="005930")
 
         assert result["rt_cd"] == "0"
         call_args = mock_client.make_request.call_args
@@ -139,7 +174,7 @@ class TestFinancialStatementAPIs:
 
     def test_get_stability_ratio_success(self, mock_client: MagicMock) -> None:
         """Test get_stability_ratio makes correct API call."""
-        result = info.get_stability_ratio(mock_client)
+        result = info.get_stability_ratio(mock_client, fid_input_iscd="005930")
 
         assert result["rt_cd"] == "0"
         call_args = mock_client.make_request.call_args
@@ -148,12 +183,26 @@ class TestFinancialStatementAPIs:
 
     def test_get_growth_ratio_success(self, mock_client: MagicMock) -> None:
         """Test get_growth_ratio makes correct API call."""
-        result = info.get_growth_ratio(mock_client)
+        result = info.get_growth_ratio(mock_client, fid_input_iscd="005930")
 
         assert result["rt_cd"] == "0"
         call_args = mock_client.make_request.call_args
         assert "growth-ratio" in call_args.kwargs["path"]
         assert call_args.kwargs["headers"]["tr_id"] == "FHKST66430800"
+
+    def test_finance_apis_add_market_division_code_default(self, mock_client: MagicMock) -> None:
+        """Finance APIs should set fid_cond_mrkt_div_code=J when omitted."""
+        info.get_growth_ratio(mock_client, fid_input_iscd="005930")
+
+        call_args = mock_client.make_request.call_args
+        params = call_args.kwargs["params"]
+        assert params["fid_input_iscd"] == "005930"
+        assert params["fid_cond_mrkt_div_code"] == "J"
+
+    def test_finance_apis_require_stock_code(self, mock_client: MagicMock) -> None:
+        """Finance APIs should fail fast when fid_input_iscd is missing."""
+        with pytest.raises(ValueError, match="requires params: fid_input_iscd"):
+            info.get_growth_ratio(mock_client)
 
 
 class TestCreditLendingAPIs:

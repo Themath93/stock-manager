@@ -37,3 +37,8 @@ Negative:
    - Rejected because CI already runs at 85 and this weakens current quality bar.
 2. Keep split policy (80 local, 85 CI).
    - Rejected because it preserves drift and inconsistent developer feedback.
+
+## See Also
+
+- [ADR-0001](0001-mock-first-safety-gate.md) — Mock-first 안전 정책 (동반 품질 정책)
+- [quality-gates.md](../quality-gates.md) — 커버리지 게이트 강제 위치

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from decimal import Decimal
 
 from stock_manager.trading.logging.pipeline_logger import PipelineJsonLogger
@@ -46,12 +47,14 @@ class TradingPipelineRunner:
         sell_specialist: SellSpecialist,
         monitor: PositionMonitor,
         pipeline_logger: PipelineJsonLogger | None = None,
+        capital_provider: Callable[[], Decimal] = lambda: Decimal("1000000"),
     ) -> None:
         self._strategy = consensus_strategy
         self._buy = buy_specialist
         self._sell = sell_specialist
         self._monitor = monitor
         self._logger = pipeline_logger
+        self._capital_provider = capital_provider
         self._entries: dict[str, PipelineEntry] = {}
         self._lock = threading.RLock()
 
@@ -84,12 +87,11 @@ class TradingPipelineRunner:
         """
         with self._lock:
             entries = list(self._entries.values())
-
-        for entry in entries:
-            try:
-                self._step(entry)
-            except Exception as exc:
-                self._handle_error(entry, exc)
+            for entry in entries:
+                try:
+                    self._step(entry)
+                except Exception as exc:
+                    self._handle_error(entry, exc)
 
     @property
     def entries(self) -> dict[str, PipelineEntry]:
@@ -188,7 +190,7 @@ class TradingPipelineRunner:
         A full integration would fetch live price and account balance here.
         """
         current_price = entry.current_price or Decimal("0")
-        available_capital = Decimal("1000000")  # placeholder
+        available_capital = self._capital_provider()
 
         if current_price <= 0:
             self._handle_error(
