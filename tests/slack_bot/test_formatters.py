@@ -58,6 +58,7 @@ class TestFormatStarted:
             "symbols": "005930, 000660",
             "mode": "MOCK",
             "duration": "until stopped",
+            "llm_mode": "off",
         }
 
     def test_returns_text_and_blocks(self):
@@ -93,6 +94,20 @@ class TestFormatStarted:
         result = format_started({})
         assert "text" in result
         assert "blocks" in result
+
+    def test_llm_mode_included(self):
+        result = format_started(
+            {
+                "strategy": "consensus",
+                "symbols": "005930",
+                "mode": "MOCK",
+                "duration": "1h",
+                "llm_mode": "selective",
+            }
+        )
+        output = str(result["blocks"])
+        assert "LLM 모드" in output
+        assert "selective" in output
 
 
 class TestFormatError:
@@ -261,7 +276,19 @@ class TestFormatHelpUX:
     def test_help_has_all_flags(self):
         result = format_help()
         all_text = str(result["blocks"])
-        for flag in ["--strategy", "--symbols", "--duration", "--mock", "--no-mock", "--order-quantity", "--run-interval"]:
+        for flag in [
+            "--strategy",
+            "--symbols",
+            "--duration",
+            "--mock",
+            "--no-mock",
+            "--order-quantity",
+            "--run-interval",
+            "--auto-discover",
+            "--discovery-limit",
+            "--fallback-symbols",
+            "--llm-mode",
+        ]:
             assert flag in all_text, f"Missing flag: {flag}"
 
     def test_help_has_examples(self):
@@ -293,13 +320,38 @@ class TestFormatStatusUX:
         """Bug fix: strategy/symbols/mode read from params dict."""
         session_info = {
             "state": "RUNNING",
-            "params": {"strategy": "consensus", "symbols": ["005930"], "mode": "MOCK"},
+            "params": {
+                "strategy": "consensus",
+                "symbols": ["005930"],
+                "mode": "MOCK",
+                "llm_mode": "selective",
+            },
             "uptime_sec": 120,
         }
         result = format_status(None, session_info)
         output = str(result["blocks"])
         assert "consensus" in output
         assert "005930" in output
+        assert "LLM 모드" in output
+        assert "selective" in output
+
+    def test_status_shows_auto_discovery_when_symbols_empty(self):
+        session_info = {
+            "state": "RUNNING",
+            "params": {
+                "strategy": "consensus",
+                "symbols": [],
+                "is_mock": True,
+                "strategy_auto_discover": True,
+                "strategy_discovery_limit": 7,
+                "strategy_discovery_fallback_symbols": ["005930", "000660"],
+            },
+            "uptime_sec": 120,
+        }
+        result = format_status(None, session_info)
+        output = str(result["blocks"])
+        assert "자동 탐색 (limit=7, fallback=005930, 000660)" in output
+        assert "MOCK" in output
 
     def test_status_with_engine_has_divider(self):
         from unittest.mock import MagicMock
@@ -338,12 +390,21 @@ class TestFormatConfigUX:
             "mode": "MOCK",
             "order_quantity": 5,
             "run_interval_sec": 15.0,
+            "strategy_auto_discover": True,
+            "strategy_discovery_limit": 7,
+            "strategy_discovery_fallback_symbols": ["005930", "000660"],
+            "llm_mode": "selective",
         }
         result = format_config(config_info)
         output = str(result["blocks"])
         assert "전략" in output
         assert "consensus" in output
         assert "주문 수량" in output
+        assert "자동탐색" in output
+        assert "탐색 limit" in output
+        assert "fallback 종목" in output
+        assert "LLM 모드" in output
+        assert "selective" in output
         types = [b["type"] for b in result["blocks"]]
         assert "divider" in types
 

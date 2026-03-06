@@ -18,6 +18,7 @@ def format_started(params_info: dict) -> dict:
     symbols = params_info.get("symbols", "N/A")
     mode = params_info.get("mode", "N/A")
     duration = params_info.get("duration", "until stopped")
+    llm_mode = params_info.get("llm_mode", "off")
 
     if isinstance(symbols, list):
         symbols = ", ".join(symbols)
@@ -38,6 +39,7 @@ def format_started(params_info: dict) -> dict:
                     {"type": "mrkdwn", "text": f"*모드:*\n{mode_display}"},
                     {"type": "mrkdwn", "text": f"*종목:*\n{symbols}"},
                     {"type": "mrkdwn", "text": f"*실행 시간:*\n{duration}"},
+                    {"type": "mrkdwn", "text": f"*LLM 모드:*\n{llm_mode}"},
                 ],
             },
         ],
@@ -81,13 +83,33 @@ def format_status(status: "EngineStatus | None", session_info: dict) -> dict:
     # BUG FIX: read from nested params dict
     params = session_info.get("params", {})
     strategy = params.get("strategy") or session_info.get("strategy", "N/A")
-    symbols = params.get("symbols") or session_info.get("symbols", "N/A")
+    if "symbols" in params:
+        symbols = params.get("symbols")
+    else:
+        symbols = session_info.get("symbols", "N/A")
     mode = params.get("mode") or session_info.get("mode", "N/A")
+    if mode == "N/A":
+        is_mock = params.get("is_mock")
+        if isinstance(is_mock, bool):
+            mode = "MOCK" if is_mock else "LIVE"
+    auto_discover = bool(params.get("strategy_auto_discover", False))
+    discovery_limit = params.get("strategy_discovery_limit", "N/A")
+    fallback_symbols = params.get("strategy_discovery_fallback_symbols", [])
+    llm_mode = params.get("llm_mode", "off")
     uptime_sec = session_info.get("uptime_sec", 0)
     uptime_str = _format_uptime(uptime_sec) if uptime_sec else session_info.get("uptime_str", "N/A")
 
     if isinstance(symbols, list):
-        symbols = ", ".join(symbols)
+        if symbols:
+            symbols = ", ".join(symbols)
+        elif auto_discover:
+            fallback_joined = ", ".join(fallback_symbols) if fallback_symbols else ""
+            if fallback_joined:
+                symbols = f"자동 탐색 (limit={discovery_limit}, fallback={fallback_joined})"
+            else:
+                symbols = f"자동 탐색 (limit={discovery_limit})"
+        else:
+            symbols = "미지정 (자동 탐색 OFF)"
 
     state_emoji = "🟢" if state == "RUNNING" else "🔴"
 
@@ -98,6 +120,7 @@ def format_status(status: "EngineStatus | None", session_info: dict) -> dict:
         {"type": "mrkdwn", "text": f"*전략:*\n{strategy}"},
         {"type": "mrkdwn", "text": f"*모드:*\n{mode}"},
         {"type": "mrkdwn", "text": f"*종목:*\n{symbols}"},
+        {"type": "mrkdwn", "text": f"*LLM 모드:*\n{llm_mode}"},
     ]
 
     blocks: list[dict] = [
@@ -159,18 +182,50 @@ def format_config(config_info: dict) -> dict:
     ]
 
     # Section 2: Trading settings (if available)
-    trading_keys = ["strategy", "symbols", "mode", "order_quantity", "run_interval_sec"]
+    trading_keys = [
+        "strategy",
+        "symbols",
+        "mode",
+        "order_quantity",
+        "run_interval_sec",
+        "strategy_auto_discover",
+        "strategy_discovery_limit",
+        "strategy_discovery_fallback_symbols",
+        "llm_mode",
+    ]
     has_trading = any(config_info.get(k) for k in trading_keys)
     if has_trading:
         symbols = config_info.get("symbols", "N/A")
         if isinstance(symbols, list):
             symbols = ", ".join(symbols)
+        fallback_symbols = config_info.get("strategy_discovery_fallback_symbols", [])
+        if isinstance(fallback_symbols, list):
+            fallback_symbols = ", ".join(fallback_symbols) if fallback_symbols else "(없음)"
         trading_fields = [
             {"type": "mrkdwn", "text": f"*전략:*\n{config_info.get('strategy', 'N/A')}"},
             {"type": "mrkdwn", "text": f"*종목:*\n{symbols}"},
             {"type": "mrkdwn", "text": f"*모드:*\n{config_info.get('mode', 'N/A')}"},
             {"type": "mrkdwn", "text": f"*주문 수량:*\n{config_info.get('order_quantity', 'N/A')}"},
             {"type": "mrkdwn", "text": f"*실행 간격:*\n{config_info.get('run_interval_sec', 'N/A')}"},
+            {
+                "type": "mrkdwn",
+                "text": (
+                    "*자동탐색:*\n"
+                    f"{'ON' if config_info.get('strategy_auto_discover', False) else 'OFF'}"
+                ),
+            },
+            {
+                "type": "mrkdwn",
+                "text": f"*탐색 limit:*\n{config_info.get('strategy_discovery_limit', 'N/A')}",
+            },
+            {
+                "type": "mrkdwn",
+                "text": f"*fallback 종목:*\n{fallback_symbols}",
+            },
+            {
+                "type": "mrkdwn",
+                "text": f"*LLM 모드:*\n{config_info.get('llm_mode', 'off')}",
+            },
         ]
         blocks.append({"type": "divider"})
         blocks.append({"type": "section", "fields": trading_fields})
@@ -233,6 +288,10 @@ def format_help() -> dict:
                         "  `--no-mock` 실전투자 모드\n"
                         "  `--order-quantity N` 주문 수량\n"
                         "  `--run-interval SEC` 실행 간격(초)\n"
+                        "  `--auto-discover` 종목 자동 탐색 사용\n"
+                        "  `--discovery-limit N` 자동 탐색 최대 종목 수\n"
+                        "  `--fallback-symbols A,B` 자동 탐색 실패 시 대체 종목\n"
+                        "  `--llm-mode off|selective` LLM 평가 모드\n"
                         "• `/sm stop` - 현재 세션 종료",
                 },
             },
@@ -266,6 +325,8 @@ def format_help() -> dict:
                     {
                         "type": "mrkdwn",
                         "text": "예시: `/sm start --strategy consensus --symbols 005930,000660 --mock`\n"
+                            "예시: `/sm start --strategy consensus --auto-discover --discovery-limit 7 --fallback-symbols 005930,000660 --mock`\n"
+                            "예시: `/sm start --strategy consensus --auto-discover --discovery-limit 7 --fallback-symbols 005930,000660 --llm-mode selective --mock`\n"
                             "예시: `/sm start --duration 3600 --order-quantity 5`",
                     }
                 ],

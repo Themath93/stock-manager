@@ -674,13 +674,17 @@ class TradingEngine:
             if self._running
             else False
         )
+        rate_limiter_available = self._rate_limiter.available
+        client_rate_available = getattr(self.client, "request_rate_limiter_available", None)
+        if isinstance(client_rate_available, int):
+            rate_limiter_available = client_rate_available
 
         return EngineStatus(
             running=self._running,
             position_count=len(self._position_manager.get_all_positions()),
             price_monitor_running=self._price_monitor.is_running,
             reconciler_running=reconciler_running,
-            rate_limiter_available=self._rate_limiter.available,
+            rate_limiter_available=rate_limiter_available,
             state_path=str(self.state_path),
             is_paper_trading=self.is_paper_trading,
             trading_enabled=self._trading_enabled,
@@ -697,7 +701,21 @@ class TradingEngine:
         if not self._running:
             return False
 
-        return self._price_monitor.is_running and self._rate_limiter.available > 0
+        if self._rate_limiter.available <= 0:
+            return False
+
+        has_positions = bool(self._position_manager.get_all_positions())
+        if not has_positions:
+            return True
+
+        if self._price_monitor.is_running:
+            return True
+
+        adapter = self._broker_adapter
+        if adapter is not None and bool(getattr(self.config, "websocket_monitoring_enabled", False)):
+            return bool(getattr(adapter, "websocket_connected", False))
+
+        return False
 
     # Internal helper methods
 

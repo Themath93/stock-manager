@@ -13,7 +13,6 @@ TR_ID Reference:
 from typing import Any, Dict, TypedDict
 
 # API Endpoints
-_BASE_URL = "https://api.koreainvestment.com"
 _DOMESTIC_STOCK_BASE = "/uapi/domestic-stock/v1/quotations"
 _ETNETN_BASE = "/uapi/etfetn/v1/quotations"
 
@@ -518,11 +517,23 @@ def inquire_period_price(
     api_id = "v1_국내주식-016"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
+    normalized_stock_code = str(stock_code).strip()
+    if not normalized_stock_code:
+        raise ValueError("stock_code is required")
+
+    fid_cond_mrkt_div_code = kwargs.get("fid_cond_mrkt_div_code", "J")
+    if fid_cond_mrkt_div_code is None:
+        fid_cond_mrkt_div_code = "J"
+    normalized_market_code = str(fid_cond_mrkt_div_code).strip()
+    if not normalized_market_code:
+        raise ValueError("fid_cond_mrkt_div_code is required")
+
     path = f"{_DOMESTIC_STOCK_BASE}/inquire-daily-itemchartprice"
 
     params = {
+        "fid_cond_mrkt_div_code": normalized_market_code,
         "fid_org_adj_prc": kwargs.get("fid_org_adj_prc", "1"),
-        "fid_input_iscd": stock_code,
+        "fid_input_iscd": normalized_stock_code,
         "fid_input_date_1": kwargs.get("fid_input_date_1"),
         "fid_input_date_2": kwargs.get("fid_input_date_2"),
         "fid_period_div_code": kwargs.get("fid_period_div_code", period_code),

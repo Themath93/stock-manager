@@ -29,6 +29,7 @@ from .buffett_persona import BuffettPersona
 from .lynch_persona import LynchPersona
 from .soros_persona import SorosPersona
 from .dalio_persona import DalioPersona
+from .dalio_hybrid_persona import DalioHybridPersona
 from .munger_persona import MungerPersona
 from .templeton_persona import TempletonPersona
 from .livermore_persona import LivermorePersona
@@ -54,6 +55,7 @@ __all__ = [
     "LynchPersona",
     "SorosPersona",
     "DalioPersona",
+    "DalioHybridPersona",
     "MungerPersona",
     "TempletonPersona",
     "LivermorePersona",

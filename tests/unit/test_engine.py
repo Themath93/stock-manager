@@ -1433,6 +1433,15 @@ class TestStatusAndHealth:
         assert status.is_paper_trading is True
         assert str(engine.state_path) in status.state_path
 
+    def test_get_status_prefers_client_global_rate_limiter(self, engine):
+        """Status should report client-level limiter availability when exposed."""
+        engine._running = True
+        engine.client.request_rate_limiter_available = 3
+
+        status = engine.get_status()
+
+        assert status.rate_limiter_available == 3
+
     def test_is_healthy_returns_true_when_healthy(self, engine):
         """Test that is_healthy() returns True when engine is healthy."""
         engine._running = True
@@ -1447,12 +1456,37 @@ class TestStatusAndHealth:
 
         assert engine.is_healthy() is False
 
-    def test_is_healthy_returns_false_when_monitors_stopped(self, engine):
-        """Test that is_healthy() returns False when monitors stopped."""
+    def test_is_healthy_returns_true_when_no_positions_even_if_monitor_stopped(self, engine):
+        """No-position sessions can be healthy without the polling monitor."""
         engine._running = True
+        with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                assert engine.is_healthy() is True
+
+    def test_is_healthy_returns_false_when_monitors_stopped_with_open_positions(
+        self, engine, mock_position
+    ):
+        """With open positions, monitor/realtime stream must be active."""
+        engine._running = True
+        engine._position_manager.open_position(mock_position)
         # Mock price monitor as not running
         with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
-            assert engine.is_healthy() is False
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                engine._broker_adapter = None
+                engine.config = SimpleNamespace(websocket_monitoring_enabled=False)
+                assert engine.is_healthy() is False
+
+    def test_is_healthy_returns_true_with_open_positions_when_websocket_connected(
+        self, engine, mock_position
+    ):
+        """WebSocket quote stream is a valid monitoring path when polling is disabled."""
+        engine._running = True
+        engine._position_manager.open_position(mock_position)
+        engine._broker_adapter = SimpleNamespace(websocket_connected=True)
+        engine.config = SimpleNamespace(websocket_monitoring_enabled=True)
+        with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                assert engine.is_healthy() is True
 
 
 # =============================================================================

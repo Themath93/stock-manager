@@ -201,6 +201,10 @@ def _handle_start(*, cmd, user_id, respond, session_manager, format_started, for
         is_mock=cmd.is_mock,
         order_quantity=cmd.order_quantity,
         run_interval_sec=cmd.run_interval_sec,
+        strategy_auto_discover=cmd.strategy_auto_discover,
+        strategy_discovery_limit=cmd.strategy_discovery_limit,
+        strategy_discovery_fallback_symbols=cmd.strategy_discovery_fallback_symbols,
+        llm_mode=cmd.llm_mode,
     )
 
     try:
@@ -216,12 +220,34 @@ def _handle_start(*, cmd, user_id, respond, session_manager, format_started, for
         return
 
     # Build params_info for formatter
-    mode = "MOCK" if (cmd.is_mock is True or (cmd.is_mock is None)) else "LIVE"
+    if cmd.is_mock is None:
+        from stock_manager.adapters.broker.kis.config import KISConfig
+
+        mode = "MOCK" if KISConfig().use_mock else "LIVE"
+    else:
+        mode = "MOCK" if cmd.is_mock else "LIVE"
+    if cmd.symbols:
+        symbols_display = ", ".join(cmd.symbols)
+    elif cmd.strategy_auto_discover:
+        fallback = ", ".join(cmd.strategy_discovery_fallback_symbols)
+        if fallback:
+            symbols_display = (
+                f"자동 탐색 (limit={cmd.strategy_discovery_limit}, fallback={fallback})"
+            )
+        else:
+            symbols_display = f"자동 탐색 (limit={cmd.strategy_discovery_limit})"
+    else:
+        symbols_display = "미지정 (자동 탐색 OFF)"
+
     params_info = {
         "strategy": cmd.strategy or "default",
-        "symbols": ", ".join(cmd.symbols) if cmd.symbols else "자동 탐색",
+        "symbols": symbols_display,
         "mode": mode,
         "duration": f"{cmd.duration_sec}s" if cmd.duration_sec > 0 else "수동 종료까지",
+        "llm_mode": cmd.llm_mode,
+        "auto_discover": cmd.strategy_auto_discover,
+        "discovery_limit": cmd.strategy_discovery_limit,
+        "fallback_symbols": list(cmd.strategy_discovery_fallback_symbols),
     }
     respond(response_type="in_channel", **format_started(params_info))
 
@@ -256,15 +282,29 @@ def _handle_config(*, respond, session_manager, format_config):
 
     session_info = session_manager.get_session_info()
     params = session_info.get("params", {})
+    mode = params.get("mode")
+    if mode is None:
+        is_mock = params.get("is_mock")
+        if isinstance(is_mock, bool):
+            mode = "MOCK" if is_mock else "LIVE"
+        else:
+            mode = "N/A"
     config_info = {
         "slack_enabled": slack_config.enabled,
         "default_channel": slack_config.default_channel or "(미설정)",
         "session_state": session_info.get("state", "STOPPED"),
         "strategy": params.get("strategy", "N/A"),
         "symbols": params.get("symbols", "N/A"),
-        "mode": params.get("mode", "N/A"),
+        "mode": mode,
         "order_quantity": params.get("order_quantity", "N/A"),
         "run_interval_sec": params.get("run_interval_sec", "N/A"),
+        "strategy_auto_discover": params.get("strategy_auto_discover", False),
+        "strategy_discovery_limit": params.get("strategy_discovery_limit", "N/A"),
+        "strategy_discovery_fallback_symbols": params.get(
+            "strategy_discovery_fallback_symbols",
+            [],
+        ),
+        "llm_mode": params.get("llm_mode", "off"),
     }
     respond(response_type="ephemeral", **format_config(config_info))
 

@@ -313,6 +313,38 @@ class TestDomesticStockBasicAPIs(TestFixtures):
         assert result["rt_cd"] == "0"
         call_kwargs = authenticated_client.make_request.call_args
         assert call_kwargs.kwargs["headers"]["tr_id"] == "FHKST03010100"
+        assert call_kwargs.kwargs["params"]["fid_input_iscd"] == "005930"
+        assert call_kwargs.kwargs["params"]["fid_cond_mrkt_div_code"] == "J"
+
+    def test_inquire_period_price_requires_stock_code(
+        self, authenticated_client: KISRestClient
+    ) -> None:
+        """Blank stock code should fail fast before API call."""
+        from stock_manager.adapters.broker.kis.apis.domestic_stock.basic import (
+            inquire_period_price,
+        )
+
+        with pytest.raises(ValueError, match="stock_code is required"):
+            inquire_period_price(client=authenticated_client, stock_code=" ")
+
+        authenticated_client.make_request.assert_not_called()
+
+    def test_inquire_period_price_requires_market_division_code(
+        self, authenticated_client: KISRestClient
+    ) -> None:
+        """Blank market division code should fail fast."""
+        from stock_manager.adapters.broker.kis.apis.domestic_stock.basic import (
+            inquire_period_price,
+        )
+
+        with pytest.raises(ValueError, match="fid_cond_mrkt_div_code is required"):
+            inquire_period_price(
+                client=authenticated_client,
+                stock_code="005930",
+                fid_cond_mrkt_div_code=" ",
+            )
+
+        authenticated_client.make_request.assert_not_called()
 
     # -------------------------------------------------------------------------
     # inquire_intraday_chart (v1_국내주식-022)

@@ -34,6 +34,10 @@ class SessionParams:
     is_mock: bool | None = None  # None = use KIS_USE_MOCK env
     order_quantity: int = 1
     run_interval_sec: float = 60.0
+    strategy_auto_discover: bool = False
+    strategy_discovery_limit: int = 20
+    strategy_discovery_fallback_symbols: tuple[str, ...] = ()
+    llm_mode: str = "off"
 
 
 class SessionManager:
@@ -142,10 +146,65 @@ class SessionManager:
                 "is_mock": params.is_mock if params else None,
                 "order_quantity": params.order_quantity if params else 1,
                 "run_interval_sec": params.run_interval_sec if params else 60.0,
+                "strategy_auto_discover": (
+                    params.strategy_auto_discover if params else False
+                ),
+                "strategy_discovery_limit": (
+                    params.strategy_discovery_limit if params else 20
+                ),
+                "strategy_discovery_fallback_symbols": (
+                    list(params.strategy_discovery_fallback_symbols) if params else []
+                ),
+                "llm_mode": params.llm_mode if params else "off",
             },
             "start_time": started_at,
             "uptime_sec": uptime_sec,
         }
+
+    @staticmethod
+    def _build_dalio_hybrid_persona(base_persona: Any):
+        """Build Dalio hybrid persona with env-driven LLM runtime settings."""
+        from stock_manager.trading.llm.circuit_breaker import CircuitBreaker
+        from stock_manager.trading.llm.config import InvocationCounter, LLMConfig
+        from stock_manager.trading.personas.dalio_hybrid_persona import DalioHybridPersona
+
+        llm_config = LLMConfig.from_env()
+        circuit_breaker = CircuitBreaker(
+            failure_threshold=llm_config.cb_failure_threshold,
+            cooldown_sec=llm_config.cb_cooldown_sec,
+            sliding_window_sec=llm_config.cb_sliding_window_sec,
+        )
+        return DalioHybridPersona(
+            base_persona=base_persona,
+            circuit_breaker=circuit_breaker,
+            llm_config=llm_config,
+            invocation_counter=InvocationCounter(),
+        )
+
+    @staticmethod
+    def _apply_selective_llm_overlay(strategy: Any) -> Any:
+        """Enable hybrid LLM only for Dalio persona in consensus strategy."""
+        from stock_manager.trading.strategies.consensus import ConsensusStrategy
+
+        if not isinstance(strategy, ConsensusStrategy):
+            raise ValueError("--llm-mode selective requires --strategy consensus.")
+
+        personas = strategy.evaluator.personas
+        dalio_indexes = [
+            idx for idx, persona in enumerate(personas) if getattr(persona, "name", "") == "Dalio"
+        ]
+        if len(dalio_indexes) != 1:
+            raise RuntimeError(
+                "Selective LLM overlay requires exactly one Dalio persona "
+                f"(found {len(dalio_indexes)})."
+            )
+
+        dalio_idx = dalio_indexes[0]
+        personas[dalio_idx] = SessionManager._build_dalio_hybrid_persona(personas[dalio_idx])
+        logger.info(
+            "Applied strategy overlay: llm_mode=selective, dalio_hybrid_enabled=true"
+        )
+        return strategy
 
     def get_balance(self) -> dict | None:
         """Get account balance, or None if not running."""
@@ -191,11 +250,9 @@ class SessionManager:
         """Background thread that runs the engine."""
         engine: TradingEngine | None = None
         try:
-            runtime = _build_runtime_context()
-
-            # Override mock mode if specified in params
-            use_mock = params.is_mock if params.is_mock is not None else runtime.config.use_mock
-            _enforce_live_promotion_gate(use_mock=use_mock)
+            runtime = _build_runtime_context(use_mock_override=params.is_mock)
+            effective_use_mock = runtime.config.use_mock
+            _enforce_live_promotion_gate(use_mock=effective_use_mock)
 
             runtime.client.authenticate()
 
@@ -205,6 +262,8 @@ class SessionManager:
                 strategy_symbols=symbols_str,
                 client=runtime.client,
             )
+            if params.llm_mode == "selective":
+                resolved_strategy = self._apply_selective_llm_overlay(resolved_strategy)
 
             notifier = SlackNotifier(SlackConfig())
             engine = TradingEngine(
@@ -214,12 +273,23 @@ class SessionManager:
                     strategy_symbols=resolved_symbols,
                     strategy_order_quantity=params.order_quantity,
                     strategy_run_interval_sec=params.run_interval_sec,
+                    strategy_auto_discover=params.strategy_auto_discover,
+                    strategy_discovery_limit=params.strategy_discovery_limit,
+                    strategy_discovery_fallback_symbols=(
+                        params.strategy_discovery_fallback_symbols
+                    ),
                 ),
                 account_number=runtime.account_number,
                 account_product_code=runtime.account_product_code,
-                is_paper_trading=use_mock,
+                is_paper_trading=effective_use_mock,
                 notifier=notifier,
             )
+
+            engine_mode = getattr(engine, "is_paper_trading", None)
+            if isinstance(engine_mode, bool) and engine_mode != runtime.config.use_mock:
+                raise RuntimeError(
+                    "Session mode mismatch: engine and KIS client are using different trading modes."
+                )
 
             engine.start()
 

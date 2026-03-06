@@ -13,7 +13,6 @@ TR_ID Reference:
 from typing import Any, Dict
 
 # API Endpoints
-_BASE_URL = "https://api.koreainvestment.com"
 _DOMESTIC_STOCK_BASE = "/uapi/domestic-stock/v1/quotations"
 _FINANCE_BASE = "/uapi/domestic-stock/v1/finance"
 _KSDINFO_BASE = "/uapi/domestic-stock/v1/ksdinfo"
@@ -57,6 +56,22 @@ TR_IDS = {
     "국내주식-189": "FHKST663400C0",  # Investment opinion by securities
 }
 
+_FINANCE_API_IDS = {
+    "v1_국내주식-078",  # Balance sheet
+    "v1_국내주식-079",  # Income statement
+    "v1_국내주식-080",  # Financial ratio
+    "v1_국내주식-081",  # Profit ratio
+    "v1_국내주식-082",  # Other major ratios
+    "v1_국내주식-083",  # Stability ratio
+    "v1_국내주식-085",  # Growth ratio
+}
+
+_FINANCE_REQUIRED_PARAMS = ("fid_input_iscd",)
+_FINANCE_DEFAULT_PARAMS: dict[str, Any] = {
+    # Source: KIS OpenAPI finance endpoint requirement (domestic stock market code).
+    "fid_cond_mrkt_div_code": "J",
+}
+
 
 def _get_tr_id(api_id: str, is_paper_trading: bool = False) -> str:
     """
@@ -79,6 +94,28 @@ def _get_tr_id(api_id: str, is_paper_trading: bool = False) -> str:
         raise ValueError(f"Paper trading is not supported for {api_id}")
 
     return TR_IDS[api_id]
+
+
+def _normalize_finance_params(api_id: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Normalize finance endpoint params to satisfy KIS required payload."""
+    if api_id not in _FINANCE_API_IDS:
+        return dict(kwargs)
+
+    params = dict(kwargs)
+    for key, default_value in _FINANCE_DEFAULT_PARAMS.items():
+        params.setdefault(key, default_value)
+
+    missing = []
+    for key in _FINANCE_REQUIRED_PARAMS:
+        raw = params.get(key)
+        if raw is None or str(raw).strip() == "":
+            missing.append(key)
+
+    if missing:
+        missing_str = ", ".join(missing)
+        raise ValueError(f"{api_id} requires params: {missing_str}")
+
+    return params
 
 
 def get_search_info(
@@ -112,7 +149,7 @@ def get_search_info(
     api_id = "v1_국내주식-029"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_DOMESTIC_STOCK_BASE}/search-info"
+    path = f"{_DOMESTIC_STOCK_BASE}/search-info"
 
     headers = {"tr_id": tr_id}
 
@@ -155,7 +192,7 @@ def get_search_stock_info(
     api_id = "v1_국내주식-067"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_DOMESTIC_STOCK_BASE}/search-stock-info"
+    path = f"{_DOMESTIC_STOCK_BASE}/search-stock-info"
 
     headers = {"tr_id": tr_id}
 
@@ -201,15 +238,16 @@ def get_balance_sheet(
     """
     api_id = "v1_국내주식-078"
     tr_id = _get_tr_id(api_id, is_paper_trading)
+    params = _normalize_finance_params(api_id, kwargs)
 
-    path = f"{_BASE_URL}{_FINANCE_BASE}/balance-sheet"
+    path = f"{_FINANCE_BASE}/balance-sheet"
 
     headers = {"tr_id": tr_id}
 
     return client.make_request(
         method="GET",
         path=path,
-        params=kwargs,
+        params=params,
         headers=headers,
     )
 
@@ -248,15 +286,16 @@ def get_income_statement(
     """
     api_id = "v1_국내주식-079"
     tr_id = _get_tr_id(api_id, is_paper_trading)
+    params = _normalize_finance_params(api_id, kwargs)
 
-    path = f"{_BASE_URL}{_FINANCE_BASE}/income-statement"
+    path = f"{_FINANCE_BASE}/income-statement"
 
     headers = {"tr_id": tr_id}
 
     return client.make_request(
         method="GET",
         path=path,
-        params=kwargs,
+        params=params,
         headers=headers,
     )
 
@@ -295,15 +334,16 @@ def get_financial_ratio(
     """
     api_id = "v1_국내주식-080"
     tr_id = _get_tr_id(api_id, is_paper_trading)
+    params = _normalize_finance_params(api_id, kwargs)
 
-    path = f"{_BASE_URL}{_FINANCE_BASE}/financial-ratio"
+    path = f"{_FINANCE_BASE}/financial-ratio"
 
     headers = {"tr_id": tr_id}
 
     return client.make_request(
         method="GET",
         path=path,
-        params=kwargs,
+        params=params,
         headers=headers,
     )
 
@@ -342,15 +382,16 @@ def get_profit_ratio(
     """
     api_id = "v1_국내주식-081"
     tr_id = _get_tr_id(api_id, is_paper_trading)
+    params = _normalize_finance_params(api_id, kwargs)
 
-    path = f"{_BASE_URL}{_FINANCE_BASE}/profit-ratio"
+    path = f"{_FINANCE_BASE}/profit-ratio"
 
     headers = {"tr_id": tr_id}
 
     return client.make_request(
         method="GET",
         path=path,
-        params=kwargs,
+        params=params,
         headers=headers,
     )
 
@@ -386,15 +427,16 @@ def get_other_major_ratios(
     """
     api_id = "v1_국내주식-082"
     tr_id = _get_tr_id(api_id, is_paper_trading)
+    params = _normalize_finance_params(api_id, kwargs)
 
-    path = f"{_BASE_URL}{_FINANCE_BASE}/other-major-ratios"
+    path = f"{_FINANCE_BASE}/other-major-ratios"
 
     headers = {"tr_id": tr_id}
 
     return client.make_request(
         method="GET",
         path=path,
-        params=kwargs,
+        params=params,
         headers=headers,
     )
 
@@ -433,15 +475,16 @@ def get_stability_ratio(
     """
     api_id = "v1_국내주식-083"
     tr_id = _get_tr_id(api_id, is_paper_trading)
+    params = _normalize_finance_params(api_id, kwargs)
 
-    path = f"{_BASE_URL}{_FINANCE_BASE}/stability-ratio"
+    path = f"{_FINANCE_BASE}/stability-ratio"
 
     headers = {"tr_id": tr_id}
 
     return client.make_request(
         method="GET",
         path=path,
-        params=kwargs,
+        params=params,
         headers=headers,
     )
 
@@ -480,15 +523,16 @@ def get_growth_ratio(
     """
     api_id = "v1_국내주식-085"
     tr_id = _get_tr_id(api_id, is_paper_trading)
+    params = _normalize_finance_params(api_id, kwargs)
 
-    path = f"{_BASE_URL}{_FINANCE_BASE}/growth-ratio"
+    path = f"{_FINANCE_BASE}/growth-ratio"
 
     headers = {"tr_id": tr_id}
 
     return client.make_request(
         method="GET",
         path=path,
-        params=kwargs,
+        params=params,
         headers=headers,
     )
 
@@ -524,7 +568,7 @@ def get_credit_by_company(
     api_id = "국내주식-111"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_DOMESTIC_STOCK_BASE}/credit-by-company"
+    path = f"{_DOMESTIC_STOCK_BASE}/credit-by-company"
 
     headers = {"tr_id": tr_id}
 
@@ -567,7 +611,7 @@ def get_paidin_capin(
     api_id = "국내주식-143"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/paidin-capin"
+    path = f"{_KSDINFO_BASE}/paidin-capin"
 
     headers = {"tr_id": tr_id}
 
@@ -610,7 +654,7 @@ def get_bonus_issue(
     api_id = "국내주식-144"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/bonus-issue"
+    path = f"{_KSDINFO_BASE}/bonus-issue"
 
     headers = {"tr_id": tr_id}
 
@@ -657,7 +701,7 @@ def get_dividend(
     api_id = "국내주식-145"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/dividend"
+    path = f"{_KSDINFO_BASE}/dividend"
 
     headers = {"tr_id": tr_id}
 
@@ -700,7 +744,7 @@ def get_purreq(
     api_id = "국내주식-146"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/purreq"
+    path = f"{_KSDINFO_BASE}/purreq"
 
     headers = {"tr_id": tr_id}
 
@@ -743,7 +787,7 @@ def get_merger_split(
     api_id = "국내주식-147"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/merger-split"
+    path = f"{_KSDINFO_BASE}/merger-split"
 
     headers = {"tr_id": tr_id}
 
@@ -786,7 +830,7 @@ def get_rev_split(
     api_id = "국내주식-148"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/rev-split"
+    path = f"{_KSDINFO_BASE}/rev-split"
 
     headers = {"tr_id": tr_id}
 
@@ -829,7 +873,7 @@ def get_cap_dcrs(
     api_id = "국내주식-149"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/cap-dcrs"
+    path = f"{_KSDINFO_BASE}/cap-dcrs"
 
     headers = {"tr_id": tr_id}
 
@@ -872,7 +916,7 @@ def get_list_info(
     api_id = "국내주식-150"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/list-info"
+    path = f"{_KSDINFO_BASE}/list-info"
 
     headers = {"tr_id": tr_id}
 
@@ -915,7 +959,7 @@ def get_pub_offer(
     api_id = "국내주식-151"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/pub-offer"
+    path = f"{_KSDINFO_BASE}/pub-offer"
 
     headers = {"tr_id": tr_id}
 
@@ -958,7 +1002,7 @@ def get_forfeit(
     api_id = "국내주식-152"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/forfeit"
+    path = f"{_KSDINFO_BASE}/forfeit"
 
     headers = {"tr_id": tr_id}
 
@@ -1001,7 +1045,7 @@ def get_mand_deposit(
     api_id = "국내주식-153"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/mand-deposit"
+    path = f"{_KSDINFO_BASE}/mand-deposit"
 
     headers = {"tr_id": tr_id}
 
@@ -1044,7 +1088,7 @@ def get_sharehld_meet(
     api_id = "국내주식-154"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_KSDINFO_BASE}/sharehld-meet"
+    path = f"{_KSDINFO_BASE}/sharehld-meet"
 
     headers = {"tr_id": tr_id}
 
@@ -1091,7 +1135,7 @@ def get_estimate_perform(
     api_id = "국내주식-187"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_DOMESTIC_STOCK_BASE}/estimate-perform"
+    path = f"{_DOMESTIC_STOCK_BASE}/estimate-perform"
 
     headers = {"tr_id": tr_id}
 
@@ -1138,7 +1182,7 @@ def get_invest_opinion(
     api_id = "국내주식-188"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_DOMESTIC_STOCK_BASE}/invest-opinion"
+    path = f"{_DOMESTIC_STOCK_BASE}/invest-opinion"
 
     headers = {"tr_id": tr_id}
 
@@ -1182,7 +1226,7 @@ def get_invest_opbysec(
     api_id = "국내주식-189"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_DOMESTIC_STOCK_BASE}/invest-opbysec"
+    path = f"{_DOMESTIC_STOCK_BASE}/invest-opbysec"
 
     headers = {"tr_id": tr_id}
 
@@ -1225,7 +1269,7 @@ def get_lendable_by_company(
     api_id = "국내주식-195"
     tr_id = _get_tr_id(api_id, is_paper_trading)
 
-    path = f"{_BASE_URL}{_DOMESTIC_STOCK_BASE}/lendable-by-company"
+    path = f"{_DOMESTIC_STOCK_BASE}/lendable-by-company"
 
     headers = {"tr_id": tr_id}
 

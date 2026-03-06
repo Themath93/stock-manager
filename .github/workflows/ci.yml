@@ -41,6 +41,9 @@ jobs:
       - name: Run lint (ruff)
         run: uv run ruff check
 
+      - name: Enforce KIS endpoint policy
+        run: uv run python scripts/validate_kis_endpoint_policy.py
+
       - name: Run type check (mypy)
         run: uv run mypy stock_manager
 

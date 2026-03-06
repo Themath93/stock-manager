@@ -5,9 +5,12 @@ including authentication, request handling, and response processing.
 """
 
 import logging
+import random
 import time
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 
@@ -24,6 +27,41 @@ from stock_manager.adapters.broker.kis.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _RequestRateLimiter:
+    """Simple thread-safe sliding-window rate limiter for client-wide requests."""
+
+    def __init__(self, max_requests: int, window_seconds: float = 1.0) -> None:
+        self.max_requests = max(1, int(max_requests))
+        self.window_seconds = float(window_seconds)
+        self._requests: list[float] = []
+        self._lock = Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                self._requests = [
+                    t for t in self._requests if (now - t) < self.window_seconds
+                ]
+                if len(self._requests) < self.max_requests:
+                    self._requests.append(now)
+                    return
+                oldest = self._requests[0]
+                sleep_for = max(0.0, oldest + self.window_seconds - now)
+
+            if sleep_for > 0:
+                time.sleep(min(sleep_for, 0.1))
+
+    @property
+    def available(self) -> int:
+        with self._lock:
+            now = time.monotonic()
+            self._requests = [
+                t for t in self._requests if (now - t) < self.window_seconds
+            ]
+            return self.max_requests - len(self._requests)
 
 
 class KISRestClient:
@@ -69,6 +107,10 @@ class KISRestClient:
         self.config = config
         self.state = KISConnectionState(config=config)
         self.timeout = timeout
+        self._request_rate_limiter = _RequestRateLimiter(
+            max_requests=max(1, self.config.request_rate_limit_per_sec),
+            window_seconds=1.0,
+        )
 
         # HTTP client setup
         if client is not None:
@@ -79,6 +121,11 @@ class KISRestClient:
                 timeout=timeout,
                 headers=self._get_default_headers(),
             )
+
+    @property
+    def request_rate_limiter_available(self) -> int:
+        """Expose available slots in the global client rate limiter."""
+        return self._request_rate_limiter.available
 
     def _get_default_headers(self) -> dict[str, str]:
         """Get default HTTP headers for all requests.
@@ -266,10 +313,14 @@ class KISRestClient:
             ... )
             >>> print(response["output"])
         """
+        self._validate_request_path(path)
+
         max_attempts = max(1, self.config.request_max_attempts) if self.config.request_retry_enabled else 1
         reauth_attempted = False
 
         for attempt in range(1, max_attempts + 1):
+            self._request_rate_limiter.acquire()
+
             # Prepare headers per-attempt to include refreshed token after reauth.
             request_headers = self._get_default_headers()
             if require_auth:
@@ -307,10 +358,32 @@ class KISRestClient:
                         status_code=429,
                     )
 
+                if response.status_code >= 400:
+                    error_data = None
+                    try:
+                        parsed = response.json()
+                        if isinstance(parsed, dict):
+                            error_data = parsed
+                    except Exception:
+                        error_data = None
+
+                    if self._is_rate_limit_payload(error_data):
+                        raise KISRateLimitError(
+                            "API rate limit exceeded. Please retry later.",
+                            status_code=response.status_code,
+                            response_data=error_data,
+                        )
+
                 response.raise_for_status()
                 data = response.json()
 
                 if self._is_error_response(data):
+                    if self._is_rate_limit_payload(data):
+                        raise KISRateLimitError(
+                            "API rate limit exceeded. Please retry later.",
+                            status_code=response.status_code,
+                            response_data=data,
+                        )
                     if (
                         require_auth
                         and self.config.auto_reauth_enabled
@@ -342,18 +415,38 @@ class KISRestClient:
                     self.authenticate()
                     continue
 
-                if self._should_retry_status(status_code, attempt, max_attempts):
-                    self._sleep_before_retry(attempt)
-                    continue
-
                 error_data = None
                 try:
                     error_data = e.response.json()
                 except Exception:
                     pass
 
+                if self._is_rate_limit_payload(error_data):
+                    if self._should_retry_status(429, attempt, max_attempts):
+                        self._sleep_before_retry(attempt)
+                        continue
+                    raise KISRateLimitError(
+                        "API rate limit exceeded. Please retry later.",
+                        status_code=status_code,
+                        response_data=error_data,
+                    ) from e
+
+                if self._should_retry_status(status_code, attempt, max_attempts):
+                    self._sleep_before_retry(attempt)
+                    continue
+
+                details = ""
+                if isinstance(error_data, dict):
+                    detail_parts = []
+                    for key in ("rt_cd", "msg_cd", "msg1"):
+                        value = error_data.get(key)
+                        if value not in (None, ""):
+                            detail_parts.append(f"{key}={value}")
+                    if detail_parts:
+                        details = " (" + ", ".join(detail_parts) + ")"
+
                 raise KISAPIError(
-                    f"API request failed: {e.response.status_code} {e.response.reason_phrase}",
+                    f"API request failed: {e.response.status_code} {e.response.reason_phrase}{details}",
                     status_code=e.response.status_code,
                     response_data=error_data,
                 ) from e
@@ -364,6 +457,34 @@ class KISRestClient:
                 raise KISAPIError(f"Network error during API request: {e}") from e
 
         raise KISAPIError("API request failed after maximum retry attempts")
+
+    def _validate_request_path(self, path: str) -> None:
+        """Validate endpoint path to prevent cross-environment absolute URL calls."""
+        parsed = urlparse(path)
+
+        # Relative paths are always preferred and safe with httpx base_url.
+        if not parsed.scheme and not parsed.netloc:
+            return
+
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise KISAPIError(
+                f"Invalid absolute endpoint path: {path}. Use relative paths like '/uapi/...'.",
+                status_code=400,
+            )
+
+        expected = urlparse(self.config.api_base_url)
+        expected_origin = (expected.scheme.lower(), (expected.hostname or "").lower(), expected.port)
+        request_origin = (parsed.scheme.lower(), parsed.hostname.lower(), parsed.port)
+
+        if request_origin != expected_origin:
+            raise KISAPIError(
+                (
+                    "Disallowed absolute endpoint origin. "
+                    f"configured={self.config.api_base_url}, requested={path}. "
+                    "Use relative paths so requests always follow current mock/real mode."
+                ),
+                status_code=400,
+            )
 
     def _is_error_response(self, data: dict[str, Any]) -> bool:
         """Check if API response contains an error.
@@ -420,6 +541,23 @@ class KISRestClient:
         ).lower()
         return any(keyword in msg for keyword in ("token", "auth", "인증"))
 
+    def _is_rate_limit_payload(self, data: dict[str, Any] | None) -> bool:
+        """Detect KIS rate-limit payloads regardless of HTTP status code."""
+        if not isinstance(data, dict):
+            return False
+
+        msg_cd = str(data.get("msg_cd", "")).upper()
+        error_code = str(data.get("error_code", "")).upper()
+        msg1 = str(data.get("msg1", ""))
+        message = str(data.get("message", ""))
+
+        return (
+            msg_cd == "EGW00201"
+            or error_code == "EGW00201"
+            or "초당 거래건수" in msg1
+            or "rate limit" in message.lower()
+        )
+
     def _should_retry_status(self, status_code: int, attempt: int, max_attempts: int) -> bool:
         if not self.config.request_retry_enabled:
             return False
@@ -434,6 +572,7 @@ class KISRestClient:
         base = max(1, self.config.request_initial_backoff_ms) / 1000.0
         multiplier = max(1.0, self.config.request_backoff_multiplier)
         delay = base * (multiplier ** max(0, attempt - 1))
+        delay += random.uniform(0.0, base)
         time.sleep(delay)
 
     def close(self) -> None:

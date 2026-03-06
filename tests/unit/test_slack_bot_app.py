@@ -141,6 +141,7 @@ def test_handle_start_handles_runtime_error(monkeypatch: pytest.MonkeyPatch) -> 
 def test_handle_start_success(monkeypatch: pytest.MonkeyPatch) -> None:
     respond = MagicMock()
     session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
     cmd = ParsedCommand(
         subcommand="start",
         strategy="consensus",
@@ -149,22 +150,134 @@ def test_handle_start_success(monkeypatch: pytest.MonkeyPatch) -> None:
         is_mock=False,
         order_quantity=2,
         run_interval_sec=15.0,
+        llm_mode="off",
     )
 
     monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
 
     slack_app._handle_start(
         cmd=cmd,
         user_id="U1",
         respond=respond,
         session_manager=session_manager,
-        format_started=lambda payload: {"text": str(payload), "blocks": []},
+        format_started=_format_started,
         format_error=lambda msg: {"text": msg, "blocks": []},
     )
 
     session_manager.start_session.assert_called_once()
+    params = session_manager.start_session.call_args.args[0]
+    assert params.strategy_auto_discover is False
+    assert params.strategy_discovery_limit == 20
+    assert params.strategy_discovery_fallback_symbols == ()
+    assert params.llm_mode == "off"
     respond.assert_called_once()
     assert respond.call_args.kwargs["response_type"] == "in_channel"
+    assert captured_payload["mode"] == "LIVE"
+    assert captured_payload["symbols"] == "005930, 000660"
+    assert captured_payload["llm_mode"] == "off"
+
+
+def test_handle_start_auto_discover_updates_symbols_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
+    cmd = ParsedCommand(
+        subcommand="start",
+        strategy="consensus",
+        symbols=(),
+        is_mock=True,
+        strategy_auto_discover=True,
+        strategy_discovery_limit=7,
+        strategy_discovery_fallback_symbols=("005930", "000660"),
+        llm_mode="selective",
+    )
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    slack_app._handle_start(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_started=_format_started,
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    session_manager.start_session.assert_called_once()
+    params = session_manager.start_session.call_args.args[0]
+    assert params.strategy_auto_discover is True
+    assert params.strategy_discovery_limit == 7
+    assert params.strategy_discovery_fallback_symbols == ("005930", "000660")
+    assert params.llm_mode == "selective"
+    assert "자동 탐색 (limit=7, fallback=005930, 000660)" == captured_payload["symbols"]
+    assert captured_payload["llm_mode"] == "selective"
+
+
+def test_handle_start_no_symbols_auto_discover_off_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
+    cmd = ParsedCommand(
+        subcommand="start",
+        strategy="consensus",
+        symbols=(),
+        is_mock=True,
+        strategy_auto_discover=False,
+    )
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    slack_app._handle_start(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_started=_format_started,
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    assert captured_payload["symbols"] == "미지정 (자동 탐색 OFF)"
+
+
+def test_handle_start_mode_defaults_to_env_when_is_mock_unspecified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    captured_payload: dict[str, object] = {}
+    cmd = ParsedCommand(subcommand="start", is_mock=None)
+
+    monkeypatch.setattr(slack_app, "_check_rate_limit", lambda _user_id: True)
+
+    def _format_started(payload: dict[str, object]) -> dict[str, object]:
+        captured_payload.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    monkeypatch.setattr("stock_manager.adapters.broker.kis.config.KISConfig", lambda: SimpleNamespace(use_mock=False))
+
+    slack_app._handle_start(
+        cmd=cmd,
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+        format_started=_format_started,
+        format_error=lambda msg: {"text": msg, "blocks": []},
+    )
+
+    session_manager.start_session.assert_called_once()
+    assert captured_payload["mode"] == "LIVE"
 
 
 def test_handle_stop_paths() -> None:
@@ -324,6 +437,10 @@ def test_handle_config_includes_trading_params(monkeypatch: pytest.MonkeyPatch) 
             "mode": "MOCK",
             "order_quantity": 5,
             "run_interval_sec": 15.0,
+            "strategy_auto_discover": True,
+            "strategy_discovery_limit": 7,
+            "strategy_discovery_fallback_symbols": ["005930", "000660"],
+            "llm_mode": "selective",
         },
     }
 
@@ -346,6 +463,40 @@ def test_handle_config_includes_trading_params(monkeypatch: pytest.MonkeyPatch) 
     assert captured["symbols"] == ["005930"]
     assert captured["mode"] == "MOCK"
     assert captured["order_quantity"] == 5
+    assert captured["strategy_auto_discover"] is True
+    assert captured["strategy_discovery_limit"] == 7
+    assert captured["strategy_discovery_fallback_symbols"] == ["005930", "000660"]
+    assert captured["llm_mode"] == "selective"
+
+
+def test_handle_config_derives_mode_from_is_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+    session_manager.get_session_info.return_value = {
+        "state": "RUNNING",
+        "params": {
+            "strategy": "consensus",
+            "symbols": ["005930"],
+            "is_mock": True,
+        },
+    }
+
+    fake_config = SimpleNamespace(enabled=True, default_channel="#alerts")
+    monkeypatch.setattr("stock_manager.notifications.config.SlackConfig", lambda: fake_config)
+
+    captured: dict[str, object] = {}
+
+    def capture_config(payload):
+        captured.update(payload)
+        return {"text": str(payload), "blocks": []}
+
+    slack_app._handle_config(
+        respond=respond,
+        session_manager=session_manager,
+        format_config=capture_config,
+    )
+
+    assert captured["mode"] == "MOCK"
 
 
 # --- balance tests ---
