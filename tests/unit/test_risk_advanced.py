@@ -1,12 +1,10 @@
 """Tests for advanced risk management components."""
 from decimal import Decimal
-from datetime import date
 import threading
-import pytest
 
 from stock_manager.trading.risk.circuit_breaker import CircuitBreakerManager
 from stock_manager.trading.risk.sector_exposure import (
-    Position, SectorExposureSnapshot, compute_sector_exposure,
+    Position, compute_sector_exposure,
 )
 from stock_manager.trading.risk.volatility_sizing import compute_volatility_position_size
 from stock_manager.trading.risk.metrics_cache import DailyRiskMetricsCache

@@ -1,7 +1,6 @@
 """Characterization tests for persona logic bug fixes."""
-import pytest
 from decimal import Decimal
-from stock_manager.trading.personas.models import MarketSnapshot, PersonaCategory
+from stock_manager.trading.personas.models import MarketSnapshot
 
 
 def _make_snapshot(**kwargs) -> MarketSnapshot:

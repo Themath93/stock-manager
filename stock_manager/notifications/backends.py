@@ -25,7 +25,7 @@ class SlackNotifier:
 
     def send(self, message: str) -> bool:
         """Send message via Slack webhook with timeout."""
-        import requests
+        import requests  # type: ignore[import-untyped]
 
         try:
             response = requests.post(

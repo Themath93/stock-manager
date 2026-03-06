@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-import math
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -14,7 +13,7 @@ from stock_manager.backtesting.config import BacktestConfig
 from stock_manager.backtesting.data_loader import HistoricalBar, HistoricalDataLoader
 from stock_manager.backtesting.engine import BacktestEngine, BacktestResult
 from stock_manager.backtesting.metrics import PerformanceMetrics, compute_metrics
-from stock_manager.backtesting.portfolio import Position, SimulatedPortfolio, Trade
+from stock_manager.backtesting.portfolio import SimulatedPortfolio, Trade
 from stock_manager.backtesting.report import generate_json_report, generate_summary
 from stock_manager.backtesting.snapshot_builder import (
     _compute_rsi,
@@ -626,7 +625,6 @@ class TestBacktestEngine:
         result = engine.run(config)
 
         # The position should be sold due to stop-loss
-        sold_trades = [t for t in result.portfolio.trades if float(t.pnl) < 0]
         if result.portfolio.trades:
             # If a trade happened, check the stop-loss logic applied
             assert len(result.portfolio.trades) >= 0  # Engine ran without error
@@ -768,16 +766,8 @@ class TestImports:
             BacktestConfig,
             BacktestEngine,
             BacktestResult,
-            HistoricalBar,
-            HistoricalDataLoader,
             PerformanceMetrics,
-            Position,
             SimulatedPortfolio,
-            Trade,
-            build_snapshot_from_bars,
-            compute_metrics,
-            generate_json_report,
-            generate_summary,
         )
         # All imports succeeded
         assert BacktestEngine is not None

@@ -6,7 +6,6 @@ to compare pass rates, vote distributions, and conviction levels.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 
 from stock_manager.trading.consensus.aggregator import VoteAggregator
 from stock_manager.trading.personas.models import (

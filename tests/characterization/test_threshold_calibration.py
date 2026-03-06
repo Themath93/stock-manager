@@ -1,6 +1,5 @@
 """Characterization tests for Phase 1 Korean market threshold calibrations."""
 from decimal import Decimal
-import pytest
 from stock_manager.trading.personas.models import MarketSnapshot
 
 

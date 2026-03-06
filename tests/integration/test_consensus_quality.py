@@ -1,10 +1,9 @@
 """Negative quality test: verify bad stocks are rejected by consensus."""
 from decimal import Decimal
 from datetime import datetime, timezone
-import pytest
 
 from stock_manager.trading.personas.models import (
-    MarketSnapshot, PersonaVote, VoteAction, PersonaCategory, ConsensusResult,
+    MarketSnapshot, VoteAction,
 )
 from stock_manager.trading.consensus.aggregator import VoteAggregator
 

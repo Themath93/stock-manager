@@ -1,12 +1,9 @@
 """Characterization tests for runner.py bug fixes."""
-import threading
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from stock_manager.trading.pipeline.runner import TradingPipelineRunner
-from stock_manager.trading.pipeline.state import PipelineEntry, PipelineState
 
 
 def _make_runner(**kwargs) -> TradingPipelineRunner:

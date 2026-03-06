@@ -4,7 +4,6 @@ These tests verify the FIXED behavior after all Phase 0 data bug fixes.
 """
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-import pytest
 
 
 def _make_fetcher():

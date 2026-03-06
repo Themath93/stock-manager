@@ -1,9 +1,7 @@
 """Tests for consensus gate tuning and A/B comparison."""
-from decimal import Decimal
-import pytest
 
 from stock_manager.trading.consensus.aggregator import VoteAggregator
-from stock_manager.trading.consensus.ab_comparison import compare_configs, ABComparisonResult
+from stock_manager.trading.consensus.ab_comparison import compare_configs
 from stock_manager.trading.personas.models import PersonaVote, VoteAction, PersonaCategory
 
 
