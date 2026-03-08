@@ -26,17 +26,28 @@ SYMBOL_NAME_MAP: dict[str, str] = {
 EVENT_EMOJI_MAP: dict[str, str] = {
     "engine.started": "🚀",
     "engine.stopped": "🛑",
+    "order.submitted": "📝",
     "order.filled": "✅",
+    "order.partially_filled": "🟡",
+    "order.reconciled": "♻️",
+    "order.unresolved": "⚠️",
     "order.rejected": "❌",
     "order.canceled": "↩️",
     "order.created": "📝",
+    "position.opened": "📈",
+    "position.reduced": "📉",
+    "position.closed": "🏁",
     "position.stop_loss": "🛡️",
     "position.take_profit": "💰",
     "reconciliation.discrepancy": "🔍",
     "recovery.reconciled": "♻️",
     "recovery.failed": "🚨",
+    "probe.live_roundtrip.started": "🧪",
+    "probe.live_roundtrip.succeeded": "✅",
+    "probe.live_roundtrip.failed": "🚨",
     "pipeline.consensus.buy": "📊",
     "pipeline.consensus.reject": "📉",
+    "pipeline.screening_complete": "🧭",
     "pipeline.buy_filled": "💰",
     "pipeline.position_summary": "📋",
     "pipeline.condition_warning": "⚠️",
@@ -112,7 +123,7 @@ def format_engine_event(event: NotificationEvent) -> dict[str, Any]:
 
 
 def format_order_event(event: NotificationEvent) -> dict[str, Any]:
-    """Format order events (order.filled, order.rejected)."""
+    """Format order events (order.submitted, order.filled, order.rejected)."""
     emoji = _event_to_emoji(event)
     mode_prefix = _mock_prefix(event)
     details = event.details
@@ -123,7 +134,13 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
     quantity = details.get("quantity", 0)
     price = details.get("price")
 
-    if event.event_type == "order.filled":
+    if event.event_type in {
+        "order.submitted",
+        "order.filled",
+        "order.partially_filled",
+        "order.reconciled",
+        "order.unresolved",
+    }:
         fields = [
             _mrkdwn_field("*종목:*", symbol),
             _mrkdwn_field("*매매 방향:*", f"{side_emoji} {str(side).upper()}"),
@@ -133,6 +150,20 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
         broker_id = details.get("broker_order_id")
         if broker_id:
             fields.append(_mrkdwn_field("*브로커 주문 ID:*", str(broker_id)))
+        executed_quantity = details.get("executed_quantity")
+        executed_price = details.get("executed_price")
+        if event.event_type != "order.submitted" and executed_quantity:
+            fields.append(_mrkdwn_field("*체결 수량:*", str(executed_quantity)))
+        if event.event_type != "order.submitted" and executed_price:
+            fields.append(_mrkdwn_field("*체결가:*", _format_currency(executed_price)))
+        if details.get("resolution_source"):
+            fields.append(_mrkdwn_field("*확정 소스:*", str(details.get("resolution_source"))))
+        if details.get("pending_age_sec") is not None:
+            fields.append(_mrkdwn_field("*대기 시간:*", f"{details.get('pending_age_sec')}초"))
+        if details.get("reason"):
+            fields.append(_mrkdwn_field("*사유:*", str(details.get("reason"))))
+        if details.get("exit_reason"):
+            fields.append(_mrkdwn_field("*매도 사유:*", str(details.get("exit_reason"))))
     else:  # order.rejected
         fields = [
             _mrkdwn_field("*종목:*", symbol),
@@ -155,34 +186,44 @@ def format_order_event(event: NotificationEvent) -> dict[str, Any]:
 
 
 def format_position_event(event: NotificationEvent) -> dict[str, Any]:
-    """Format position events (position.stop_loss, position.take_profit)."""
+    """Format position events (position.stop_loss, position.take_profit, lifecycle)."""
     emoji = _event_to_emoji(event)
     mode_prefix = _mock_prefix(event)
     details = event.details
 
     symbol = _format_symbol_label(details)
-    entry_price = details.get("entry_price")
-    trigger_price = details.get("trigger_price")
+    if event.event_type in {"position.stop_loss", "position.take_profit"}:
+        entry_price = details.get("entry_price")
+        trigger_price = details.get("trigger_price")
+        fields = [
+            _mrkdwn_field("*종목:*", symbol),
+            _mrkdwn_field("*매입가:*", _format_currency(entry_price) if entry_price else "N/A"),
+            _mrkdwn_field(
+                "*발동가:*", _format_currency(trigger_price) if trigger_price else "N/A"
+            ),
+        ]
 
-    fields = [
-        _mrkdwn_field("*종목:*", symbol),
-        _mrkdwn_field("*매입가:*", _format_currency(entry_price) if entry_price else "N/A"),
-        _mrkdwn_field(
-            "*발동가:*", _format_currency(trigger_price) if trigger_price else "N/A"
-        ),
-    ]
-
-    # Add P&L info if available
-    if entry_price and trigger_price:
-        try:
-            entry = Decimal(str(entry_price))
-            trigger = Decimal(str(trigger_price))
-            diff = trigger - entry
-            pct = (diff / entry * 100) if entry else Decimal("0")
-            pnl_str = f"{'+' if diff >= 0 else ''}{_format_currency(int(diff))} ({pct:+.1f}%)"
-            fields.append(_mrkdwn_field("*주당 손익:*", pnl_str))
-        except (ValueError, ArithmeticError):
-            pass
+        if entry_price and trigger_price:
+            try:
+                entry = Decimal(str(entry_price))
+                trigger = Decimal(str(trigger_price))
+                diff = trigger - entry
+                pct = (diff / entry * 100) if entry else Decimal("0")
+                pnl_str = f"{'+' if diff >= 0 else ''}{_format_currency(int(diff))} ({pct:+.1f}%)"
+                fields.append(_mrkdwn_field("*주당 손익:*", pnl_str))
+            except (ValueError, ArithmeticError):
+                pass
+    else:
+        fields = [
+            _mrkdwn_field("*종목:*", symbol),
+            _mrkdwn_field("*수량:*", str(details.get("quantity", "N/A"))),
+        ]
+        if details.get("entry_price"):
+            fields.append(_mrkdwn_field("*매입가:*", _format_currency(details.get("entry_price"))))
+        if details.get("exit_reason"):
+            fields.append(_mrkdwn_field("*사유:*", str(details.get("exit_reason"))))
+        if details.get("source"):
+            fields.append(_mrkdwn_field("*소스:*", str(details.get("source"))))
 
     text = f"{mode_prefix}{emoji} {event.title}: {symbol}"
     blocks = [
@@ -202,24 +243,46 @@ def format_reconciliation_event(event: NotificationEvent) -> dict[str, Any]:
     emoji = _event_to_emoji(event)
     mode_prefix = _mock_prefix(event)
     details = event.details
+    primary_discrepancy = details.get("primary_discrepancy")
+    discrepancies_sample = details.get("discrepancies_sample", [])
+    orphan_count = len(details.get("orphan_positions", []))
+    missing_count = len(details.get("missing_positions", []))
+    mismatch_count = len(details.get("quantity_mismatches", {}))
+    unresolved_count = int(details.get("unresolved_order_count", 0) or 0)
+    primary_unresolved_reason = details.get("primary_unresolved_reason")
 
     fields = [
         _mrkdwn_field("*상태:*", "불일치"),
-        _mrkdwn_field("*고아 포지션:*", str(len(details.get("orphan_positions", [])))),
-        _mrkdwn_field("*누락 포지션:*", str(len(details.get("missing_positions", [])))),
-        _mrkdwn_field("*수량 불일치:*", str(len(details.get("quantity_mismatches", {})))),
+        _mrkdwn_field("*고아 포지션:*", str(orphan_count)),
+        _mrkdwn_field("*누락 포지션:*", str(missing_count)),
+        _mrkdwn_field("*수량 불일치:*", str(mismatch_count)),
+        _mrkdwn_field("*미해결 주문:*", str(unresolved_count)),
     ]
+    if primary_discrepancy:
+        fields.append(_mrkdwn_field("*원인:*", str(primary_discrepancy)))
+    if primary_unresolved_reason:
+        fields.append(_mrkdwn_field("*주문 경고:*", str(primary_unresolved_reason)))
 
     discrepancy_count = details.get("discrepancy_count", 0)
     text = f"{mode_prefix}{emoji} {event.title}: {discrepancy_count}건 불일치 발견"
+    if primary_discrepancy and orphan_count == 0 and missing_count == 0 and mismatch_count == 0:
+        text = f"{text} | 원인: {primary_discrepancy}"
     blocks = [
         {
             "type": "header",
             "text": {"type": "plain_text", "text": f"{mode_prefix}{emoji} {event.title}"},
         },
         {"type": "section", "fields": fields},
-        _context_block(event),
     ]
+    if discrepancies_sample:
+        sample_text = "\n".join(f"- {item}" for item in discrepancies_sample[:3])
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*불일치 상세:*\n{sample_text}"},
+            }
+        )
+    blocks.append(_context_block(event))
 
     return {"text": text, "blocks": blocks, "color": _level_to_color(event.level)}
 

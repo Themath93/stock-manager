@@ -44,6 +44,10 @@ def get_kis_websocket_url(*, is_paper_trading: bool) -> str:
     return KIS_WS_URL_MOCK if is_paper_trading else KIS_WS_URL_REAL
 
 
+def get_default_execution_notice_tr_id(*, is_paper_trading: bool) -> str:
+    return "H0STCNI9" if is_paper_trading else "H0STCNI0"
+
+
 @dataclass(frozen=True)
 class KISQuoteEvent:
     symbol: str
@@ -59,10 +63,16 @@ class KISQuoteEvent:
 @dataclass(frozen=True)
 class KISExecutionEvent:
     symbol: str
+    broker_order_id: str | None
     order_id: str | None
     side: Literal["buy", "sell"] | None
+    executed_price: Decimal | None
     price: Decimal | None
+    executed_quantity: Decimal | None
     quantity: Decimal | None
+    cumulative_quantity: Decimal | None
+    remaining_quantity: Decimal | None
+    event_status: str | None
     timestamp: datetime
     tr_id: str
     raw_payload: dict[str, Any]
@@ -100,11 +110,15 @@ class KISWebSocketClient:
         self,
         *,
         websocket_url: str,
+        is_paper_trading: bool | None = None,
         websocket_app_factory: _WebSocketAppFactory | None = None,
         reconnect_max_attempts: int = 5,
         reconnect_base_delay_sec: float = 1.0,
     ) -> None:
         self._websocket_url = websocket_url
+        self._is_paper_trading = (
+            websocket_url == KIS_WS_URL_MOCK if is_paper_trading is None else is_paper_trading
+        )
         self._websocket_app_factory = websocket_app_factory or websocket.WebSocketApp
         self._reconnect_max_attempts = max(1, reconnect_max_attempts)
         self._reconnect_base_delay_sec = max(0.1, reconnect_base_delay_sec)
@@ -202,15 +216,18 @@ class KISWebSocketClient:
         self,
         *,
         callback: ExecutionCallback | None = None,
-        tr_id: str = DEFAULT_EXECUTION_TR_ID,
+        tr_id: str | None = None,
         tr_key: str = "ALL",
     ) -> None:
         if callback is not None:
             self.register_execution_callback(callback)
 
-        self._execution_subscription = (tr_id, tr_key)
+        resolved_tr_id = tr_id or get_default_execution_notice_tr_id(
+            is_paper_trading=self._is_paper_trading
+        )
+        self._execution_subscription = (resolved_tr_id, tr_key)
         if self._connected:
-            self._send_subscription(tr_id=tr_id, tr_key=tr_key)
+            self._send_subscription(tr_id=resolved_tr_id, tr_key=tr_key)
 
     def _start_socket_thread(self) -> None:
         headers = [
@@ -432,21 +449,54 @@ class KISWebSocketClient:
         symbol = str(
             record.get("mksc_shrn_iscd") or record.get("pdno") or record.get("symbol") or ""
         )
+        broker_order_id = (
+            str(record.get("odno"))
+            if record.get("odno") not in (None, "")
+            else (
+                str(record.get("order_id"))
+                if record.get("order_id") not in (None, "")
+                else None
+            )
+        )
+        executed_price = self._to_decimal(record.get("cntg_pr") or record.get("price"))
+        executed_quantity = self._to_decimal(record.get("cntg_qty") or record.get("qty"))
 
         event = KISExecutionEvent(
             symbol=symbol,
-            order_id=(
-                str(record.get("odno"))
-                if record.get("odno") not in (None, "")
-                else (
-                    str(record.get("order_id"))
-                    if record.get("order_id") not in (None, "")
-                    else None
-                )
-            ),
+            broker_order_id=broker_order_id,
+            order_id=broker_order_id,
             side=self._normalize_side(record.get("sll_bk_dvsn") or record.get("side")),
-            price=self._to_decimal(record.get("cntg_pr") or record.get("price")),
-            quantity=self._to_decimal(record.get("cntg_qty") or record.get("qty")),
+            executed_price=executed_price,
+            price=executed_price,
+            executed_quantity=executed_quantity,
+            quantity=executed_quantity,
+            cumulative_quantity=self._to_decimal(
+                record.get("tot_ccld_qty")
+                or record.get("tot_ccld_cqty")
+                or record.get("ccld_qty")
+                or record.get("cum_qty")
+            ),
+            remaining_quantity=self._to_decimal(
+                record.get("rmn_qty")
+                or record.get("ord_remn_qty")
+                or record.get("remaining_qty")
+            ),
+            event_status=(
+                str(
+                    record.get("ord_stts")
+                    or record.get("ord_sttus")
+                    or record.get("status")
+                    or record.get("exec_status")
+                )
+                if (
+                    record.get("ord_stts")
+                    or record.get("ord_sttus")
+                    or record.get("status")
+                    or record.get("exec_status")
+                )
+                not in (None, "")
+                else None
+            ),
             timestamp=datetime.now(timezone.utc),
             tr_id=tr_id,
             raw_payload=payload,

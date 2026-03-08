@@ -16,7 +16,7 @@ class TestTradingState:
         state = TradingState()
         assert state.positions == {}
         assert state.pending_orders == {}
-        assert state.version == 2
+        assert state.version == 4
         assert isinstance(state.last_updated, datetime)
 
     def test_to_dict_serializes_models(self):
@@ -45,7 +45,7 @@ class TestTradingState:
         )
 
         data = state.to_dict()
-        assert data["version"] == 2
+        assert data["version"] == 4
         assert data["positions"]["005930"]["entry_price"] == "70000"
         assert data["positions"]["005930"]["status"] == "open"
         assert data["pending_orders"]["ord-1"]["status"] == "submitted"
@@ -226,7 +226,36 @@ class TestStatePersistence:
 
         assert "positions" in data
         assert data["positions"]["005930"]["quantity"] == 10
-        assert data["version"] == 2
+        assert data["version"] == 4
+
+    def test_save_round_trip_preserves_order_resolution_metadata(self, tmp_path):
+        state = TradingState(
+            pending_orders={
+                "ord-1": Order(
+                    order_id="ord-1",
+                    symbol="005930",
+                    side="buy",
+                    quantity=1,
+                    price=70000,
+                    status=OrderStatus.PARTIAL_FILL,
+                    resolution_source="daily_order",
+                    broker_last_seen_status="partial_fill",
+                    last_reconciled_at=datetime(2026, 3, 8, tzinfo=timezone.utc),
+                    unresolved_reason="waiting_for_fill",
+                )
+            }
+        )
+        path = tmp_path / "state.json"
+
+        save_state_atomic(state, path)
+        loaded = load_state(path)
+
+        assert loaded is not None
+        order = loaded.pending_orders["ord-1"]
+        assert order.resolution_source == "daily_order"
+        assert order.broker_last_seen_status == "partial_fill"
+        assert order.last_reconciled_at == datetime(2026, 3, 8, tzinfo=timezone.utc)
+        assert order.unresolved_reason == "waiting_for_fill"
 
     def test_save_includes_timestamp(self, tmp_path):
         """Test that saved state includes timestamp."""

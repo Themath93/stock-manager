@@ -37,5 +37,7 @@ Negative:
 ## See Also
 
 - [ADR-0002](0002-coverage-threshold-85.md) — 커버리지 임계값 정책 (동반 품질 정책)
+- [ADR-0010](0010-engine-market-hours-enforcement-by-mode.md) — 엔진 장시간 로컬 가드 정책
+- [runtime-trading-guardrails.md](../runtime-trading-guardrails.md) — 엔진 런타임 가드레일 authoritative source
 - [quality-gates.md](../quality-gates.md) — 품질 게이트 강제 위치 매트릭스
 - [knowledge-map.md](../knowledge-map.md) — 안전 불변량 섹션에서 참조

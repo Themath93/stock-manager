@@ -70,11 +70,23 @@ class Order:
     order_type: str = "limit"  # "limit" or "market"
     status: OrderStatus = OrderStatus.CREATED
     broker_order_id: str | None = None
+    origin: str = "manual"
+    requested_stop_loss: int | None = None
+    requested_take_profit: int | None = None
+    exit_reason: str | None = None
+    position_quantity_at_submit: int | None = None
+    resolution_source: str | None = None
+    broker_last_seen_status: str | None = None
+    last_reconciled_at: datetime | None = None
+    unresolved_reason: str | None = None
     submission_attempts: int = 0
     max_attempts: int = 3
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     submitted_at: datetime | None = None
     filled_at: datetime | None = None
+    last_event_at: datetime | None = None
+    filled_quantity: int = 0
+    filled_avg_price: Decimal | None = None
 
     def can_retry(self) -> bool:
         """Check if order can be retried.

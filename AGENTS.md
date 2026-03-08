@@ -7,7 +7,7 @@
 - `stock_manager/monitoring/`, `stock_manager/persistence/`, `stock_manager/notifications/`, `stock_manager/cli/`: runtime services.
 - `tests/unit/` and `tests/integration/`: automated tests; `tests/fixtures/` and `tests/factories/` provide test data/helpers.
 - `scripts/`: utility tooling (for example `scripts/generate_kis_apis.py`, `scripts/fix_domestic_await.py`).
-- `docs/`: repository documentation, including [docs/knowledge-map.md](docs/knowledge-map.md), [docs/quality-gates.md](docs/quality-gates.md), [docs/harness-engineering-plan.md](docs/harness-engineering-plan.md), [docs/harness-week1-execution-plan.md](docs/harness-week1-execution-plan.md), and [docs/adr/README.md](docs/adr/README.md).
+- `docs/`: repository documentation, including [docs/knowledge-map.md](docs/knowledge-map.md), [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md), [docs/quality-gates.md](docs/quality-gates.md), [docs/harness-engineering-plan.md](docs/harness-engineering-plan.md), [docs/harness-week1-execution-plan.md](docs/harness-week1-execution-plan.md), and [docs/adr/README.md](docs/adr/README.md).
 - Generated artifacts (`build/`, `dist/`, `htmlcov/`, `*.egg-info`) should not be edited manually.
 
 ## Build, Test, and Development Commands
@@ -48,4 +48,5 @@
 ## Security & Configuration Tips
 - Never commit secrets; keep credentials in `.env` only.
 - Prefer paper trading (`KIS_USE_MOCK=true`) during development.
+- Engine-managed market-hours policy by mode is documented in [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md).
 - Treat local token/cache/runtime files as local state, not source-controlled assets.

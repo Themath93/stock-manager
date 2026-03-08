@@ -26,6 +26,7 @@ def build_app():
         run_command,
         smoke_command,
     )
+    from stock_manager.cli.verify_commands import create_verify_app
 
     app = typer.Typer(help="Stock Manager CLI")
 
@@ -135,6 +136,7 @@ def build_app():
         )
 
     app.add_typer(create_trade_app(), name="trade")
+    app.add_typer(create_verify_app(), name="verify")
 
     @app.command("smoke")
     def smoke() -> None:

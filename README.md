@@ -57,6 +57,7 @@ stock_manager/
 ## 지식 맵 (Harness)
 
 - [docs/knowledge-map.md](docs/knowledge-map.md): 에이전트/개발자 공통 진입 지도 (entry point, 모듈 경계, 검증 명령).
+- [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md): 엔진 런타임 가드레일과 market-hours 정책의 authoritative source.
 - [docs/quality-gates.md](docs/quality-gates.md): lint/type/test/build 품질 게이트의 현재 강제 위치(CI/local/manual) 매트릭스.
 - [docs/harness-engineering-plan.md](docs/harness-engineering-plan.md): 로직 변경 없이 harness 성숙도를 높이는 단계별 계획.
 - [docs/harness-week1-execution-plan.md](docs/harness-week1-execution-plan.md): Audit 결과 기반 1주 실행 계획(작업, 완료 기준, 증거).
@@ -170,9 +171,13 @@ stock-manager setup
 - 기본 동작은 **dry-run**(실행 없음)입니다.
 - 모의 모드에서 주문을 제출하려면 `--execute`를 사용합니다.
 - 실거래 실행은 `--execute --confirm-live`를 사용하고, 승격 게이트 통과가 필요합니다.
+- `trade buy --execute`는 broker-direct 경로이며 `TradingEngine` local market-hours guard를 적용하지 않습니다. 정책 범위는 [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md)를 따릅니다.
 
 ### `stock-manager run`
 거래 엔진 루프를 시작합니다.
+
+- `run`과 Slack 세션은 `TradingEngine` 경로를 사용하므로 engine market-hours policy를 따릅니다.
+- live에서는 local buy block이 적용되고, mock에서는 local block을 우회합니다. 상세 정책은 [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md)를 참고하세요.
 
 권장 실행 순서:
 1. 로컬 점검을 위해 `stock-manager run --skip-auth` 실행.
@@ -213,6 +218,9 @@ stock-manager setup
 - 포맷/경로 개요는 `docs/knowledge-map.md`와 `stock_manager/notifications/formatters.py`를 참고하세요.
 
 Slack 사용 여부는 환경 변수로 제어하며, 사용 시 필수 키는 `doctor`에서 확인합니다.
+
+- 사람용 `/sm` 운영 가이드: [docs/slack-sm-human/README.md](docs/slack-sm-human/README.md)
+- AI용 `/sm` 명령 생성 규칙: [docs/slack-sm-ai/README.md](docs/slack-sm-ai/README.md)
 
 ## Mock Promotion Gate (mock → live)
 실거래는 mock promotion gate 통과 전에는 차단됩니다.

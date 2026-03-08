@@ -15,11 +15,11 @@ from stock_manager.adapters.broker.kis.client import KISRestClient
 from stock_manager.adapters.broker.kis.config import KISAccessToken, KISConfig
 from stock_manager.adapters.broker.kis.exceptions import KISAPIError
 from stock_manager.adapters.broker.kis.websocket_client import (
-    DEFAULT_EXECUTION_TR_ID,
     DEFAULT_QUOTE_TR_ID,
     ExecutionCallback,
     KISWebSocketClient,
     QuoteCallback,
+    get_default_execution_notice_tr_id,
     get_kis_websocket_url,
 )
 
@@ -78,7 +78,8 @@ class KISBrokerAdapter:
         self.account_product_code = normalized_product_code
         self.rest_client = rest_client or KISRestClient(config=config)
         self.websocket_client = websocket_client or KISWebSocketClient(
-            websocket_url=get_kis_websocket_url(is_paper_trading=config.use_mock)
+            websocket_url=get_kis_websocket_url(is_paper_trading=config.use_mock),
+            is_paper_trading=config.use_mock,
         )
 
     @property
@@ -90,11 +91,14 @@ class KISBrokerAdapter:
         """
         return self.websocket_client.is_connected
 
-    def authenticate(self) -> KISAccessToken:
+    def authenticate(self, force_refresh: bool = False) -> KISAccessToken:
         """KIS API에 인증하여 액세스 토큰을 반환한다.
 
         내부 REST 클라이언트의 authenticate()를 위임 호출한다.
         토큰이 이미 유효한 경우 캐시된 토큰을 반환한다.
+
+        Args:
+            force_refresh: True면 메모리/디스크 캐시를 무시하고 새 토큰을 발급받는다.
 
         Returns:
             KISAccessToken 인스턴스.
@@ -103,7 +107,7 @@ class KISBrokerAdapter:
             KISAuthenticationError: 인증에 실패한 경우.
             KISAPIError: API 요청이 실패한 경우.
         """
-        return self.rest_client.authenticate()
+        return self.rest_client.authenticate(force_refresh=force_refresh)
 
     def make_request(
         self,
@@ -368,7 +372,7 @@ class KISBrokerAdapter:
         self,
         *,
         callback: ExecutionCallback,
-        tr_id: str = DEFAULT_EXECUTION_TR_ID,
+        tr_id: str | None = None,
         tr_key: str = "ALL",
     ) -> None:
         """실시간 체결 내역을 구독한다.
@@ -377,7 +381,8 @@ class KISBrokerAdapter:
 
         Args:
             callback: 체결 데이터 수신 시 호출할 콜백 함수.
-            tr_id: 체결 조회 TR ID (기본값: DEFAULT_EXECUTION_TR_ID).
+            tr_id: 체결 조회 TR ID. None이면 실전/모의 모드에 맞는 체결통보
+                기본 TR ID를 사용한다.
             tr_key: 구독 대상 키 (기본값: "ALL").
 
         Raises:
@@ -387,9 +392,12 @@ class KISBrokerAdapter:
         if not self.websocket_connected:
             self.connect_websocket()
 
+        resolved_tr_id = tr_id or get_default_execution_notice_tr_id(
+            is_paper_trading=self.config.use_mock
+        )
         self.websocket_client.subscribe_executions(
             callback=callback,
-            tr_id=tr_id,
+            tr_id=resolved_tr_id,
             tr_key=tr_key,
         )
 

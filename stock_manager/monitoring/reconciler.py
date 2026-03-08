@@ -8,10 +8,24 @@ BROKER IS SOURCE OF TRUTH.
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Callable, Optional
 import logging
 
+from stock_manager.trading.models import Position, PositionStatus
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BrokerPositionSnapshot:
+    """Normalized broker position used for runtime convergence."""
+
+    symbol: str
+    quantity: int
+    entry_price: Decimal | None = None
+    current_price: Decimal | None = None
+
 
 @dataclass
 class ReconciliationResult:
@@ -22,6 +36,8 @@ class ReconciliationResult:
     orphan_positions: list[str] = field(default_factory=list)
     missing_positions: list[str] = field(default_factory=list)
     quantity_mismatches: dict[str, tuple[int, int]] = field(default_factory=dict)
+    broker_positions: dict[str, BrokerPositionSnapshot] = field(default_factory=dict)
+    local_positions: dict[str, BrokerPositionSnapshot] = field(default_factory=dict)
 
 class PositionReconciler:
     """
@@ -40,7 +56,9 @@ class PositionReconciler:
         is_paper_trading: bool = False,
         interval: float = 60.0,  # Check every 60 seconds
         on_discrepancy: Optional[Callable[[ReconciliationResult], None]] = None,
+        on_cycle_complete: Optional[Callable[[ReconciliationResult], None]] = None,
         inquire_balance_func: Optional[Callable[[], dict[str, Any]]] = None,
+        apply_state: bool = False,
     ):
         self.client = client
         self.position_manager = position_manager
@@ -50,6 +68,8 @@ class PositionReconciler:
         self._inquire_balance_func = inquire_balance_func
         self.interval = interval
         self.on_discrepancy = on_discrepancy
+        self.on_cycle_complete = on_cycle_complete
+        self.apply_state = apply_state
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_result: Optional[ReconciliationResult] = None
@@ -79,7 +99,11 @@ class PositionReconciler:
 
     def reconcile_now(self) -> ReconciliationResult:
         """Run reconciliation immediately (can be called from any thread)."""
-        return self._do_reconcile()
+        result = self._do_reconcile()
+        self._last_result = result
+        if self.on_cycle_complete is not None:
+            self.on_cycle_complete(result)
+        return result
 
     @property
     def last_result(self) -> Optional[ReconciliationResult]:
@@ -92,6 +116,8 @@ class PositionReconciler:
             try:
                 result = self._do_reconcile()
                 self._last_result = result
+                if self.on_cycle_complete is not None:
+                    self.on_cycle_complete(result)
 
                 if not result.is_clean and self.on_discrepancy:
                     self.on_discrepancy(result)
@@ -134,12 +160,14 @@ class PositionReconciler:
             broker_positions = response.get("output1", [])
             if not isinstance(broker_positions, list):
                 broker_positions = []
-            broker_symbols = {
-                symbol for symbol in (self._extract_symbol(p) for p in broker_positions) if symbol
-            }
+            result.broker_positions = self._build_broker_positions(broker_positions)
+            broker_symbols = set(result.broker_positions)
 
             # Get local positions
-            local_positions = self.position_manager.get_all_positions()
+            local_positions = (
+                self.position_manager.get_all_positions() if self.position_manager is not None else {}
+            )
+            result.local_positions = self._build_local_positions(local_positions)
             local_symbols = set(local_positions.keys())
 
             # Find orphans (at broker, not local)
@@ -154,13 +182,19 @@ class PositionReconciler:
 
             # Check quantity mismatches
             for symbol in broker_symbols & local_symbols:
-                broker_qty = self._get_broker_qty(broker_positions, symbol)
+                broker_qty = result.broker_positions[symbol].quantity
                 local_qty = self._get_local_qty(local_positions[symbol])
                 if broker_qty != local_qty:
                     result.quantity_mismatches[symbol] = (local_qty, broker_qty)
                     result.discrepancies.append(
                         f"Quantity mismatch {symbol}: local={local_qty}, broker={broker_qty}"
                     )
+
+            if self.apply_state and self.position_manager is not None:
+                self._apply_broker_positions(
+                    local_positions=local_positions,
+                    broker_positions=result.broker_positions,
+                )
 
             result.is_clean = len(result.discrepancies) == 0
 
@@ -188,18 +222,109 @@ class PositionReconciler:
             return ""
         return str(symbol)
 
-    def _get_broker_qty(self, broker_positions: list[dict], symbol: str) -> int:
-        """Extract quantity for symbol from broker positions."""
-        for pos in broker_positions:
-            if self._extract_symbol(pos) == symbol:
-                qty = pos.get("hldg_qty")
-                if qty is None:
-                    qty = pos.get("HLDG_QTY", 0)
-                return int(qty or 0)
-        return 0
+    @staticmethod
+    def _to_decimal(value: Any) -> Decimal | None:
+        if value in (None, "", "-"):
+            return None
+        try:
+            return Decimal(str(value).replace(",", ""))
+        except Exception:
+            return None
+
+    def _build_broker_positions(
+        self, broker_positions: list[dict[str, Any]]
+    ) -> dict[str, BrokerPositionSnapshot]:
+        snapshots: dict[str, BrokerPositionSnapshot] = {}
+        for position in broker_positions:
+            symbol = self._extract_symbol(position)
+            if not symbol:
+                continue
+            qty = position.get("hldg_qty")
+            if qty is None:
+                qty = position.get("HLDG_QTY", 0)
+            try:
+                quantity = int(qty or 0)
+            except Exception:
+                quantity = 0
+            snapshots[symbol] = BrokerPositionSnapshot(
+                symbol=symbol,
+                quantity=quantity,
+                entry_price=self._to_decimal(
+                    position.get("pchs_avg_pric")
+                    or position.get("PCHS_AVG_PRIC")
+                    or position.get("avg_price")
+                ),
+                current_price=self._to_decimal(
+                    position.get("prpr") or position.get("PRPR") or position.get("current_price")
+                ),
+            )
+        return snapshots
+
+    def _build_local_positions(
+        self, local_positions: dict[str, Any]
+    ) -> dict[str, BrokerPositionSnapshot]:
+        snapshots: dict[str, BrokerPositionSnapshot] = {}
+        for symbol, position in local_positions.items():
+            snapshots[symbol] = BrokerPositionSnapshot(
+                symbol=symbol,
+                quantity=self._get_local_qty(position),
+                entry_price=getattr(position, "entry_price", None)
+                if not isinstance(position, dict)
+                else self._to_decimal(position.get("entry_price")),
+                current_price=getattr(position, "current_price", None)
+                if not isinstance(position, dict)
+                else self._to_decimal(position.get("current_price")),
+            )
+        return snapshots
 
     def _get_local_qty(self, position: Any) -> int:
         """Extract quantity from local position (dict or Position model)."""
         if isinstance(position, dict):
             return int(position.get("quantity", 0))
         return int(getattr(position, "quantity", 0))
+
+    def _apply_broker_positions(
+        self,
+        *,
+        local_positions: dict[str, Any],
+        broker_positions: dict[str, BrokerPositionSnapshot],
+    ) -> None:
+        broker_symbols = set(broker_positions)
+        local_symbols = set(local_positions)
+
+        if not all(
+            hasattr(self.position_manager, attr)
+            for attr in ("close_position", "get_position", "open_position")
+        ):
+            return
+
+        for symbol in local_symbols - broker_symbols:
+            self.position_manager.close_position(symbol)
+
+        for symbol in broker_symbols:
+            snapshot = broker_positions[symbol]
+            existing = self.position_manager.get_position(symbol)
+            if existing is None:
+                self.position_manager.open_position(
+                    Position(
+                        symbol=symbol,
+                        quantity=snapshot.quantity,
+                        entry_price=snapshot.entry_price or Decimal("0"),
+                        current_price=snapshot.current_price,
+                        status=PositionStatus.OPEN_RECONCILED,
+                    )
+                )
+                continue
+
+            existing.quantity = snapshot.quantity
+            if snapshot.entry_price is not None and (
+                existing.entry_price <= 0 or existing.status == PositionStatus.OPEN_RECONCILED
+            ):
+                existing.entry_price = snapshot.entry_price
+            if snapshot.current_price is not None:
+                existing.current_price = snapshot.current_price
+                existing.unrealized_pnl = (
+                    snapshot.current_price - existing.entry_price
+                ) * Decimal(existing.quantity)
+            if existing.status in {PositionStatus.STALE, PositionStatus.CLOSED}:
+                existing.status = PositionStatus.OPEN_RECONCILED

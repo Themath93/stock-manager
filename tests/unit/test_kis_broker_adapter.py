@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -32,6 +32,21 @@ def broker_adapter(
 ) -> KISBrokerAdapter:
     return KISBrokerAdapter(
         config=kis_config,
+        account_number="12345678",
+        account_product_code="01",
+        rest_client=mock_rest_client,
+        websocket_client=mock_websocket_client,
+    )
+
+
+@pytest.fixture
+def broker_adapter_real(
+    kis_config_real: KISConfig,
+    mock_rest_client: MagicMock,
+    mock_websocket_client: MagicMock,
+) -> KISBrokerAdapter:
+    return KISBrokerAdapter(
+        config=kis_config_real,
         account_number="12345678",
         account_product_code="01",
         rest_client=mock_rest_client,
@@ -123,6 +138,16 @@ def test_get_websocket_approval_key_success(
     )
 
 
+def test_authenticate_delegates_force_refresh(
+    broker_adapter: KISBrokerAdapter,
+    mock_rest_client: MagicMock,
+) -> None:
+    token = broker_adapter.authenticate(force_refresh=True)
+
+    assert token.access_token == "access-token"
+    mock_rest_client.authenticate.assert_called_once_with(force_refresh=True)
+
+
 def test_get_websocket_approval_key_error_response_raises(
     broker_adapter: KISBrokerAdapter,
 ) -> None:
@@ -171,7 +196,43 @@ def test_subscribe_executions_connects_before_subscribe(
         broker_adapter.subscribe_executions(callback=MagicMock())
 
     mock_connect.assert_called_once()
-    mock_websocket_client.subscribe_executions.assert_called_once()
+    mock_websocket_client.subscribe_executions.assert_called_once_with(
+        callback=ANY,
+        tr_id="H0STCNI9",
+        tr_key="ALL",
+    )
+
+
+def test_subscribe_executions_uses_real_notice_default(
+    broker_adapter_real: KISBrokerAdapter,
+    mock_websocket_client: MagicMock,
+) -> None:
+    callback = MagicMock()
+
+    with patch.object(broker_adapter_real, "connect_websocket"):
+        broker_adapter_real.subscribe_executions(callback=callback)
+
+    mock_websocket_client.subscribe_executions.assert_called_once_with(
+        callback=callback,
+        tr_id="H0STCNI0",
+        tr_key="ALL",
+    )
+
+
+def test_subscribe_executions_respects_explicit_tr_id(
+    broker_adapter: KISBrokerAdapter,
+    mock_websocket_client: MagicMock,
+) -> None:
+    callback = MagicMock()
+
+    with patch.object(broker_adapter, "connect_websocket"):
+        broker_adapter.subscribe_executions(callback=callback, tr_id="H0STCNT0", tr_key="12345678")
+
+    mock_websocket_client.subscribe_executions.assert_called_once_with(
+        callback=callback,
+        tr_id="H0STCNT0",
+        tr_key="12345678",
+    )
 
 
 def test_close_disconnects_websocket_and_rest_client(

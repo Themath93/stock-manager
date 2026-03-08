@@ -387,4 +387,5 @@ class KISConnectionState:
             False
         """
         self.access_token = None
+        self.access_token_expires_at = None
         self.is_authenticated = False

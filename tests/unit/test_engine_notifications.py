@@ -6,10 +6,15 @@ from unittest.mock import Mock, patch
 import pytest
 
 from stock_manager.engine import TradingEngine
-from stock_manager.trading import TradingConfig
+from stock_manager.trading import TradingConfig, OrderResult
 from stock_manager.notifications.models import NotificationEvent, NotificationLevel
 from stock_manager.notifications.noop import NoOpNotifier
 from stock_manager.persistence.recovery import RecoveryResult
+
+
+class _NoopStrategy:
+    def screen(self, symbols: list[str]) -> list[object]:
+        return []
 
 
 @pytest.fixture
@@ -109,11 +114,11 @@ class TestEngineStopNotification:
         assert any(e.event_type == "engine.stopped" for e in events)
 
 
-class TestOrderFilledNotification:
-    """Test order.filled notification."""
+class TestOrderSubmissionNotification:
+    """Test order submission notification semantics."""
 
-    def test_order_filled_notification_on_buy(self, trading_engine, mock_client, mock_notifier):
-        """Test that order.filled notification is sent on successful buy."""
+    def test_order_submitted_notification_on_buy(self, trading_engine, mock_client, mock_notifier):
+        """Test that successful buy submission emits order.submitted until broker fill arrives."""
         # Setup engine
         mock_recovery_report = Mock()
         mock_recovery_report.result = RecoveryResult.CLEAN
@@ -130,20 +135,60 @@ class TestOrderFilledNotification:
         mock_notifier.reset_mock()
 
         # Mock successful order
-        mock_result = Mock()
-        mock_result.success = True
-        mock_result.order_id = "12345"
-        mock_result.error_message = None
-
-        with patch.object(trading_engine._executor, "buy", return_value=mock_result):
+        with patch.object(
+            trading_engine._executor,
+            "buy",
+            return_value=OrderResult(success=True, order_id="12345"),
+        ):
             trading_engine.buy("005930", 10, 70000)
 
-        # Verify order.filled notification was sent
+        # Verify order.submitted notification was sent
         calls = mock_notifier.notify.call_args_list
         events = [call[0][0] for call in calls]
+        assert any(e.event_type == "order.submitted" for e in events)
+        submitted_event = next(e for e in events if e.event_type == "order.submitted")
+        assert submitted_event.details.get("is_paper_trading") is False
+
+    def test_order_filled_notification_on_execution(self, trading_engine, mock_client, mock_notifier):
+        """Test that broker-confirmed execution emits order.filled."""
+        mock_recovery_report = Mock()
+        mock_recovery_report.result = RecoveryResult.CLEAN
+        mock_recovery_report.errors = []
+        mock_recovery_report.orphan_positions = []
+        mock_recovery_report.missing_positions = []
+
+        with patch("stock_manager.engine.load_state", return_value=None):
+            with patch(
+                "stock_manager.engine.startup_reconciliation", return_value=mock_recovery_report
+            ):
+                trading_engine.start()
+
+        mock_notifier.reset_mock()
+
+        with patch.object(
+            trading_engine._executor,
+            "buy",
+            return_value=OrderResult(success=True, order_id="12345"),
+        ):
+            trading_engine.buy("005930", 10, 70000)
+
+        event = Mock(
+            symbol="005930",
+            order_id="12345",
+            broker_order_id=None,
+            side="buy",
+            executed_price=Decimal("70000"),
+            executed_quantity=Decimal("10"),
+            cumulative_quantity=None,
+            quantity=Decimal("10"),
+            price=Decimal("70000"),
+            event_status="filled",
+            timestamp="2026-03-08T00:00:00+00:00",
+        )
+        trading_engine._apply_execution_event(event)
+
+        events = [call[0][0] for call in mock_notifier.notify.call_args_list]
         assert any(e.event_type == "order.filled" for e in events)
-        filled_event = next(e for e in events if e.event_type == "order.filled")
-        assert filled_event.details.get("is_paper_trading") is False
 
 
 class TestOrderRejectedNotification:
@@ -288,7 +333,11 @@ class TestReconciliationDiscrepancyNotification:
         # Verify reconciliation.discrepancy notification was sent
         calls = mock_notifier.notify.call_args_list
         events = [call[0][0] for call in calls]
-        assert any(e.event_type == "reconciliation.discrepancy" for e in events)
+        discrepancy_event = next(e for e in events if e.event_type == "reconciliation.discrepancy")
+        assert discrepancy_event.details["discrepancy_count"] == 1
+        assert discrepancy_event.details["primary_discrepancy"] is not None
+        assert "005930" in discrepancy_event.details["primary_discrepancy"]
+        assert discrepancy_event.details["discrepancies_sample"]
 
 
 class TestRecoveryReconciledNotification:
@@ -422,8 +471,72 @@ class TestKillSwitchNotifications:
         assert event.level == NotificationLevel.INFO
 
 
+class TestStrategyDiscoveryNotifications:
+    def test_screening_complete_emitted_once_for_unchanged_discovery(
+        self, trading_engine, mock_notifier
+    ):
+        trading_engine.is_paper_trading = True
+        trading_engine.config = TradingConfig(
+            strategy=_NoopStrategy(),
+            strategy_symbols=(),
+            strategy_auto_discover=True,
+            strategy_discovery_limit=2,
+            strategy_discovery_fallback_symbols=("005930", "000660"),
+            strategy_max_buys_per_cycle=0,
+            strategy_run_interval_sec=0.0,
+            market_hours_enabled=False,
+        )
+
+        mock_notifier.reset_mock()
+        trading_engine._run_strategy_cycle()
+        trading_engine._run_strategy_cycle()
+
+        events = [call[0][0] for call in mock_notifier.notify.call_args_list]
+        screening_events = [e for e in events if e.event_type == "pipeline.screening_complete"]
+        assert len(screening_events) == 1
+        assert screening_events[0].details.get("discovery_source") == "mock_fallback"
+        assert screening_events[0].details.get("symbols") == ["005930", "000660"]
+
+    def test_screening_complete_reemits_when_discovery_source_changes(
+        self, trading_engine, mock_notifier
+    ):
+        trading_engine.is_paper_trading = True
+        trading_engine.config = TradingConfig(
+            strategy=_NoopStrategy(),
+            strategy_symbols=(),
+            strategy_auto_discover=True,
+            strategy_discovery_limit=2,
+            strategy_discovery_fallback_symbols=("005930", "000660"),
+            strategy_max_buys_per_cycle=0,
+            strategy_run_interval_sec=0.0,
+            market_hours_enabled=False,
+        )
+
+        mock_notifier.reset_mock()
+        trading_engine._run_strategy_cycle()
+
+        trading_engine.is_paper_trading = False
+        with patch(
+            "stock_manager.adapters.broker.kis.apis.domestic_stock.ranking.get_volume_rank",
+            return_value={
+                "rt_cd": "0",
+                "output": [
+                    {"stck_shrn_iscd": "005930"},
+                    {"mksc_shrn_iscd": "000660"},
+                ],
+            },
+        ):
+            trading_engine._run_strategy_cycle()
+
+        events = [call[0][0] for call in mock_notifier.notify.call_args_list]
+        screening_events = [e for e in events if e.event_type == "pipeline.screening_complete"]
+        assert len(screening_events) == 2
+        assert screening_events[0].details.get("discovery_source") == "mock_fallback"
+        assert screening_events[1].details.get("discovery_source") == "volume_rank"
+
+
 class TestAllNotificationTypesComplete:
-    def test_all_12_notification_types_present(self):
+    def test_all_13_notification_types_present(self):
         event_types = {
             "engine.started",
             "engine.stopped",
@@ -437,8 +550,9 @@ class TestAllNotificationTypesComplete:
             "recovery.failed",
             "risk.killswitch.triggered",
             "risk.killswitch.cleared",
+            "pipeline.screening_complete",
         }
-        assert len(event_types) == 12
+        assert len(event_types) == 13
 
 
 class TestNotificationEventAttributes:

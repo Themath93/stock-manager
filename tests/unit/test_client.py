@@ -7,6 +7,7 @@ Following Kent Beck's TDD methodology:
 """
 
 import os
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -326,6 +327,36 @@ class TestKISRestClientMakeRequest:
         headers = call_args.kwargs.get("headers", {})
         assert "tr_id" in headers
 
+    def test_make_request_get_does_not_inject_hashkey(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """GET requests should not include a bogus hashkey header."""
+        from tests.factories.mock_responses import MockResponseFactory
+
+        authenticated_kis_client._http_client.request.return_value = MockResponseFactory.success_kis()
+
+        authenticated_kis_client.make_request("GET", "/test")
+
+        call_args = authenticated_kis_client._http_client.request.call_args
+        headers = call_args.kwargs.get("headers", {})
+        assert "hashkey" not in headers
+
+    def test_make_request_post_does_not_inject_hashkey(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """POST requests should not include a bogus hashkey header by default."""
+        from tests.factories.mock_responses import MockResponseFactory
+
+        authenticated_kis_client._http_client.request.return_value = MockResponseFactory.success_kis()
+
+        authenticated_kis_client.make_request("POST", "/test", json_data={"foo": "bar"})
+
+        call_args = authenticated_kis_client._http_client.request.call_args
+        headers = call_args.kwargs.get("headers", {})
+        assert "hashkey" not in headers
+
     def test_make_request_without_auth_required(
         self,
         kis_client: KISRestClient,
@@ -604,7 +635,8 @@ class TestKISRestClientMakeRequest:
 
         new_token = KISAccessToken(access_token="new_token")
 
-        def _reauth():
+        def _reauth(*, force_refresh: bool = False):
+            assert force_refresh is True
             authenticated_kis_client.state.update_token(new_token)
             return new_token
 
@@ -614,6 +646,124 @@ class TestKISRestClientMakeRequest:
 
         assert result["rt_cd"] == "0"
         assert authenticated_kis_client.authenticate.call_count == 1
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_auto_reauth_after_http_500_token_expired(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """HTTP 500 auth payloads should trigger force reauth before generic retry."""
+        expired = MagicMock()
+        expired.status_code = 500
+        expired.reason_phrase = "Internal Server Error"
+        expired.json.return_value = {
+            "rt_cd": "1",
+            "msg_cd": "EGW00123",
+            "msg1": "기간이 만료된 token 입니다.",
+        }
+        expired.raise_for_status = MagicMock()
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            expired,
+            success_response,
+        ]
+
+        new_token = KISAccessToken(access_token="fresh_token")
+
+        def _reauth(*, force_refresh: bool = False):
+            assert force_refresh is True
+            authenticated_kis_client.state.update_token(new_token)
+            authenticated_kis_client.state.access_token_expires_at = (
+                datetime.now(timezone.utc) + timedelta(hours=1)
+            )
+            return new_token
+
+        authenticated_kis_client.authenticate = MagicMock(side_effect=_reauth)
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        assert authenticated_kis_client.authenticate.call_count == 1
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_http_200_auth_error_payload_force_reauths(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Body-only auth errors should also force refresh the token."""
+        expired = MagicMock()
+        expired.status_code = 200
+        expired.raise_for_status = MagicMock()
+        expired.json.return_value = {
+            "rt_cd": "1",
+            "msg_cd": "EGW00123",
+            "msg1": "기간이 만료된 token 입니다.",
+        }
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            expired,
+            success_response,
+        ]
+
+        new_token = KISAccessToken(access_token="fresh_token_2")
+
+        def _reauth(*, force_refresh: bool = False):
+            assert force_refresh is True
+            authenticated_kis_client.state.update_token(new_token)
+            return new_token
+
+        authenticated_kis_client.authenticate = MagicMock(side_effect=_reauth)
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        assert authenticated_kis_client.authenticate.call_count == 1
+        assert authenticated_kis_client._http_client.request.call_count == 2
+
+    def test_make_request_http_500_non_auth_payload_uses_retry_without_reauth(
+        self,
+        authenticated_kis_client: KISRestClient,
+    ) -> None:
+        """Non-auth 500 payloads should keep existing retry behavior."""
+        server_error = MagicMock()
+        server_error.status_code = 500
+        server_error.reason_phrase = "Internal Server Error"
+        server_error.json.return_value = {
+            "rt_cd": "1",
+            "msg_cd": "EGW99999",
+            "msg1": "일시적인 서버 오류",
+        }
+        server_error.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Server error",
+            request=MagicMock(),
+            response=server_error,
+        )
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json.return_value = {"rt_cd": "0", "output": {}}
+
+        authenticated_kis_client._http_client.request.side_effect = [
+            server_error,
+            success_response,
+        ]
+        authenticated_kis_client.authenticate = MagicMock()
+
+        result = authenticated_kis_client.make_request("GET", "/test")
+
+        assert result["rt_cd"] == "0"
+        authenticated_kis_client.authenticate.assert_not_called()
         assert authenticated_kis_client._http_client.request.call_count == 2
 
     def test_make_request_rejects_cross_mode_absolute_origin(

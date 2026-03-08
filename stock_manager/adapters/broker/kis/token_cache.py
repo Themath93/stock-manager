@@ -158,3 +158,10 @@ def save_cached_token(
 
     _atomic_write_json(Path(path), payload)
 
+
+def invalidate_cached_token(path: Path) -> None:
+    """Best-effort removal of a cached token file."""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass

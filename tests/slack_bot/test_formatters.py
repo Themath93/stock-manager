@@ -7,6 +7,7 @@ from stock_manager.slack_bot.formatters import (
     format_config,
     format_error,
     format_help,
+    format_start_help,
     format_balance,
     format_orders,
     format_sell_all_preview,
@@ -221,6 +222,10 @@ class TestFormatHelp:
         assert isinstance(result["text"], str)
         assert len(result["text"]) > 0
 
+    def test_mentions_start_help_command(self):
+        result = format_help()
+        assert "start help" in str(result["blocks"]).lower()
+
 
 class TestFormatStopped:
     def test_returns_text_and_blocks(self):
@@ -303,6 +308,31 @@ class TestFormatHelpUX:
         assert "조회" in all_text
 
 
+class TestFormatStartHelp:
+    def test_returns_text_and_blocks(self):
+        result = format_start_help()
+        assert "text" in result
+        assert "blocks" in result
+
+    def test_contains_all_supported_strategies(self):
+        result = format_start_help()
+        all_text = str(result["blocks"]).lower()
+        assert "graham" in all_text
+        assert "consensus" in all_text
+
+    def test_contains_example_commands(self):
+        result = format_start_help()
+        all_text = str(result["blocks"])
+        assert "/sm start --strategy graham" in all_text
+        assert "/sm start --strategy consensus" in all_text
+        assert "--auto-discover" in all_text
+        assert "--llm-mode selective" in all_text
+
+    def test_mentions_live_gate_caution(self):
+        result = format_start_help()
+        assert "promotion gate" in str(result["blocks"]).lower()
+
+
 class TestFormatStatusUX:
     """Test status redesign with 3-section layout."""
 
@@ -375,6 +405,50 @@ class TestFormatStatusUX:
         output = str(result["blocks"])
         assert "저하 원인" in output
         assert "startup_recovery_failed" in output
+
+    def test_status_with_engine_shows_discovery_runtime_fields(self):
+        from unittest.mock import MagicMock
+
+        mock_status = MagicMock()
+        mock_status.position_count = 0
+        mock_status.price_monitor_running = False
+        mock_status.trading_enabled = True
+        mock_status.degraded_reason = None
+        mock_status.strategy_discovery_source = "mock_fallback"
+        mock_status.strategy_discovery_symbols = ("005930", "000660")
+        mock_status.strategy_discovery_updated_at = "2026-03-05T15:00:00+00:00"
+        mock_status.strategy_discovery_reason = "paper_trading_mode"
+
+        result = format_status(mock_status, {"state": "RUNNING"})
+        output = str(result["blocks"])
+        assert "탐색 소스" in output
+        assert "mock_fallback" in output
+        assert "탐색 종목" in output
+        assert "005930, 000660" in output
+        assert "최근 탐색" in output
+        assert "탐색 사유" in output
+        assert "paper_trading_mode" in output
+
+    def test_status_with_engine_handles_empty_discovery_fields(self):
+        from unittest.mock import MagicMock
+
+        mock_status = MagicMock()
+        mock_status.position_count = 0
+        mock_status.price_monitor_running = False
+        mock_status.trading_enabled = True
+        mock_status.degraded_reason = None
+        mock_status.strategy_discovery_source = None
+        mock_status.strategy_discovery_symbols = ()
+        mock_status.strategy_discovery_updated_at = None
+        mock_status.strategy_discovery_reason = None
+
+        result = format_status(mock_status, {"state": "RUNNING"})
+        output = str(result["blocks"])
+        assert "탐색 소스" in output
+        assert "N/A" in output
+        assert "탐색 종목" in output
+        assert "(없음)" in output
+        assert "탐색 사유" not in output
 
 
 class TestFormatConfigUX:

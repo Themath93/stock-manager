@@ -111,7 +111,7 @@ def _dispatch_command(*, text: str, user_id: str, respond, session_manager) -> N
     from stock_manager.slack_bot.command_parser import parse_command
     from stock_manager.slack_bot.formatters import (
         format_started, format_stopped, format_status,
-        format_config, format_error, format_help,
+        format_config, format_error, format_help, format_start_help,
         format_balance, format_orders,
         format_sell_all_preview, format_sell_all_result,
     )
@@ -124,6 +124,10 @@ def _dispatch_command(*, text: str, user_id: str, respond, session_manager) -> N
 
     if cmd.subcommand == "help" or cmd.subcommand == "":
         respond(response_type="ephemeral", **format_help())
+        return
+
+    if cmd.subcommand == "start-help":
+        respond(response_type="ephemeral", **format_start_help())
         return
 
     if cmd.subcommand == "start":

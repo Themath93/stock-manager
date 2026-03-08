@@ -10,6 +10,7 @@ Protocol:
 
 import os
 import json
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -30,7 +31,7 @@ class TradingState:
     pending_orders: dict[str, Any] = field(default_factory=dict)  # order_id -> Order dict
     risk_controls: dict[str, Any] = field(default_factory=dict)
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    version: int = 2
+    version: int = 4
 
     def to_dict(self) -> dict:
         """Convert to JSON-serializable dict."""
@@ -44,7 +45,7 @@ class TradingState:
             },
             "risk_controls": dict(self.risk_controls),
             "last_updated": self.last_updated.isoformat(),
-            "version": 2,
+            "version": 4,
         }
 
     @classmethod
@@ -83,24 +84,34 @@ def save_state_atomic(state: TradingState, path: Path) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.parent / f".{path.name}.tmp"
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    tmp_path = Path(tmp_name)
 
-    # Step 1: Write to temp file
-    with open(tmp_path, "w") as f:
-        json.dump(state.to_dict(), f, indent=2)
-        # Step 2: Force to disk (CRITICAL)
-        f.flush()
-        os.fsync(f.fileno())
-
-    # Step 3: Atomic rename (POSIX guarantee)
-    tmp_path.replace(path)
-
-    # Step 4: Sync directory entry
-    dir_fd = os.open(path.parent, os.O_RDONLY)
     try:
-        os.fsync(dir_fd)
+        # Step 1: Write to temp file
+        with os.fdopen(fd, "w") as f:
+            json.dump(state.to_dict(), f, indent=2)
+            # Step 2: Force to disk (CRITICAL)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Step 3: Atomic rename (POSIX guarantee)
+        tmp_path.replace(path)
+
+        # Step 4: Sync directory entry
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
     finally:
-        os.close(dir_fd)
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def load_state(path: Path) -> TradingState | None:
@@ -236,11 +247,27 @@ def _serialize_order(order_id: str, order: Any) -> dict[str, Any]:
             "order_type": order.order_type,
             "status": order.status.value,
             "broker_order_id": order.broker_order_id,
+            "origin": order.origin,
+            "requested_stop_loss": order.requested_stop_loss,
+            "requested_take_profit": order.requested_take_profit,
+            "exit_reason": order.exit_reason,
+            "position_quantity_at_submit": order.position_quantity_at_submit,
+            "resolution_source": order.resolution_source,
+            "broker_last_seen_status": order.broker_last_seen_status,
+            "last_reconciled_at": (
+                order.last_reconciled_at.isoformat() if order.last_reconciled_at else None
+            ),
+            "unresolved_reason": order.unresolved_reason,
             "submission_attempts": int(order.submission_attempts),
             "max_attempts": int(order.max_attempts),
             "created_at": order.created_at.isoformat(),
             "submitted_at": order.submitted_at.isoformat() if order.submitted_at else None,
             "filled_at": order.filled_at.isoformat() if order.filled_at else None,
+            "last_event_at": order.last_event_at.isoformat() if order.last_event_at else None,
+            "filled_quantity": int(order.filled_quantity),
+            "filled_avg_price": str(order.filled_avg_price)
+            if order.filled_avg_price is not None
+            else None,
         }
 
     if isinstance(order, dict):
@@ -254,11 +281,29 @@ def _serialize_order(order_id: str, order: Any) -> dict[str, Any]:
             "order_type": str(order.get("order_type", "limit")),
             "status": str(order.get("status", OrderStatus.CREATED.value)),
             "broker_order_id": order.get("broker_order_id"),
+            "origin": str(order.get("origin", "manual")),
+            "requested_stop_loss": order.get("requested_stop_loss"),
+            "requested_take_profit": order.get("requested_take_profit"),
+            "exit_reason": order.get("exit_reason"),
+            "position_quantity_at_submit": order.get("position_quantity_at_submit"),
+            "resolution_source": order.get("resolution_source"),
+            "broker_last_seen_status": order.get("broker_last_seen_status"),
+            "last_reconciled_at": (
+                str(order.get("last_reconciled_at")) if order.get("last_reconciled_at") else None
+            ),
+            "unresolved_reason": order.get("unresolved_reason"),
             "submission_attempts": int(order.get("submission_attempts", 0)),
             "max_attempts": int(order.get("max_attempts", 3)),
             "created_at": str(order.get("created_at", datetime.now(timezone.utc).isoformat())),
             "submitted_at": str(order.get("submitted_at")) if order.get("submitted_at") else None,
             "filled_at": str(order.get("filled_at")) if order.get("filled_at") else None,
+            "last_event_at": str(order.get("last_event_at"))
+            if order.get("last_event_at")
+            else None,
+            "filled_quantity": int(order.get("filled_quantity", 0)),
+            "filled_avg_price": str(order.get("filled_avg_price"))
+            if order.get("filled_avg_price") is not None
+            else None,
         }
 
     raise TypeError(f"Unsupported order type for {order_id}: {type(order)}")
@@ -289,11 +334,47 @@ def _deserialize_order(order_id: str, raw: Any) -> Order | None:
             order_type=str(raw.get("order_type", "limit")),
             status=status,
             broker_order_id=raw.get("broker_order_id"),
+            origin=str(raw.get("origin", "manual")),
+            requested_stop_loss=(
+                int(raw["requested_stop_loss"])
+                if raw.get("requested_stop_loss") not in (None, "")
+                else None
+            ),
+            requested_take_profit=(
+                int(raw["requested_take_profit"])
+                if raw.get("requested_take_profit") not in (None, "")
+                else None
+            ),
+            exit_reason=str(raw.get("exit_reason")) if raw.get("exit_reason") not in (None, "") else None,
+            position_quantity_at_submit=(
+                int(raw["position_quantity_at_submit"])
+                if raw.get("position_quantity_at_submit") not in (None, "")
+                else None
+            ),
+            resolution_source=(
+                str(raw.get("resolution_source"))
+                if raw.get("resolution_source") not in (None, "")
+                else None
+            ),
+            broker_last_seen_status=(
+                str(raw.get("broker_last_seen_status"))
+                if raw.get("broker_last_seen_status") not in (None, "")
+                else None
+            ),
+            last_reconciled_at=_parse_dt(raw.get("last_reconciled_at")),
+            unresolved_reason=(
+                str(raw.get("unresolved_reason"))
+                if raw.get("unresolved_reason") not in (None, "")
+                else None
+            ),
             submission_attempts=int(raw.get("submission_attempts", 0)),
             max_attempts=int(raw.get("max_attempts", 3)),
             created_at=_parse_dt(raw.get("created_at")) or datetime.now(timezone.utc),
             submitted_at=_parse_dt(raw.get("submitted_at")),
             filled_at=_parse_dt(raw.get("filled_at")),
+            last_event_at=_parse_dt(raw.get("last_event_at")),
+            filled_quantity=int(raw.get("filled_quantity", 0)),
+            filled_avg_price=_parse_decimal(raw.get("filled_avg_price")),
         )
     except Exception as e:
         logger.warning("Skipping malformed order for %s: %s", order_id, e)
