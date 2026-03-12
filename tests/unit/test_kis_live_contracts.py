@@ -11,7 +11,7 @@ from stock_manager.engine import TradingEngine
 from stock_manager.monitoring.reconciler import BrokerPositionSnapshot
 from stock_manager.persistence.recovery import RecoveryReport, RecoveryResult
 from stock_manager.trading.executor import OrderResult
-from stock_manager.trading.models import OrderStatus, TradingConfig
+from stock_manager.trading.models import OrderStatus, Position, PositionStatus, TradingConfig
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "kis_live" / "domestic"
 
@@ -124,6 +124,58 @@ def test_balance_fixture_reconciles_pending_buy_without_execution(tmp_path) -> N
         assert position.entry_price == Decimal("70100")
         assert engine._state.pending_orders == {}
         assert balance_fixture["output1"][0]["pdno"] == "005930"
+    finally:
+        engine.stop()
+
+
+def test_balance_fixture_does_not_false_positive_pending_buy_for_existing_position(tmp_path) -> None:
+    engine = _make_engine(tmp_path)
+    try:
+        engine._position_manager.open_position(
+            Position(
+                symbol="005930",
+                quantity=10,
+                entry_price=Decimal("70000"),
+                current_price=Decimal("70000"),
+                status=PositionStatus.OPEN,
+            )
+        )
+        engine._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="BUY-1", broker_order_id="71012345")
+        )
+        engine.buy("005930", 10, 70100)
+
+        engine._safe_inquire_daily_orders = MagicMock(return_value={"output1": []})
+        result = SimpleNamespace(
+            is_clean=True,
+            discrepancies=[],
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            broker_positions={
+                "005930": BrokerPositionSnapshot(
+                    symbol="005930",
+                    quantity=10,
+                    entry_price=Decimal("70000"),
+                    current_price=Decimal("70000"),
+                )
+            },
+            local_positions={
+                "005930": BrokerPositionSnapshot(
+                    symbol="005930",
+                    quantity=10,
+                    entry_price=Decimal("70000"),
+                    current_price=Decimal("70000"),
+                )
+            },
+        )
+
+        engine._on_reconciliation_cycle(result)
+
+        order = engine._state.pending_orders["BUY-1"]
+        assert order.status == OrderStatus.SUBMITTED
+        assert order.filled_quantity == 0
+        assert order.unresolved_reason == "buy_fill_requires_quantity_increase"
     finally:
         engine.stop()
 

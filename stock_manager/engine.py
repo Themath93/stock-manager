@@ -30,6 +30,13 @@ from stock_manager.trading import (
     RiskLimits,
     RateLimiter,
 )
+from stock_manager.trading.guardrails import (
+    evaluate_runtime_guard,
+    evaluate_startup_guard,
+    evaluate_websocket_guard,
+    infer_buy_fill_from_balance,
+    resolve_auto_exit_order,
+)
 from stock_manager.monitoring import PriceMonitor, PositionReconciler
 from stock_manager.persistence import TradingState, save_state_atomic, load_state
 from stock_manager.persistence.recovery import (
@@ -157,6 +164,7 @@ class TradingEngine:
     _strategy_discovery_updated_at: str | None = field(default=None, init=False)
     _strategy_discovery_last_fingerprint: str | None = field(default=None, init=False, repr=False)
     _runtime_logger: PipelineJsonLogger = field(init=False, repr=False)
+    _guardrail_notifications_sent: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self):
         """Initialize all trading components with proper dependencies."""
@@ -209,6 +217,7 @@ class TradingEngine:
         )
 
         self._broker_adapter = self._resolve_broker_adapter()
+        self._register_websocket_lifecycle_callback()
         self._runtime_logger = PipelineJsonLogger(
             log_dir=self.state_path.parent / "runtime",
             prefix="engine-runtime",
@@ -244,6 +253,7 @@ class TradingEngine:
             raise RuntimeError("Engine is already running")
 
         logger.info("Starting TradingEngine")
+        self._guardrail_notifications_sent.clear()
 
         # Load persisted state
         try:
@@ -280,6 +290,19 @@ class TradingEngine:
         recovery_result = self._coerce_recovery_result(recovery_report.result)
         self._last_recovery_result = recovery_result
         self._degraded_reason = None
+        raw_pending_orders = getattr(recovery_report, "pending_orders", [])
+        unresolved_order_count = (
+            len(raw_pending_orders)
+            if isinstance(raw_pending_orders, (list, tuple, set, dict))
+            else 0
+        )
+        startup_guard = evaluate_startup_guard(
+            is_paper_trading=self.is_paper_trading,
+            allow_unsafe_trading=self.config.allow_unsafe_trading,
+            recovery_mode=self.config.recovery_mode,
+            recovery_result=recovery_result.value,
+            unresolved_order_count=unresolved_order_count,
+        )
 
         # Log recovery results
         logger.info(
@@ -292,13 +315,9 @@ class TradingEngine:
             },
         )
 
-        if (
-            recovery_result == RecoveryResult.FAILED
-            and self.config.recovery_mode == "block"
-            and not self.config.allow_unsafe_trading
-        ):
+        if startup_guard.should_block_trading:
             self._trading_enabled = False
-            self._degraded_reason = "startup_recovery_failed"
+            self._degraded_reason = startup_guard.degraded_reason
         else:
             self._trading_enabled = True
 
@@ -511,6 +530,7 @@ class TradingEngine:
         result = self._executor.buy(symbol=symbol, quantity=order_quantity, price=price)
 
         if result.success:
+            current_position = self._position_manager.get_position(symbol)
             with self._state_lock:
                 order = self._register_submitted_order(
                     symbol=symbol,
@@ -522,6 +542,7 @@ class TradingEngine:
                     internal_order_id=result.order_id or None,
                     requested_stop_loss=stop_loss,
                     requested_take_profit=take_profit,
+                    position_quantity_at_submit=current_position.quantity if current_position else 0,
                 )
                 self._update_state_unlocked()
             self._persist_state()
@@ -867,6 +888,52 @@ class TradingEngine:
             logger.warning("Failed to initialize KIS broker adapter", exc_info=True)
             return None
 
+    def _register_websocket_lifecycle_callback(self) -> None:
+        adapter = self._broker_adapter
+        if adapter is None:
+            return
+
+        websocket_client = getattr(adapter, "websocket_client", None)
+        register_callback = getattr(websocket_client, "register_lifecycle_callback", None)
+        if not callable(register_callback):
+            return
+
+        try:
+            register_callback(self._on_websocket_lifecycle)
+        except Exception:
+            logger.debug("Failed to register websocket lifecycle callback", exc_info=True)
+
+    def _ensure_polling_fallback(self, symbols: list[str]) -> None:
+        normalized = [symbol.strip().upper() for symbol in symbols if str(symbol).strip()]
+        if not normalized:
+            return
+
+        if not self._price_monitor.is_running:
+            self._price_monitor.start(normalized, self._on_price_update)
+            return
+
+        for symbol in normalized:
+            self._price_monitor.add_symbol(symbol)
+
+    def _notify_guardrail_once(
+        self,
+        *,
+        key: str,
+        event_type: str,
+        level: NotificationLevel,
+        title: str,
+        **details: Any,
+    ) -> None:
+        if key in self._guardrail_notifications_sent:
+            return
+        self._guardrail_notifications_sent.add(key)
+        self._notify(event_type, level, title, **details)
+
+    def _latch_trading_guard(self, *, degraded_reason: str | None) -> None:
+        self._trading_enabled = False
+        if degraded_reason and self._degraded_reason is None:
+            self._degraded_reason = degraded_reason
+
     def _start_realtime_streams(self, symbols: list[str]) -> bool:
         adapter = self._broker_adapter
         if adapter is None:
@@ -958,6 +1025,60 @@ class TradingEngine:
             self._reconciler.reconcile_now()
         except Exception:
             logger.debug("Execution reconciliation failed", exc_info=True)
+
+    def _on_websocket_lifecycle(self, event: Any) -> None:
+        if not self._running:
+            return
+
+        status = str(getattr(event, "status", "")).strip().lower()
+        decision = evaluate_websocket_guard(
+            lifecycle_status=status,  # type: ignore[arg-type]
+            is_paper_trading=self.is_paper_trading,
+            allow_unsafe_trading=self.config.allow_unsafe_trading,
+            websocket_monitoring_enabled=bool(
+                getattr(self.config, "websocket_monitoring_enabled", False)
+            ),
+            websocket_execution_notice_enabled=bool(
+                getattr(self.config, "websocket_execution_notice_enabled", False)
+            ),
+        )
+        if status != "reconnect_exhausted":
+            return
+
+        if decision.start_polling_fallback and "quote_stream_fallback_enabled" not in self._guardrail_notifications_sent:
+            self._guardrail_notifications_sent.add("quote_stream_fallback_enabled")
+            fallback_symbols = list(self._position_manager.get_all_positions().keys())
+            self._ensure_polling_fallback(fallback_symbols)
+            logger.warning(
+                "WebSocket quote stream exhausted; polling fallback enabled",
+                extra={"symbol_count": len(fallback_symbols)},
+            )
+
+        execution_enabled = bool(
+            getattr(self.config, "websocket_execution_notice_enabled", False)
+        )
+        if execution_enabled:
+            level = (
+                NotificationLevel.CRITICAL
+                if decision.should_block_trading
+                else NotificationLevel.WARNING
+            )
+            self._notify_guardrail_once(
+                key="execution_stream_unavailable",
+                event_type="error.execution_stream_unavailable",
+                level=level,
+                title="Execution Stream Unavailable",
+                error_type="ExecutionStreamUnavailable",
+                error_category="broker_stream",
+                operation="websocket_execution_stream",
+                recoverable=bool(self.is_paper_trading or self.config.allow_unsafe_trading),
+                error_message="WebSocket execution stream reconnect exhausted.",
+                reconnect_attempts=getattr(event, "reconnect_attempts", None),
+                is_paper_trading=self.is_paper_trading,
+            )
+
+        if decision.should_block_trading:
+            self._latch_trading_guard(degraded_reason=decision.degraded_reason)
 
     def _discover_strategy_symbols(self) -> StrategyDiscoveryResult:
         limit = int(getattr(self.config, "strategy_discovery_limit", 0) or 0)
@@ -1952,19 +2073,38 @@ class TradingEngine:
                 continue
 
             if order.side == "buy" and broker_position is not None and broker_position.quantity > 0:
-                inferred_target = min(order.quantity, broker_position.quantity)
-                delta = max(0, inferred_target - order.filled_quantity)
-                if delta > 0:
+                fill_decision = infer_buy_fill_from_balance(
+                    order_quantity=order.quantity,
+                    filled_quantity=order.filled_quantity,
+                    position_quantity_at_submit=order.position_quantity_at_submit,
+                    broker_position_quantity=broker_position.quantity,
+                )
+                if fill_decision.filled_delta > 0:
                     self._apply_buy_fill(
                         order_key=order_key,
                         order=order,
-                        filled_quantity=delta,
+                        filled_quantity=fill_decision.filled_delta,
                         fill_price=broker_position.entry_price or order.price,
                         source="balance",
                         notifications=notifications,
                     )
-                    order.unresolved_reason = None
+                    if order.status == OrderStatus.FILLED:
+                        order.unresolved_reason = None
+                    else:
+                        self._mark_order_unresolved(
+                            order=order,
+                            reason="buy_fill_requires_quantity_increase",
+                            notifications=notifications,
+                            raw_payload=result.broker_positions.get(order.symbol),
+                        )
                     continue
+                self._mark_order_unresolved(
+                    order=order,
+                    reason=fill_decision.unresolved_reason or "buy_fill_requires_quantity_increase",
+                    notifications=notifications,
+                    raw_payload=result.broker_positions.get(order.symbol),
+                )
+                continue
 
             if order.side == "sell":
                 original_qty = order.position_quantity_at_submit or (
@@ -2090,6 +2230,26 @@ class TradingEngine:
         self._emit_notifications(notifications)
         if not result.is_clean:
             self._handle_discrepancy(result)
+            runtime_guard = evaluate_runtime_guard(
+                is_paper_trading=self.is_paper_trading,
+                allow_unsafe_trading=self.config.allow_unsafe_trading,
+                has_discrepancies=True,
+            )
+            if runtime_guard.should_block_trading:
+                self._latch_trading_guard(degraded_reason=runtime_guard.degraded_reason)
+                self._notify_guardrail_once(
+                    key="runtime_reconciliation_drift",
+                    event_type="error.runtime_reconciliation_drift",
+                    level=NotificationLevel.CRITICAL,
+                    title="Runtime Reconciliation Drift",
+                    error_type="RuntimeReconciliationDrift",
+                    error_category="broker_state",
+                    operation="runtime_reconciliation",
+                    recoverable=False,
+                    error_message="Broker/local state drift detected during runtime reconciliation.",
+                    discrepancy_count=len(getattr(result, "discrepancies", [])),
+                    is_paper_trading=self.is_paper_trading,
+                )
 
     def _restore_risk_controls(self) -> None:
         controls = self._state.risk_controls if isinstance(self._state.risk_controls, dict) else {}
@@ -2267,10 +2427,14 @@ class TradingEngine:
         # Get current price for market order
         try:
             current_price = self._get_current_price(symbol)
+            order_decision = resolve_auto_exit_order(
+                trigger_type="stop_loss",
+                current_price=current_price,
+            )
             result = self.sell(
                 symbol=symbol,
                 quantity=position.quantity,
-                price=current_price,
+                price=order_decision.price,
                 origin="stop_loss",
                 exit_reason="STOP_LOSS",
             )
@@ -2321,10 +2485,14 @@ class TradingEngine:
         # Get current price for limit order
         try:
             current_price = self._get_current_price(symbol)
+            order_decision = resolve_auto_exit_order(
+                trigger_type="take_profit",
+                current_price=current_price,
+            )
             result = self.sell(
                 symbol=symbol,
                 quantity=position.quantity,
-                price=current_price,
+                price=order_decision.price,
                 origin="take_profit",
                 exit_reason="TAKE_PROFIT",
             )
