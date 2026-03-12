@@ -246,3 +246,41 @@ def test_on_close_schedules_reconnect() -> None:
         time.sleep(0.01)
 
     assert len(factory.instances) > first_instance_count
+
+
+def test_lifecycle_callbacks_receive_connected_and_closed_events(monkeypatch) -> None:
+    factory = _DummyFactory()
+    client = KISWebSocketClient(
+        websocket_url="ws://test",
+        websocket_app_factory=factory,
+        reconnect_max_attempts=1,
+        reconnect_base_delay_sec=0.01,
+    )
+
+    received: list[Any] = []
+    client.register_lifecycle_callback(received.append)
+    client.connect(approval_key="approval-key", timeout_sec=1.0)
+
+    monkeypatch.setattr(client, "_schedule_reconnect", lambda: None)
+    client._on_close(None, None, None)
+
+    assert [event.status for event in received[:2]] == ["connected", "closed"]
+
+
+def test_reconnect_exhaustion_dispatches_lifecycle_event(monkeypatch) -> None:
+    client = KISWebSocketClient(
+        websocket_url="ws://test",
+        reconnect_max_attempts=2,
+        reconnect_base_delay_sec=0.01,
+    )
+    received: list[Any] = []
+    client.register_lifecycle_callback(received.append)
+
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(client, "_start_socket_thread", lambda: None)
+    monkeypatch.setattr(client._connected_event, "wait", lambda timeout: False)
+
+    client._reconnect_loop()
+
+    assert received[-1].status == "reconnect_exhausted"
+    assert received[-1].reconnect_attempts == 2

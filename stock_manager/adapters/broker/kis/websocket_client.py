@@ -40,6 +40,9 @@ _EXECUTION_TR_IDS = {
 }
 
 
+WebSocketLifecycleStatus = Literal["connected", "closed", "reconnect_exhausted"]
+
+
 def get_kis_websocket_url(*, is_paper_trading: bool) -> str:
     return KIS_WS_URL_MOCK if is_paper_trading else KIS_WS_URL_REAL
 
@@ -78,8 +81,16 @@ class KISExecutionEvent:
     raw_payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class KISWebSocketLifecycleEvent:
+    status: WebSocketLifecycleStatus
+    timestamp: datetime
+    reconnect_attempts: int | None = None
+
+
 QuoteCallback = Callable[[KISQuoteEvent], None]
 ExecutionCallback = Callable[[KISExecutionEvent], None]
+LifecycleCallback = Callable[[KISWebSocketLifecycleEvent], None]
 
 
 class _WebSocketAppLike(Protocol):
@@ -136,6 +147,7 @@ class KISWebSocketClient:
 
         self._quote_callbacks: list[QuoteCallback] = []
         self._execution_callbacks: list[ExecutionCallback] = []
+        self._lifecycle_callbacks: list[LifecycleCallback] = []
         self._quote_subscriptions: dict[str, str] = {}
         self._execution_subscription: tuple[str, str] | None = None
 
@@ -191,6 +203,9 @@ class KISWebSocketClient:
 
     def register_execution_callback(self, callback: ExecutionCallback) -> None:
         self._execution_callbacks.append(callback)
+
+    def register_lifecycle_callback(self, callback: LifecycleCallback) -> None:
+        self._lifecycle_callbacks.append(callback)
 
     def subscribe_quotes(
         self,
@@ -251,6 +266,7 @@ class KISWebSocketClient:
         self._connected = True
         self._connected_event.set()
         self._reconnect_in_progress = False
+        self._dispatch_lifecycle_event(status="connected")
         self._replay_subscriptions()
 
     def _on_close(self, _ws: Any, _close_code: Any, _close_msg: Any) -> None:
@@ -258,6 +274,7 @@ class KISWebSocketClient:
         self._connected_event.clear()
         if self._closing:
             return
+        self._dispatch_lifecycle_event(status="closed")
         self._schedule_reconnect()
 
     def _on_error(self, _ws: Any, error: Any) -> None:
@@ -312,6 +329,10 @@ class KISWebSocketClient:
         self._reconnect_in_progress = False
         logger.warning(
             "KIS WebSocket reconnect exhausted after %s attempts", self._reconnect_max_attempts
+        )
+        self._dispatch_lifecycle_event(
+            status="reconnect_exhausted",
+            reconnect_attempts=self._reconnect_max_attempts,
         )
 
     def _replay_subscriptions(self) -> None:
@@ -507,3 +528,20 @@ class KISWebSocketClient:
                 callback(event)
             except Exception:
                 logger.debug("Execution callback error", exc_info=True)
+
+    def _dispatch_lifecycle_event(
+        self,
+        *,
+        status: WebSocketLifecycleStatus,
+        reconnect_attempts: int | None = None,
+    ) -> None:
+        event = KISWebSocketLifecycleEvent(
+            status=status,
+            timestamp=datetime.now(timezone.utc),
+            reconnect_attempts=reconnect_attempts,
+        )
+        for callback in self._lifecycle_callbacks:
+            try:
+                callback(event)
+            except Exception:
+                logger.debug("Lifecycle callback error", exc_info=True)

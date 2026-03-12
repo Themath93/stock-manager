@@ -371,6 +371,7 @@ class TestPendingOrderRecovery:
             side="buy",
             quantity=2,
             status=OrderStatus.SUBMITTED,
+            position_quantity_at_submit=0,
         )
         report = RecoveryReport()
 
@@ -387,6 +388,75 @@ class TestPendingOrderRecovery:
         assert order.filled_quantity == 2
         assert order.filled_avg_price == Decimal("72000")
         assert order.filled_at is not None
+
+    def test_recover_pending_buy_from_balance_uses_submit_baseline_delta(self):
+        order = Order(
+            order_id="ord-1",
+            symbol="005930",
+            side="buy",
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+            position_quantity_at_submit=10,
+        )
+        report = RecoveryReport()
+
+        _recover_pending_orders(
+            pending_orders={"ord-1": order},
+            broker_positions=[{"pdno": "005930", "hldg_qty": "15", "pchs_avg_pric": "72000"}],
+            daily_orders_response={"output1": []},
+            report=report,
+        )
+
+        assert report.pending_orders == ["ord-1"]
+        assert order.status == OrderStatus.PARTIAL_FILL
+        assert order.filled_quantity == 5
+        assert order.unresolved_reason == "pending_order_recovery_unresolved"
+
+    def test_recover_pending_buy_from_balance_stays_unresolved_without_quantity_increase(self):
+        order = Order(
+            order_id="ord-1",
+            symbol="005930",
+            side="buy",
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+            position_quantity_at_submit=10,
+        )
+        report = RecoveryReport()
+
+        _recover_pending_orders(
+            pending_orders={"ord-1": order},
+            broker_positions=[{"pdno": "005930", "hldg_qty": "10", "pchs_avg_pric": "72000"}],
+            daily_orders_response={"output1": []},
+            report=report,
+        )
+
+        assert report.pending_orders == ["ord-1"]
+        assert order.status == OrderStatus.SUBMITTED
+        assert order.filled_quantity == 0
+        assert order.unresolved_reason == "buy_fill_requires_quantity_increase"
+
+    def test_recover_pending_buy_from_balance_stays_unresolved_without_baseline(self):
+        order = Order(
+            order_id="ord-1",
+            symbol="005930",
+            side="buy",
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+            position_quantity_at_submit=None,
+        )
+        report = RecoveryReport()
+
+        _recover_pending_orders(
+            pending_orders={"ord-1": order},
+            broker_positions=[{"pdno": "005930", "hldg_qty": "15", "pchs_avg_pric": "72000"}],
+            daily_orders_response={"output1": []},
+            report=report,
+        )
+
+        assert report.pending_orders == ["ord-1"]
+        assert order.status == OrderStatus.SUBMITTED
+        assert order.filled_quantity == 0
+        assert order.unresolved_reason == "buy_fill_baseline_missing"
 
     def test_recover_pending_order_marks_rejected_from_cancel_payload(self):
         order = Order(

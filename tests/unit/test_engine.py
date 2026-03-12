@@ -255,7 +255,7 @@ class TestEngineLifecycle:
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
     def test_start_enters_degraded_mode_when_recovery_failed(
-        self, mock_reconcile, mock_load, engine
+        self, mock_reconcile, mock_load, mock_client, trading_config, tmp_path
     ):
         mock_load.return_value = None
         mock_reconcile.return_value = RecoveryReport(
@@ -265,6 +265,14 @@ class TestEngineLifecycle:
             quantity_mismatches={},
             pending_orders=[],
             errors=["Broker unavailable"],
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=trading_config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=False,
         )
 
         with patch.object(engine._price_monitor, "start") as mock_price_start:
@@ -276,6 +284,84 @@ class TestEngineLifecycle:
         assert engine._degraded_reason == "startup_recovery_failed"
         mock_price_start.assert_not_called()
         mock_reconciler_start.assert_called_once()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_blocks_live_trading_when_pending_orders_remain(
+        self, mock_reconcile, mock_load, mock_client, trading_config, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.RECONCILED,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=["ord-1"],
+            errors=[],
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=trading_config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=False,
+        )
+
+        engine.start()
+
+        assert engine._running is True
+        assert engine._trading_enabled is False
+        assert engine._degraded_reason == "startup_recovery_unresolved_orders"
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_keeps_mock_trading_enabled_when_pending_orders_remain(
+        self, mock_reconcile, mock_load, engine
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.RECONCILED,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=["ord-1"],
+            errors=[],
+        )
+
+        engine.start()
+
+        assert engine._trading_enabled is True
+        assert engine._degraded_reason is None
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_allows_live_override_when_pending_orders_remain(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.RECONCILED,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=["ord-1"],
+            errors=[],
+        )
+        config = TradingConfig(market_hours_enabled=False, allow_unsafe_trading=True)
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=False,
+        )
+
+        engine.start()
+
+        assert engine._trading_enabled is True
+        assert engine._degraded_reason is None
 
 
 @dataclass
@@ -1157,6 +1243,10 @@ class TestRealtimeBridge:
 
         engine._on_websocket_execution(event)
 
+        engine._reconciler.reconcile_now.assert_called_once()
+        engine._update_state.assert_not_called()
+        engine._persist_state.assert_not_called()
+
         event_arg = engine.notifier.notify.call_args_list[0][0][0]
         assert event_arg.event_type == "order.execution_notice"
         assert event_arg.details["symbol"] == "005930"
@@ -1189,6 +1279,72 @@ class TestRealtimeBridge:
         engine._apply_reconciled_positions.assert_called_once_with({})
         engine._persist_state.assert_called_once()
 
+    def test_reconciliation_cycle_latches_live_trading_when_drift_detected(
+        self, mock_client, tmp_path
+    ):
+        engine = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(market_hours_enabled=False),
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine._running = True
+        engine._trading_enabled = True
+        engine.notifier = MagicMock()
+        engine._persist_state = MagicMock()
+        engine._sync_pending_orders_from_broker = MagicMock()
+        engine._apply_reconciled_positions = MagicMock()
+
+        reconciler_result = SimpleNamespace(
+            is_clean=False,
+            discrepancies=["Missing at broker: 005930"],
+            orphan_positions=[],
+            missing_positions=["005930"],
+            quantity_mismatches={},
+            broker_positions={},
+            local_positions={},
+        )
+
+        engine._on_reconciliation_cycle(reconciler_result)
+
+        assert engine._trading_enabled is False
+        assert engine._degraded_reason == "runtime_reconciliation_drift"
+        events = [call[0][0].event_type for call in engine.notifier.notify.call_args_list]
+        assert "error.runtime_reconciliation_drift" in events
+
+    def test_reconciliation_cycle_does_not_auto_clear_runtime_drift(self, mock_client, tmp_path):
+        engine = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(market_hours_enabled=False),
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine._running = True
+        engine._trading_enabled = False
+        engine._degraded_reason = "runtime_reconciliation_drift"
+        engine._persist_state = MagicMock()
+        engine._sync_pending_orders_from_broker = MagicMock()
+        engine._apply_reconciled_positions = MagicMock()
+
+        clean_result = SimpleNamespace(
+            is_clean=True,
+            discrepancies=[],
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            broker_positions={},
+            local_positions={},
+        )
+
+        engine._on_reconciliation_cycle(clean_result)
+
+        assert engine._trading_enabled is False
+        assert engine._degraded_reason == "runtime_reconciliation_drift"
+
     def test_websocket_execution_notice_swallow_reconcile_exception(self, engine):
         engine._reconciler.reconcile_now = MagicMock(side_effect=RuntimeError("reconcile failed"))
         engine._update_state = MagicMock()
@@ -1205,9 +1361,37 @@ class TestRealtimeBridge:
 
         engine._on_websocket_execution(event)
 
-        engine._reconciler.reconcile_now.assert_called_once()
-        engine._update_state.assert_not_called()
-        engine._persist_state.assert_not_called()
+    def test_websocket_reconnect_exhausted_starts_polling_fallback_and_blocks_live_trading(
+        self, mock_client, tmp_path, mock_position
+    ):
+        config = TradingConfig(
+            market_hours_enabled=False,
+            websocket_monitoring_enabled=True,
+            websocket_execution_notice_enabled=True,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine._running = True
+        engine._trading_enabled = True
+        engine.notifier = MagicMock()
+        engine._position_manager.open_position(mock_position)
+
+        with patch.object(engine._price_monitor, "start") as mock_price_start:
+            event = SimpleNamespace(status="reconnect_exhausted", reconnect_attempts=5)
+            engine._on_websocket_lifecycle(event)
+            engine._on_websocket_lifecycle(event)
+
+        mock_price_start.assert_called_once_with(["005930"], engine._on_price_update)
+        assert engine._trading_enabled is False
+        assert engine._degraded_reason == "execution_stream_unavailable"
+        event_types = [call[0][0].event_type for call in engine.notifier.notify.call_args_list]
+        assert event_types.count("error.execution_stream_unavailable") == 1
 
 
 # =============================================================================
@@ -1353,6 +1537,33 @@ class TestTradingOperations:
         pending_order = engine._state.pending_orders["TEST123"]
         assert pending_order.requested_take_profit == 80000
         assert engine.get_position("005930") is None
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_records_submit_position_baseline(
+        self, mock_reconcile, mock_load, engine, mock_position
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine._position_manager.open_position(mock_position)
+        engine._executor.buy = MagicMock(
+            return_value=OrderResult(success=True, order_id="TEST123", broker_order_id="B-1")
+        )
+
+        result = engine.buy("005930", 2, 70000)
+
+        assert result.success is True
+        pending_order = engine._state.pending_orders["TEST123"]
+        assert pending_order.position_quantity_at_submit == 10
 
     def test_buy_raises_if_not_running(self, engine):
         """Test that buy() raises error if engine not running."""
@@ -1664,7 +1875,7 @@ class TestInternalHelpers:
 
         engine._handle_stop_loss("005930")
 
-        engine._executor.sell.assert_called_once()
+        engine._executor.sell.assert_called_once_with(symbol="005930", quantity=10, price=None)
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -1728,7 +1939,7 @@ class TestInternalHelpers:
         engine.sell.assert_called_once_with(
             symbol="005930",
             quantity=10,
-            price=70000,
+            price=None,
             origin="stop_loss",
             exit_reason="STOP_LOSS",
         )

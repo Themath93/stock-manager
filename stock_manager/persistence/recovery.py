@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 import logging
 
+from stock_manager.trading.guardrails import infer_buy_fill_from_balance
 from stock_manager.trading.models import Order, OrderStatus, Position, PositionStatus
 
 logger = logging.getLogger(__name__)
@@ -256,14 +257,33 @@ def _recover_pending_orders(
                 continue
 
         if order.side == "buy" and broker_position is not None and broker_qty > 0:
-            order.status = OrderStatus.FILLED
-            order.resolution_source = "balance"
-            order.unresolved_reason = None
-            order.filled_quantity = max(order.filled_quantity, min(order.quantity, broker_qty))
-            order.filled_avg_price = _to_decimal(
-                broker_position.get("pchs_avg_pric") or broker_position.get("PCHS_AVG_PRIC")
+            fill_decision = infer_buy_fill_from_balance(
+                order_quantity=order.quantity,
+                filled_quantity=order.filled_quantity,
+                position_quantity_at_submit=order.position_quantity_at_submit,
+                broker_position_quantity=broker_qty,
             )
-            order.filled_at = datetime.now(timezone.utc)
+            if fill_decision.filled_delta > 0:
+                order.filled_quantity = min(
+                    order.quantity,
+                    order.filled_quantity + fill_decision.filled_delta,
+                )
+                order.filled_avg_price = _to_decimal(
+                    broker_position.get("pchs_avg_pric") or broker_position.get("PCHS_AVG_PRIC")
+                )
+                order.resolution_source = "balance"
+                order.filled_at = datetime.now(timezone.utc)
+                if order.filled_quantity >= order.quantity:
+                    order.status = OrderStatus.FILLED
+                    order.unresolved_reason = None
+                    continue
+                order.status = OrderStatus.PARTIAL_FILL
+
+            order.last_reconciled_at = datetime.now(timezone.utc)
+            order.unresolved_reason = (
+                fill_decision.unresolved_reason or "pending_order_recovery_unresolved"
+            )
+            report.pending_orders.append(order_id)
             continue
 
         if daily_order is not None:
