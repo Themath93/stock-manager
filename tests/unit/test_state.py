@@ -4,7 +4,19 @@ import json
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from stock_manager.persistence.state import TradingState, load_state, save_state_atomic
+import pytest
+
+from stock_manager.persistence.state import (
+    TradingState,
+    _deserialize_order,
+    _deserialize_position,
+    _parse_decimal,
+    _parse_dt,
+    _serialize_order,
+    _serialize_position,
+    load_state,
+    save_state_atomic,
+)
 from stock_manager.trading.models import Order, OrderStatus, Position, PositionStatus
 
 
@@ -139,6 +151,10 @@ class TestTradingState:
         assert restored.risk_controls["daily_kill_switch_active"] is True
         assert restored.risk_controls["daily_pnl_date"] == "2026-02-15"
         assert restored.risk_controls["daily_baseline_equity"] == "1000000"
+
+    def test_from_dict_ignores_non_dict_risk_controls(self):
+        state = TradingState.from_dict({"positions": {}, "pending_orders": {}, "risk_controls": []})
+        assert state.risk_controls == {}
 
 
 class TestStatePersistence:
@@ -303,3 +319,115 @@ class TestStatePersistence:
 
         assert loaded is not None
         assert isinstance(loaded.positions["005930"], Position)
+
+
+class TestStateHelpers:
+    def test_parse_helpers_handle_invalid_and_naive_values(self):
+        naive = _parse_dt("2024-01-01T00:00:00")
+        assert naive == datetime(2024, 1, 1, tzinfo=timezone.utc)
+        assert _parse_dt("") is None
+        assert _parse_dt("not-a-datetime") is None
+
+        assert _parse_decimal("12.5") == Decimal("12.5")
+        assert _parse_decimal("") is None
+        assert _parse_decimal("oops") is None
+
+    def test_position_serialization_and_deserialization_cover_compatibility_paths(self):
+        serialized = _serialize_position(
+            "005930",
+            {
+                "quantity": 3,
+                "entry_price": "70000",
+                "current_price": "71000",
+                "stop_loss": "68000",
+                "take_profit": "73000",
+                "unrealized_pnl": "3000",
+                "status": "stale",
+                "opened_at": "2024-01-01T00:00:00+00:00",
+                "closed_at": "2024-01-02T00:00:00+00:00",
+            },
+        )
+        assert serialized["symbol"] == "005930"
+        assert serialized["status"] == "stale"
+
+        with pytest.raises(TypeError):
+            _serialize_position("005930", object())
+
+        position = Position(symbol="005930", quantity=1, entry_price=Decimal("1"))
+        assert _deserialize_position("005930", position) is position
+        assert _deserialize_position("005930", "Position(...)") is None
+        assert _deserialize_position("005930", 123) is None
+
+        restored = _deserialize_position(
+            "005930",
+            {
+                "quantity": 2,
+                "entry_price": "70000",
+                "status": "unknown-status",
+                "opened_at": "2024-01-01T00:00:00+00:00",
+            },
+        )
+        assert restored is not None
+        assert restored.status == PositionStatus.OPEN
+
+        assert _deserialize_position("005930", {"quantity": "bad"}) is None
+
+    def test_order_serialization_and_deserialization_cover_compatibility_paths(self):
+        serialized = _serialize_order(
+            "ord-1",
+            {
+                "symbol": "005930",
+                "side": "buy",
+                "quantity": 2,
+                "status": "submitted",
+                "requested_stop_loss": 68000,
+                "requested_take_profit": 72000,
+                "exit_reason": "MANUAL",
+                "position_quantity_at_submit": 2,
+                "resolution_source": "daily_order",
+                "broker_last_seen_status": "partial_fill",
+                "last_reconciled_at": "2024-01-01T00:00:00+00:00",
+                "unresolved_reason": "waiting_for_fill",
+                "submission_attempts": 1,
+                "filled_quantity": 1,
+                "filled_avg_price": "70100",
+            },
+        )
+        assert serialized["resolution_source"] == "daily_order"
+        assert serialized["filled_avg_price"] == "70100"
+
+        with pytest.raises(TypeError):
+            _serialize_order("ord-1", object())
+
+        order = Order(order_id="ord-1", symbol="005930", side="buy", quantity=1)
+        assert _deserialize_order("ord-1", order) is order
+        assert _deserialize_order("ord-1", "invalid") is None
+
+        restored = _deserialize_order(
+            "ord-1",
+            {
+                "symbol": "005930",
+                "side": "sell",
+                "quantity": 3,
+                "status": "unknown-status",
+                "requested_stop_loss": "68000",
+                "requested_take_profit": "72000",
+                "position_quantity_at_submit": "3",
+                "resolution_source": "balance",
+                "broker_last_seen_status": "submitted",
+                "last_reconciled_at": "2024-01-01T00:00:00+00:00",
+                "unresolved_reason": "awaiting_fill",
+                "created_at": "2024-01-01T00:00:01+00:00",
+                "filled_avg_price": "71000",
+            },
+        )
+        assert restored is not None
+        assert restored.status == OrderStatus.CREATED
+        assert restored.requested_stop_loss == 68000
+        assert restored.requested_take_profit == 72000
+        assert restored.position_quantity_at_submit == 3
+        assert restored.resolution_source == "balance"
+        assert restored.last_reconciled_at == datetime(2024, 1, 1, tzinfo=timezone.utc)
+        assert restored.filled_avg_price == Decimal("71000")
+
+        assert _deserialize_order("ord-1", {"quantity": "bad"}) is None
