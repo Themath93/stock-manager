@@ -272,7 +272,12 @@ def _run_live_roundtrip_probe(config: LiveRoundTripProbeConfig) -> LiveRoundTrip
 
         recorder.add_phase("auth", "started")
         token = runtime.client.authenticate(force_refresh=True)
-        recorder.add_phase("auth", "succeeded", token_expires_at=token.expires_at)
+        recorder.add_phase(
+            "auth",
+            "succeeded",
+            token_expires_at=runtime.client.state.access_token_expires_at,
+            token_expires_in=token.expires_in,
+        )
 
         recorder.add_phase("read_only_smoke", "started")
         price_response = inquire_current_price(
