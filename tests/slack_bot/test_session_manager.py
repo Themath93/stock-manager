@@ -1,5 +1,6 @@
 """Unit tests for SessionManager."""
 import time
+from dataclasses import dataclass
 from types import SimpleNamespace
 import pytest
 from unittest.mock import MagicMock, patch
@@ -36,6 +37,26 @@ def _wait_for_state(manager: SessionManager, state: SessionState, timeout: float
     while manager.state != state and time.monotonic() < deadline:
         time.sleep(0.05)
     return manager.state == state
+
+
+@dataclass
+class _Operability:
+    is_healthy: bool
+    should_keep_session_running: bool
+    operational_state: str
+
+
+def _make_operability(
+    *,
+    is_healthy: bool = True,
+    should_keep_session_running: bool = True,
+    operational_state: str = "normal",
+) -> _Operability:
+    return _Operability(
+        is_healthy=is_healthy,
+        should_keep_session_running=should_keep_session_running,
+        operational_state=operational_state,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -482,14 +503,17 @@ class TestSessionManagerWithMockEngine:
             assert manager.state == SessionState.STOPPED
 
     def test_unhealthy_engine_stops_session(self):
-        """If engine.is_healthy() returns False the session should stop."""
+        """If engine operability becomes unhealthy the session should stop."""
         manager = SessionManager()
         params = SessionParams(is_mock=True)
 
         mock_runtime = _make_mock_runtime()
         mock_engine = MagicMock()
-        # Immediately report unhealthy after first check
-        mock_engine.is_healthy.return_value = False
+        mock_engine.get_operability.return_value = _make_operability(
+            is_healthy=False,
+            should_keep_session_running=False,
+            operational_state="blocked",
+        )
 
         with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
              patch(_PATCH_PROMOTION_GATE), \
@@ -500,6 +524,57 @@ class TestSessionManagerWithMockEngine:
             manager.start_session(params)
             if manager._thread:
                 manager._thread.join(timeout=5.0)
+
+            assert manager.state == SessionState.STOPPED
+
+    def test_degraded_engine_with_open_positions_keeps_session_running(self):
+        manager = SessionManager()
+        params = SessionParams(is_mock=True)
+
+        mock_runtime = _make_mock_runtime()
+        mock_engine = MagicMock()
+        mock_engine.get_operability.return_value = _make_operability(
+            is_healthy=True,
+            should_keep_session_running=True,
+            operational_state="degraded_reduce_only",
+        )
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(None, ())), \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine), \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            assert _wait_for_state(manager, SessionState.RUNNING), (
+                f"Expected RUNNING, got {manager.state}"
+            )
+
+            manager.stop_session()
+            if manager._thread:
+                manager._thread.join(timeout=3.0)
+
+    def test_degraded_engine_without_positions_stops_session(self):
+        manager = SessionManager()
+        params = SessionParams(is_mock=True)
+
+        mock_runtime = _make_mock_runtime()
+        mock_engine = MagicMock()
+        mock_engine.get_operability.return_value = _make_operability(
+            is_healthy=True,
+            should_keep_session_running=False,
+            operational_state="degraded_reduce_only",
+        )
+
+        with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
+             patch(_PATCH_PROMOTION_GATE), \
+             patch(_PATCH_RESOLVE_STRATEGY, return_value=(None, ())), \
+             patch(_PATCH_TRADING_ENGINE, return_value=mock_engine), \
+             patch(_PATCH_SLACK_NOTIFIER):
+
+            manager.start_session(params)
+            if manager._thread:
+                manager._thread.join(timeout=3.0)
 
             assert manager.state == SessionState.STOPPED
 

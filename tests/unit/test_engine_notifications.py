@@ -214,10 +214,11 @@ class TestOrderRejectedNotification:
         mock_notifier.reset_mock()
 
         # Mock failed order
-        mock_result = Mock()
-        mock_result.success = False
-        mock_result.order_id = None
-        mock_result.error_message = "Insufficient funds"
+        mock_result = OrderResult(
+            success=False,
+            order_id="",
+            message="Insufficient funds",
+        )
 
         with patch.object(trading_engine._executor, "buy", return_value=mock_result):
             trading_engine.buy("005930", 10, 70000)
@@ -411,6 +412,8 @@ class TestRecoveryFailedNotification:
         events = [call[0][0] for call in calls if call[0][0].event_type == "engine.started"]
         assert len(events) == 1
         started = events[0]
+        assert started.details.get("buying_enabled") is False
+        assert started.details.get("buy_blocked_reason") == "startup_recovery_failed"
         assert started.details.get("trading_enabled") is False
         assert started.details.get("degraded_reason") == "startup_recovery_failed"
 

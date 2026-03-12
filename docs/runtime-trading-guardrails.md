@@ -10,8 +10,29 @@ Scope:
 
 - `live + market_hours_enabled=True` means engine-managed buy orders are locally blocked outside weekday `09:00-15:20 KST`.
 - `mock + market_hours_enabled=True` means the engine bypasses the local market-hours buy block and continues to risk checks and broker submission.
-- Sell paths are unaffected by market-hours enforcement.
+- Live fail-closed guardrails are `buy-only`: startup reconciliation drift, runtime drift, execution-stream loss, stale runtime freshness, and ambiguous submissions latch `buying_enabled=False` while still allowing manual sells and risk-reducing auto exits.
+- `trading_enabled` in engine status is now a compatibility alias for `buying_enabled`, which specifically means "new buys are allowed".
+- Sell paths are unaffected by market-hours enforcement and by buy-block guardrails.
 - Broker or simulator rejection remains possible even when the engine does not block locally.
+
+## Buy-Only Guardrail Matrix
+
+| Condition | Live Engine Behavior | Mock / `allow_unsafe_trading=True` |
+|---|---|---|
+| Startup recovery failed | New buys blocked for the session | Bypassed |
+| Startup unresolved pending orders | New buys blocked for the session | Bypassed |
+| Runtime reconciliation drift | New buys blocked for the session | Bypassed |
+| Execution notice stream exhausted | New buys blocked; quote polling fallback may continue | Warning only |
+| Runtime balance unavailable | New buys blocked for the session | Fallback allowed |
+| Reconciliation / quote freshness stale | New buys blocked for the session | Fallback allowed |
+| Daily loss kill-switch | New buys blocked until day rollover | Same |
+
+## Durable Order Intent
+
+- Engine-managed `buy()` / `sell()` now persist an `OrderStatus.CREATED` intent before broker I/O.
+- Broker acceptance upgrades the intent to `SUBMITTED`.
+- Transport ambiguity upgrades the intent to `PENDING_BROKER` with `unresolved_reason=submission_result_unknown`.
+- Broker-direct CLI commands (`stock-manager trade buy/sell --execute`) are still outside this durable engine-managed path.
 
 ## Command Surface Matrix
 

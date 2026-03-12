@@ -143,7 +143,7 @@ def test_balance_fixture_does_not_false_positive_pending_buy_for_existing_positi
         engine._executor.buy = MagicMock(
             return_value=OrderResult(success=True, order_id="BUY-1", broker_order_id="71012345")
         )
-        engine.buy("005930", 10, 70100)
+        buy_result = engine.buy("005930", 10, 70100)
 
         engine._safe_inquire_daily_orders = MagicMock(return_value={"output1": []})
         result = SimpleNamespace(
@@ -172,7 +172,7 @@ def test_balance_fixture_does_not_false_positive_pending_buy_for_existing_positi
 
         engine._on_reconciliation_cycle(result)
 
-        order = engine._state.pending_orders["BUY-1"]
+        order = engine._state.pending_orders[buy_result.order_id]
         assert order.status == OrderStatus.SUBMITTED
         assert order.filled_quantity == 0
         assert order.unresolved_reason == "buy_fill_requires_quantity_increase"
@@ -206,7 +206,7 @@ def test_ambiguous_daily_order_fixture_keeps_sell_pending_unresolved(tmp_path) -
                 raw_payload={"pdno": "005930", "odno": "B-1"},
             )
         )
-        engine.sell("005930", 2, price=None, origin="manual", exit_reason="MANUAL")
+        sell_result = engine.sell("005930", 2, price=None, origin="manual", exit_reason="MANUAL")
 
         engine._safe_inquire_daily_orders = MagicMock(
             return_value=_load_fixture("ambiguous_daily_orders.json")
@@ -237,7 +237,7 @@ def test_ambiguous_daily_order_fixture_keeps_sell_pending_unresolved(tmp_path) -
 
         engine._on_reconciliation_cycle(result)
 
-        order = engine._state.pending_orders["SELL-1"]
+        order = engine._state.pending_orders[sell_result.order_id]
         assert order.status == OrderStatus.SUBMITTED
         assert order.unresolved_reason == "ambiguous_daily_order_match"
     finally:

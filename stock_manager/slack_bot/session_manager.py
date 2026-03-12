@@ -308,8 +308,16 @@ class SessionManager:
                 ):
                     logger.info("Session duration elapsed, stopping.")
                     break
-                if not engine.is_healthy():
-                    logger.warning("Engine reports unhealthy, stopping session.")
+                operability = engine.get_operability()
+                if not operability.should_keep_session_running:
+                    if not operability.is_healthy:
+                        logger.warning("Engine reports unhealthy, stopping session.")
+                    else:
+                        logger.info(
+                            "Engine no longer needs to keep session running "
+                            "(operational_state=%s).",
+                            operability.operational_state,
+                        )
                     break
                 self._stop_event.wait(timeout=0.5)
 

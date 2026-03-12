@@ -237,7 +237,7 @@ flowchart LR
 flowchart TD
     Trigger["전략 신호 / 수동 요청 / Slack sell-all"] --> Buy["Engine.buy()"]
 
-    Buy --> Precheck["사전 검사<br/>running / trading_enabled / pending / market hours / kill switch"]
+    Buy --> Precheck["사전 검사<br/>running / buying_enabled / pending intent / freshness / market hours / kill switch"]
     Precheck --> Risk["RiskManager.validate_order()"]
 
     Risk -->|reject| Reject["주문 거절 + 알림"]
@@ -341,4 +341,3 @@ flowchart TD
 - 전략 팩토리: `stock_manager/trading/strategies/__init__.py`
 - consensus 평가기: `stock_manager/trading/consensus/evaluator.py`
 - vote 집계: `stock_manager/trading/consensus/aggregator.py`
-

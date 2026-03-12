@@ -1,6 +1,7 @@
 import json
 import time
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -86,6 +87,59 @@ class _SilentFactory(_DummyFactory):
         header: list[str],
     ) -> _SilentWebSocketApp:
         app = _SilentWebSocketApp(
+            url,
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+            header=header,
+        )
+        self.instances.append(app)
+        return app
+
+
+class _BlockingWebSocketApp(_DummyWebSocketApp):
+    def __init__(
+        self,
+        _url: str,
+        *,
+        on_open: Any,
+        on_message: Any,
+        on_error: Any,
+        on_close: Any,
+        header: list[str],
+    ) -> None:
+        super().__init__(
+            _url,
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+            header=header,
+        )
+        self._release = False
+
+    def run_forever(self) -> None:
+        while not self._release:
+            time.sleep(0.01)
+
+    def close(self) -> None:
+        super().close()
+        self._release = True
+
+
+class _BlockingFactory(_DummyFactory):
+    def __call__(
+        self,
+        url: str,
+        *,
+        on_open: Any,
+        on_message: Any,
+        on_error: Any,
+        on_close: Any,
+        header: list[str],
+    ) -> _BlockingWebSocketApp:
+        app = _BlockingWebSocketApp(
             url,
             on_open=on_open,
             on_message=on_message,
@@ -276,11 +330,52 @@ def test_reconnect_exhaustion_dispatches_lifecycle_event(monkeypatch) -> None:
     received: list[Any] = []
     client.register_lifecycle_callback(received.append)
 
+    event_stub = SimpleNamespace(
+        wait=lambda timeout: False,
+        clear=lambda: None,
+        set=lambda: None,
+    )
     monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(client, "_start_socket_thread", lambda: None)
-    monkeypatch.setattr(client._connected_event, "wait", lambda timeout: False)
+    monkeypatch.setattr(
+        client,
+        "_start_socket_thread",
+        lambda: (client._connection_generation, event_stub),
+    )
 
     client._reconnect_loop()
 
     assert received[-1].status == "reconnect_exhausted"
     assert received[-1].reconnect_attempts == 2
+
+
+def test_stale_generation_on_open_is_ignored() -> None:
+    factory = _DummyFactory()
+    client = KISWebSocketClient(websocket_url="ws://test", websocket_app_factory=factory)
+
+    client.connect(approval_key="approval-key", timeout_sec=1.0)
+    initial_generation = client._connection_generation
+    client._close_active_socket(join_timeout=0.1)
+
+    client._on_open(None, generation=initial_generation)
+
+    assert client.is_connected is False
+
+
+def test_reconnect_loop_closes_previous_socket_before_retry(monkeypatch) -> None:
+    factory = _BlockingFactory()
+    client = KISWebSocketClient(
+        websocket_url="ws://test",
+        websocket_app_factory=factory,
+        reconnect_max_attempts=1,
+        reconnect_base_delay_sec=0.01,
+    )
+    client._approval_key = "approval-key"
+
+    first_generation, first_event = client._start_socket_thread()
+    assert first_generation >= 1
+    assert first_event.is_set() is False
+
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+    client._reconnect_loop()
+
+    assert factory.instances[0].closed is True

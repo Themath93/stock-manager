@@ -137,7 +137,8 @@ class KISWebSocketClient:
         self._ws: _WebSocketAppLike | None = None
         self._thread: threading.Thread | None = None
         self._connected = False
-        self._connected_event = threading.Event()
+        self._current_connect_event: threading.Event | None = None
+        self._connection_generation = 0
         self._lock = threading.Lock()
 
         self._approval_key: str = ""
@@ -162,6 +163,7 @@ class KISWebSocketClient:
         custtype: Literal["P", "B"] = "P",
         timeout_sec: float = 5.0,
     ) -> None:
+        connect_event: threading.Event | None = None
         with self._lock:
             if self._connected:
                 return
@@ -172,31 +174,19 @@ class KISWebSocketClient:
 
             self._custtype = custtype
             self._closing = False
-            self._connected_event.clear()
-            self._start_socket_thread()
+        _, connect_event = self._start_socket_thread()
 
-        if not self._connected_event.wait(timeout=max(0.1, timeout_sec)):
-            self.disconnect(join_timeout=0.5)
+        if not connect_event.wait(timeout=max(0.1, timeout_sec)):
+            self._close_active_socket(join_timeout=0.5)
             raise KISAPIError("WebSocket connection timed out")
 
     def disconnect(self, *, join_timeout: float = 2.0) -> None:
         with self._lock:
             self._closing = True
             self._connected = False
-            self._connected_event.clear()
-            ws = self._ws
-            self._ws = None
-            thread = self._thread
-            self._thread = None
-
-        if ws is not None:
-            try:
-                ws.close()
-            except Exception:
-                logger.debug("Failed to close websocket cleanly", exc_info=True)
-
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=max(0.1, join_timeout))
+            if self._current_connect_event is not None:
+                self._current_connect_event.clear()
+        self._close_active_socket(join_timeout=join_timeout)
 
     def register_quote_callback(self, callback: QuoteCallback) -> None:
         self._quote_callbacks.append(callback)
@@ -244,7 +234,45 @@ class KISWebSocketClient:
         if self._connected:
             self._send_subscription(tr_id=resolved_tr_id, tr_key=tr_key)
 
-    def _start_socket_thread(self) -> None:
+    def _close_active_socket(self, *, join_timeout: float = 0.2) -> None:
+        with self._lock:
+            self._connection_generation += 1
+            ws = self._ws
+            thread = self._thread
+            self._ws = None
+            self._thread = None
+            self._connected = False
+            if self._current_connect_event is not None:
+                self._current_connect_event.clear()
+
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                logger.debug("Failed to close websocket cleanly", exc_info=True)
+
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=max(0.1, join_timeout))
+
+    def _start_socket_thread(self) -> tuple[int, threading.Event]:
+        with self._lock:
+            self._connection_generation += 1
+            generation = self._connection_generation
+            connect_event = threading.Event()
+            self._current_connect_event = connect_event
+
+        def on_open(socket: Any) -> None:
+            self._on_open(socket, generation)
+
+        def on_message(socket: Any, message: str) -> None:
+            self._on_message(socket, message, generation)
+
+        def on_error(socket: Any, error: Any) -> None:
+            self._on_error(socket, error, generation)
+
+        def on_close(socket: Any, close_code: Any, close_msg: Any) -> None:
+            self._on_close(socket, close_code, close_msg, generation)
+
         headers = [
             f"approval_key: {self._approval_key}",
             f"custtype: {self._custtype}",
@@ -252,35 +280,52 @@ class KISWebSocketClient:
         ]
         ws = self._websocket_app_factory(
             self._websocket_url,
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
             header=headers,
         )
         self._ws = ws
         self._thread = threading.Thread(target=ws.run_forever, daemon=True, name="KISWebSocket")
         self._thread.start()
+        return generation, connect_event
 
-    def _on_open(self, _ws: Any) -> None:
+    def _on_open(self, _ws: Any, generation: int | None = None) -> None:
+        if generation is not None and generation != self._connection_generation:
+            return
         self._connected = True
-        self._connected_event.set()
+        if self._current_connect_event is not None:
+            self._current_connect_event.set()
         self._reconnect_in_progress = False
         self._dispatch_lifecycle_event(status="connected")
         self._replay_subscriptions()
 
-    def _on_close(self, _ws: Any, _close_code: Any, _close_msg: Any) -> None:
+    def _on_close(
+        self,
+        _ws: Any,
+        _close_code: Any,
+        _close_msg: Any,
+        generation: int | None = None,
+    ) -> None:
+        if generation is not None and generation != self._connection_generation:
+            return
         self._connected = False
-        self._connected_event.clear()
+        if self._current_connect_event is not None:
+            self._current_connect_event.clear()
         if self._closing:
             return
         self._dispatch_lifecycle_event(status="closed")
         self._schedule_reconnect()
 
-    def _on_error(self, _ws: Any, error: Any) -> None:
+    def _on_error(self, _ws: Any, error: Any, generation: int | None = None) -> None:
+        if generation is not None and generation != self._connection_generation:
+            return
         logger.warning("KIS WebSocket error: %s", error)
 
-    def _on_message(self, _ws: Any, message: str) -> None:
+    def _on_message(self, _ws: Any, message: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._connection_generation:
+            return
         payload = self._decode_message(message)
         if payload is None:
             return
@@ -316,17 +361,16 @@ class KISWebSocketClient:
             time.sleep(delay)
 
             try:
-                with self._lock:
-                    self._connected_event.clear()
-                    self._start_socket_thread()
-
-                if self._connected_event.wait(timeout=5.0):
+                self._close_active_socket(join_timeout=0.2)
+                _, connect_event = self._start_socket_thread()
+                if connect_event.wait(timeout=5.0):
                     self._reconnect_in_progress = False
                     return
             except Exception:
                 logger.debug("Reconnect attempt %s failed", attempt, exc_info=True)
 
         self._reconnect_in_progress = False
+        self._close_active_socket(join_timeout=0.2)
         logger.warning(
             "KIS WebSocket reconnect exhausted after %s attempts", self._reconnect_max_attempts
         )

@@ -167,3 +167,5 @@ class TradingConfig:
     websocket_monitoring_enabled: bool = False
     websocket_execution_notice_enabled: bool = False
     auto_exit_cooldown_sec: float = 1.0
+    quote_staleness_sec: float | None = None
+    reconciliation_staleness_sec: float = 180.0

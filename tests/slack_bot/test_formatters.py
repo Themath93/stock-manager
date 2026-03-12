@@ -163,7 +163,9 @@ class TestFormatStatus:
         from unittest.mock import MagicMock
 
         mock_status = MagicMock()
+        mock_status.running = True
         mock_status.position_count = 3
+        mock_status.buying_enabled = True
         mock_status.price_monitor_running = True
         mock_status.trading_enabled = True
         mock_status.degraded_reason = None
@@ -178,14 +180,31 @@ class TestFormatStatus:
         from unittest.mock import MagicMock
 
         mock_status = MagicMock()
+        mock_status.running = True
         mock_status.position_count = 0
         mock_status.price_monitor_running = False
+        mock_status.buying_enabled = False
         mock_status.trading_enabled = False
         mock_status.degraded_reason = "API error"
 
         result = format_status(mock_status, {"state": "RUNNING"})
         output = str(result["blocks"])
         assert "API error" in output
+
+    def test_with_buy_blocked_engine_shows_risk_reduction_only(self):
+        from unittest.mock import MagicMock
+
+        mock_status = MagicMock()
+        mock_status.running = True
+        mock_status.position_count = 1
+        mock_status.price_monitor_running = True
+        mock_status.buying_enabled = False
+        mock_status.trading_enabled = False
+        mock_status.degraded_reason = "runtime_reconciliation_drift"
+
+        result = format_status(mock_status, {"state": "RUNNING"})
+        output = str(result["blocks"])
+        assert "risk-reduction-only" in output
 
     def test_symbols_list_joined(self):
         result = format_status(None, {"state": "STOPPED", "symbols": ["005930", "000660"]})
@@ -386,8 +405,10 @@ class TestFormatStatusUX:
     def test_status_with_engine_has_divider(self):
         from unittest.mock import MagicMock
         mock_status = MagicMock()
+        mock_status.running = True
         mock_status.position_count = 2
         mock_status.price_monitor_running = True
+        mock_status.buying_enabled = True
         mock_status.trading_enabled = True
         mock_status.degraded_reason = None
         result = format_status(mock_status, {"state": "RUNNING"})
@@ -397,8 +418,10 @@ class TestFormatStatusUX:
     def test_status_degraded_shows_warning(self):
         from unittest.mock import MagicMock
         mock_status = MagicMock()
+        mock_status.running = True
         mock_status.position_count = 0
         mock_status.price_monitor_running = False
+        mock_status.buying_enabled = False
         mock_status.trading_enabled = False
         mock_status.degraded_reason = "startup_recovery_failed"
         result = format_status(mock_status, {"state": "RUNNING"})
@@ -410,8 +433,10 @@ class TestFormatStatusUX:
         from unittest.mock import MagicMock
 
         mock_status = MagicMock()
+        mock_status.running = True
         mock_status.position_count = 0
         mock_status.price_monitor_running = False
+        mock_status.buying_enabled = True
         mock_status.trading_enabled = True
         mock_status.degraded_reason = None
         mock_status.strategy_discovery_source = "mock_fallback"
@@ -433,8 +458,10 @@ class TestFormatStatusUX:
         from unittest.mock import MagicMock
 
         mock_status = MagicMock()
+        mock_status.running = True
         mock_status.position_count = 0
         mock_status.price_monitor_running = False
+        mock_status.buying_enabled = True
         mock_status.trading_enabled = True
         mock_status.degraded_reason = None
         mock_status.strategy_discovery_source = None
