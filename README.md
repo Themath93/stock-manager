@@ -32,6 +32,69 @@ CLI (main.py)
        └─ Slack Notifications (Block Kit, 5채널 라우팅)
 ```
 
+### KIS API 교신 아키텍처
+
+```mermaid
+flowchart LR
+    subgraph Entry["진입점"]
+        Trade["CLI trade buy/sell"]
+        Run["CLI run / Slack session"]
+        Smoke["CLI smoke / verify"]
+    end
+
+    subgraph App["stock-manager 내부"]
+        Config["KISConfig<br/>.env, mock/live, 계좌/자격증명"]
+        Rest["KISRestClient<br/>OAuth, 인증 헤더, rate limit, retry"]
+        Cache["Token Cache<br/>~/.stock_manager/kis_token_paper|real.json"]
+        Engine["TradingEngine<br/>전략 실행, 모니터링, 재조정"]
+        Fetcher["TechnicalDataFetcher<br/>현재가, 재무, OHLCV 수집"]
+        Executor["OrderExecutor<br/>매수/매도 주문"]
+        Recon["PriceMonitor / PositionReconciler"]
+        Adapter["KISBrokerAdapter<br/>REST + WebSocket 퍼사드"]
+        WS["KISWebSocketClient<br/>실시간 호가/체결 구독"]
+    end
+
+    subgraph KIS["한국투자 OpenAPI"]
+        OAuth["OAuth 토큰<br/>/oauth2/tokenP"]
+        Approval["WebSocket 승인키<br/>/oauth2/Approval"]
+        RestAPI["REST API<br/>/uapi/...<br/>현재가, 재무, 잔고, 주문"]
+        WSMock["Mock WS<br/>ws://ops.koreainvestment.com:31000"]
+        WSReal["Real WS<br/>ws://ops.koreainvestment.com:21000"]
+    end
+
+    Trade --> Config
+    Run --> Config
+    Smoke --> Config
+
+    Config --> Rest
+    Rest <--> Cache
+
+    Trade -->|직접 주문 경로| Executor
+    Smoke -->|인증/가격/잔고 점검| Rest
+    Run -->|엔진 경로| Engine
+
+    Engine --> Fetcher
+    Engine --> Executor
+    Engine --> Recon
+    Engine -->|실시간 모드 사용 시| Adapter
+
+    Fetcher -->|시세/재무/기간시세 조회| Rest
+    Executor -->|현금 주문| Rest
+    Recon -->|가격/잔고 재확인| Rest
+
+    Adapter -->|REST 위임| Rest
+    Adapter -->|승인키 발급| Approval
+    Adapter -->|WS 연결/구독| WS
+
+    Rest --> OAuth
+    Rest --> RestAPI
+    WS -->|mock| WSMock
+    WS -->|real| WSReal
+
+    WSMock -->|실시간 호가/체결 이벤트| Engine
+    WSReal -->|실시간 호가/체결 이벤트| Engine
+```
+
 ## 저장소 구조 (요약)
 
 ```
