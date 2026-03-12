@@ -201,6 +201,38 @@ class TestEngineLifecycle:
         assert position is not None
         assert position.symbol == "005930"
 
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_seeds_executor_idempotency_from_pending_orders(
+        self, mock_reconcile, mock_load, engine
+    ):
+        pending_order = Order(
+            order_id="OID-1",
+            idempotency_key="persisted-key",
+            symbol="005930",
+            side="buy",
+            quantity=1,
+            price=70000,
+            status=OrderStatus.PENDING_BROKER,
+        )
+        mock_state = TradingState(
+            pending_orders={pending_order.order_id: pending_order},
+            last_updated=datetime.now(timezone.utc),
+        )
+        mock_load.return_value = mock_state
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+
+        assert "persisted-key" in engine._executor._submitted_keys
+
     def test_start_raises_if_already_running(self, engine):
         """Test that start() raises error if engine already running."""
         engine._running = True
@@ -362,6 +394,53 @@ class TestEngineLifecycle:
 
         assert engine._trading_enabled is True
         assert engine._degraded_reason is None
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_start_enters_reduce_only_when_execution_stream_unavailable_at_startup(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        config = TradingConfig(
+            market_hours_enabled=False,
+            websocket_monitoring_enabled=True,
+            websocket_execution_notice_enabled=True,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "test_state.json",
+            is_paper_trading=False,
+        )
+        engine.notifier = MagicMock()
+
+        with patch.object(
+            engine,
+            "_start_realtime_streams",
+            return_value=SimpleNamespace(
+                quote_stream_active=False,
+                should_block_trading=True,
+                degraded_reason="execution_stream_unavailable",
+            ),
+        ):
+            engine.start()
+
+        assert engine._running is True
+        assert engine._operational_state == "degraded_reduce_only"
+        assert engine._trading_enabled is False
+        assert engine._degraded_reason == "execution_stream_unavailable"
+        event_types = [call[0][0].event_type for call in engine.notifier.notify.call_args_list]
+        assert "error.execution_stream_unavailable" in event_types
 
 
 @dataclass
@@ -959,6 +1038,36 @@ class TestStrategyOrchestration:
         assert status.strategy_discovery_reason == "volume_rank_request_failed"
         assert status.strategy_discovery_updated_at is not None
 
+    def test_strategy_cycle_skips_when_buying_is_blocked(self, mock_client, tmp_path):
+        strategy = _ScreeningStrategy({"005930": True})
+        config = TradingConfig(
+            strategy=strategy,
+            strategy_symbols=("005930",),
+            strategy_order_quantity=1,
+            strategy_max_buys_per_cycle=1,
+            strategy_run_interval_sec=0.0,
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=config,
+            account_number="12345678",
+            account_product_code="01",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine._running = True
+        engine._set_operational_state(
+            operational_state="degraded_reduce_only",
+            degraded_reason="runtime_reconciliation_drift",
+        )
+        engine.buy = MagicMock(return_value=OrderResult(success=False, order_id="OID"))
+        engine._get_current_price = MagicMock(return_value=70000)
+
+        engine._run_strategy_cycle()
+
+        engine.buy.assert_not_called()
+        engine._get_current_price.assert_not_called()
+
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
     def test_start_strategy_orchestration_starts_background_thread_when_interval_positive(
@@ -995,7 +1104,15 @@ class TestStrategyOrchestration:
         engine.buy = MagicMock(return_value=OrderResult(success=True, order_id="OID"))
 
         with (
-            patch.object(engine, "_start_realtime_streams", return_value=False),
+            patch.object(
+                engine,
+                "_start_realtime_streams",
+                return_value=SimpleNamespace(
+                    quote_stream_active=False,
+                    should_block_trading=False,
+                    degraded_reason=None,
+                ),
+            ),
             patch("stock_manager.engine.load_state", return_value=None),
             patch(
                 "stock_manager.engine.startup_reconciliation",
@@ -1045,7 +1162,15 @@ class TestStrategyOrchestration:
         engine._run_strategy_cycle = MagicMock()
 
         with (
-            patch.object(engine, "_start_realtime_streams", return_value=False),
+            patch.object(
+                engine,
+                "_start_realtime_streams",
+                return_value=SimpleNamespace(
+                    quote_stream_active=False,
+                    should_block_trading=False,
+                    degraded_reason=None,
+                ),
+            ),
             patch("stock_manager.engine.load_state", return_value=None),
             patch(
                 "stock_manager.engine.startup_reconciliation",
@@ -1291,7 +1416,7 @@ class TestRealtimeBridge:
             is_paper_trading=False,
         )
         engine._running = True
-        engine._trading_enabled = True
+        engine._set_operational_state(operational_state="normal", degraded_reason=None)
         engine.notifier = MagicMock()
         engine._persist_state = MagicMock()
         engine._sync_pending_orders_from_broker = MagicMock()
@@ -1324,8 +1449,10 @@ class TestRealtimeBridge:
             is_paper_trading=False,
         )
         engine._running = True
-        engine._trading_enabled = False
-        engine._degraded_reason = "runtime_reconciliation_drift"
+        engine._set_operational_state(
+            operational_state="degraded_reduce_only",
+            degraded_reason="runtime_reconciliation_drift",
+        )
         engine._persist_state = MagicMock()
         engine._sync_pending_orders_from_broker = MagicMock()
         engine._apply_reconciled_positions = MagicMock()
@@ -1378,7 +1505,7 @@ class TestRealtimeBridge:
             is_paper_trading=False,
         )
         engine._running = True
-        engine._trading_enabled = True
+        engine._set_operational_state(operational_state="normal", degraded_reason=None)
         engine.notifier = MagicMock()
         engine._position_manager.open_position(mock_position)
 
@@ -1424,8 +1551,46 @@ class TestTradingOperations:
         result = engine.buy("005930", 10, 70000)
 
         assert result.success is True
-        assert result.order_id == "TEST123"
-        engine._executor.buy.assert_called_once_with(symbol="005930", quantity=10, price=70000)
+        assert result.order_id in engine._state.pending_orders
+        call_kwargs = engine._executor.buy.call_args.kwargs
+        assert call_kwargs["symbol"] == "005930"
+        assert call_kwargs["quantity"] == 10
+        assert call_kwargs["price"] == 70000
+        assert call_kwargs["idempotency_key"] == result.order_id
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_persists_created_intent_before_executor_submission(
+        self, mock_reconcile, mock_load, engine
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        observed: dict[str, object] = {}
+        engine.start()
+
+        def _submit(**kwargs):
+            assert len(engine._state.pending_orders) == 1
+            staged_order = next(iter(engine._state.pending_orders.values()))
+            observed["status"] = staged_order.status
+            observed["order_id"] = staged_order.order_id
+            observed["idempotency_key"] = kwargs["idempotency_key"]
+            return OrderResult(success=True, order_id="broker-return")
+
+        engine._executor.buy = MagicMock(side_effect=_submit)
+
+        result = engine.buy("005930", 1, 70000)
+
+        assert result.success is True
+        assert observed["status"] == OrderStatus.CREATED
+        assert observed["order_id"] == observed["idempotency_key"]
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -1484,7 +1649,11 @@ class TestTradingOperations:
         result = engine.buy("005930", 10, 70000)
 
         assert result.success is True
-        engine._executor.buy.assert_called_once_with(symbol="005930", quantity=3, price=70000)
+        call_kwargs = engine._executor.buy.call_args.kwargs
+        assert call_kwargs["symbol"] == "005930"
+        assert call_kwargs["quantity"] == 3
+        assert call_kwargs["price"] == 70000
+        assert call_kwargs["idempotency_key"] == result.order_id
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -1507,7 +1676,7 @@ class TestTradingOperations:
         result = engine.buy("005930", 10, 70000, stop_loss=65000)
 
         assert result.success is True
-        pending_order = engine._state.pending_orders["TEST123"]
+        pending_order = engine._state.pending_orders[result.order_id]
         assert pending_order.requested_stop_loss == 65000
         assert engine.get_position("005930") is None
 
@@ -1534,7 +1703,7 @@ class TestTradingOperations:
         result = engine.buy("005930", 10, 70000, take_profit=80000)
 
         assert result.success is True
-        pending_order = engine._state.pending_orders["TEST123"]
+        pending_order = engine._state.pending_orders[result.order_id]
         assert pending_order.requested_take_profit == 80000
         assert engine.get_position("005930") is None
 
@@ -1562,13 +1731,48 @@ class TestTradingOperations:
         result = engine.buy("005930", 2, 70000)
 
         assert result.success is True
-        pending_order = engine._state.pending_orders["TEST123"]
+        pending_order = engine._state.pending_orders[result.order_id]
         assert pending_order.position_quantity_at_submit == 10
 
     def test_buy_raises_if_not_running(self, engine):
         """Test that buy() raises error if engine not running."""
         with pytest.raises(RuntimeError, match="not running"):
             engine.buy("005930", 10, 70000)
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_rejected_when_startup_guard_blocks_but_sell_allowed(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.RECONCILED,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=["ord-1"],
+            errors=[],
+        )
+
+        engine = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(market_hours_enabled=False),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine.start()
+        engine._position_manager.open_position(
+            Position(symbol="005930", quantity=10, entry_price=Decimal("70000"))
+        )
+        engine._executor.sell = MagicMock(return_value=OrderResult(success=True, order_id="SELL-1"))
+
+        buy_result = engine.buy("000660", 1, 70000)
+        sell_result = engine.sell("005930", 10, 70000)
+
+        assert buy_result.success is False
+        assert buy_result.message == "startup_recovery_unresolved_orders"
+        assert sell_result.success is True
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -1594,15 +1798,45 @@ class TestTradingOperations:
         result = engine.sell("005930", 10, 75000)
 
         assert result.success is True
-        assert result.order_id == "TEST123"
-        engine._executor.sell.assert_called_once_with(symbol="005930", quantity=10, price=75000)
-        assert "TEST123" in engine._state.pending_orders
+        assert result.order_id in engine._state.pending_orders
+        call_kwargs = engine._executor.sell.call_args.kwargs
+        assert call_kwargs["symbol"] == "005930"
+        assert call_kwargs["quantity"] == 10
+        assert call_kwargs["price"] == 75000
+        assert call_kwargs["idempotency_key"] == result.order_id
         assert engine.get_position("005930") is not None
 
     def test_sell_raises_if_not_running(self, engine):
         """Test that sell() raises error if engine not running."""
         with pytest.raises(RuntimeError, match="not running"):
             engine.sell("005930", 10, 75000)
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_sell_rejects_when_quantity_exceeds_position(
+        self, mock_reconcile, mock_load, engine
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+
+        engine.start()
+        engine._position_manager.open_position(
+            Position(symbol="005930", quantity=10, entry_price=Decimal("70000"))
+        )
+        engine._executor.sell = MagicMock(return_value=OrderResult(success=True, order_id="SELL123"))
+
+        result = engine.sell("005930", 11, 70000)
+
+        assert result.success is False
+        assert result.message == "sell_quantity_exceeds_position"
+        engine._executor.sell.assert_not_called()
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -1656,7 +1890,128 @@ class TestTradingOperations:
         result = engine.sell("005930", 10, 70000)
 
         assert result.success is True
-        engine._executor.sell.assert_called_once_with(symbol="005930", quantity=10, price=70000)
+        call_kwargs = engine._executor.sell.call_args.kwargs
+        assert call_kwargs["symbol"] == "005930"
+        assert call_kwargs["quantity"] == 10
+        assert call_kwargs["price"] == 70000
+        assert call_kwargs["idempotency_key"] == result.order_id
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_latches_runtime_balance_unavailable_but_sell_still_allowed(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(market_hours_enabled=False),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine.start()
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
+        engine._inquire_balance = MagicMock(side_effect=RuntimeError("balance down"))
+        engine._executor.buy = MagicMock(return_value=OrderResult(success=True, order_id="BUY123"))
+        engine._position_manager.open_position(
+            Position(symbol="005930", quantity=10, entry_price=Decimal("70000"))
+        )
+        engine._last_market_data_success_at = datetime.now(timezone.utc)
+        engine._executor.sell = MagicMock(return_value=OrderResult(success=True, order_id="SELL123"))
+
+        buy_result = engine.buy("000660", 1, 70000)
+        sell_result = engine.sell("005930", 10, 70000)
+
+        assert buy_result.success is False
+        assert buy_result.message == "runtime_balance_unavailable"
+        assert engine._buying_enabled is False
+        assert sell_result.success is True
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_latches_market_data_stale_with_open_positions(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(market_hours_enabled=False, quote_staleness_sec=5.0),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine.start()
+        engine._position_manager.open_position(
+            Position(symbol="005930", quantity=10, entry_price=Decimal("70000"))
+        )
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
+        engine._last_market_data_success_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        engine._executor.buy = MagicMock(return_value=OrderResult(success=True, order_id="BUY123"))
+
+        result = engine.buy("000660", 1, 70000)
+
+        assert result.success is False
+        assert result.message == "market_data_stale"
+        assert engine._buying_enabled is False
+        engine._executor.buy.assert_not_called()
+
+    @patch("stock_manager.engine.load_state")
+    @patch("stock_manager.engine.startup_reconciliation")
+    def test_buy_ambiguous_submission_marks_pending_broker_and_latches_buy_guard(
+        self, mock_reconcile, mock_load, mock_client, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_reconcile.return_value = RecoveryReport(
+            result=RecoveryResult.CLEAN,
+            orphan_positions=[],
+            missing_positions=[],
+            quantity_mismatches={},
+            pending_orders=[],
+            errors=[],
+        )
+        engine = TradingEngine(
+            client=mock_client,
+            config=TradingConfig(market_hours_enabled=False),
+            account_number="12345678",
+            state_path=tmp_path / "state.json",
+            is_paper_trading=False,
+        )
+        engine.start()
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
+        engine._executor.buy = MagicMock(
+            return_value=OrderResult(
+                success=False,
+                order_id="ignored",
+                message="timeout",
+                submission_unknown=True,
+            )
+        )
+
+        result = engine.buy("005930", 1, 70000)
+
+        assert result.success is False
+        assert result.message == "timeout"
+        pending_order = engine._state.pending_orders[result.order_id]
+        assert pending_order.status == OrderStatus.PENDING_BROKER
+        assert pending_order.unresolved_reason == "submission_result_unknown"
+        assert engine._buying_enabled is False
+        assert engine._buy_blocked_reason == "submission_result_unknown"
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -1771,6 +2126,9 @@ class TestStatusAndHealth:
         assert status.running is True
         assert status.position_count == 1
         assert status.is_paper_trading is True
+        assert status.operational_state == engine._operational_state
+        assert status.buying_enabled is engine._buying_enabled
+        assert status.buy_blocked_reason == engine._buy_blocked_reason
         assert str(engine.state_path) in status.state_path
 
     def test_get_status_prefers_client_global_rate_limiter(self, engine):
@@ -1785,6 +2143,7 @@ class TestStatusAndHealth:
     def test_is_healthy_returns_true_when_healthy(self, engine):
         """Test that is_healthy() returns True when engine is healthy."""
         engine._running = True
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
         # Mock price monitor is_running property and rate limiter available property
         with patch.object(type(engine._price_monitor), "is_running", property(lambda self: True)):
             with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
@@ -1799,6 +2158,7 @@ class TestStatusAndHealth:
     def test_is_healthy_returns_true_when_no_positions_even_if_monitor_stopped(self, engine):
         """No-position sessions can be healthy without the polling monitor."""
         engine._running = True
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
         with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
             with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
                 assert engine.is_healthy() is True
@@ -1821,12 +2181,66 @@ class TestStatusAndHealth:
     ):
         """WebSocket quote stream is a valid monitoring path when polling is disabled."""
         engine._running = True
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
+        engine._last_market_data_success_at = datetime.now(timezone.utc)
         engine._position_manager.open_position(mock_position)
         engine._broker_adapter = SimpleNamespace(websocket_connected=True)
         engine.config = SimpleNamespace(websocket_monitoring_enabled=True)
         with patch.object(type(engine._price_monitor), "is_running", property(lambda self: False)):
             with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
                 assert engine.is_healthy() is True
+
+    def test_is_healthy_returns_false_when_reconciliation_is_stale(self, engine):
+        engine._running = True
+        engine._last_reconciliation_success_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+        with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+            assert engine.is_healthy() is False
+
+    def test_is_healthy_returns_false_when_market_data_is_stale(self, engine, mock_position):
+        engine._running = True
+        engine._position_manager.open_position(mock_position)
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
+        engine._last_market_data_success_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+        with patch.object(type(engine._price_monitor), "is_running", property(lambda self: True)):
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                assert engine.is_healthy() is False
+
+    def test_get_operability_requires_stop_when_degraded_and_flat(self, engine):
+        engine._running = True
+        engine._set_operational_state(
+            operational_state="degraded_reduce_only",
+            degraded_reason="execution_stream_unavailable",
+        )
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
+
+        with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+            decision = engine.get_operability()
+
+        assert decision.is_healthy is True
+        assert decision.is_ready_for_new_orders is False
+        assert decision.should_keep_session_running is False
+
+    def test_get_operability_keeps_session_running_when_degraded_with_position(
+        self, engine, mock_position
+    ):
+        engine._running = True
+        engine._set_operational_state(
+            operational_state="degraded_reduce_only",
+            degraded_reason="runtime_reconciliation_drift",
+        )
+        engine._position_manager.open_position(mock_position)
+        engine._last_reconciliation_success_at = datetime.now(timezone.utc)
+        engine._last_market_data_success_at = datetime.now(timezone.utc)
+
+        with patch.object(type(engine._price_monitor), "is_running", property(lambda self: True)):
+            with patch.object(type(engine._rate_limiter), "available", property(lambda self: 5)):
+                decision = engine.get_operability()
+
+        assert decision.is_healthy is True
+        assert decision.is_ready_for_new_orders is False
+        assert decision.should_keep_session_running is True
 
 
 # =============================================================================
@@ -1875,7 +2289,10 @@ class TestInternalHelpers:
 
         engine._handle_stop_loss("005930")
 
-        engine._executor.sell.assert_called_once_with(symbol="005930", quantity=10, price=None)
+        call_kwargs = engine._executor.sell.call_args.kwargs
+        assert call_kwargs["symbol"] == "005930"
+        assert call_kwargs["quantity"] == 10
+        assert call_kwargs["price"] is None
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")
@@ -2313,7 +2730,10 @@ class TestMarketHours:
             result = eng.buy("005930", 10, 70000)
 
         assert result.success is True
-        eng._executor.buy.assert_called_once_with(symbol="005930", quantity=10, price=70000)
+        call_kwargs = eng._executor.buy.call_args.kwargs
+        assert call_kwargs["symbol"] == "005930"
+        assert call_kwargs["quantity"] == 10
+        assert call_kwargs["price"] == 70000
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")

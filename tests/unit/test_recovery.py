@@ -364,6 +364,32 @@ class TestPendingOrderRecovery:
         assert order.filled_avg_price == Decimal("70100")
         assert order.filled_at is not None
 
+    def test_recover_pending_buy_from_daily_order_partial_fill_stays_pending(self):
+        order = Order(
+            order_id="ord-1",
+            symbol="005930",
+            side="buy",
+            quantity=5,
+            status=OrderStatus.SUBMITTED,
+            broker_order_id="12345",
+        )
+        report = RecoveryReport()
+
+        _recover_pending_orders(
+            pending_orders={"ord-1": order},
+            broker_positions=[],
+            daily_orders_response={
+                "output1": [{"odno": "12345", "tot_ccld_qty": "2", "avg_prvs": "70100"}]
+            },
+            report=report,
+        )
+
+        assert report.pending_orders == ["ord-1"]
+        assert order.status == OrderStatus.PARTIAL_FILL
+        assert order.filled_quantity == 2
+        assert order.filled_avg_price == Decimal("70100")
+        assert order.unresolved_reason == "buy_not_filled_yet"
+
     def test_recover_pending_buy_from_balance_when_daily_order_missing(self):
         order = Order(
             order_id="ord-1",
@@ -504,6 +530,29 @@ class TestPendingOrderRecovery:
         assert order.resolution_source == "daily_order"
         assert order.filled_quantity == 4
         assert order.filled_at is not None
+
+    def test_recover_pending_sell_from_daily_order_partial_fill_stays_pending(self):
+        order = Order(
+            order_id="ord-1",
+            symbol="005930",
+            side="sell",
+            quantity=4,
+            status=OrderStatus.SUBMITTED,
+            broker_order_id="54321",
+        )
+        report = RecoveryReport()
+
+        _recover_pending_orders(
+            pending_orders={"ord-1": order},
+            broker_positions=[],
+            daily_orders_response={"output1": [{"odno": "54321", "tot_ccld_qty": "1"}]},
+            report=report,
+        )
+
+        assert report.pending_orders == ["ord-1"]
+        assert order.status == OrderStatus.PARTIAL_FILL
+        assert order.filled_quantity == 1
+        assert order.unresolved_reason == "sell_not_filled_yet"
 
     def test_recover_pending_order_marks_ambiguous_daily_order_unresolved(self):
         order = Order(

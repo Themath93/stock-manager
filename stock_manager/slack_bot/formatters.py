@@ -134,7 +134,14 @@ def format_status(status: "EngineStatus | None", session_info: dict) -> dict:
     # Section 2: Runtime status (only when engine status available)
     if status is not None:
         position_count = status.position_count
-        trading_active = status.trading_enabled
+        buying_enabled = getattr(status, "buying_enabled", status.trading_enabled)
+        runtime_mode = (
+            "🟢 활성"
+            if buying_enabled
+            else "🟠 risk-reduction-only"
+            if getattr(status, "running", True)
+            else "🔴 비활성"
+        )
         price_monitor = status.price_monitor_running
         source_raw = getattr(status, "strategy_discovery_source", None)
         symbols_raw = getattr(status, "strategy_discovery_symbols", ())
@@ -156,7 +163,7 @@ def format_status(status: "EngineStatus | None", session_info: dict) -> dict:
 
         runtime_fields: list[dict] = [
             {"type": "mrkdwn", "text": f"*보유종목:*\n{position_count}"},
-            {"type": "mrkdwn", "text": f"*매매:*\n{'🟢 활성' if trading_active else '🔴 비활성'}"},
+            {"type": "mrkdwn", "text": f"*매매:*\n{runtime_mode}"},
             {"type": "mrkdwn", "text": f"*가격 모니터:*\n{'🟢 활성' if price_monitor else '🔴 비활성'}"},
             {"type": "mrkdwn", "text": f"*탐색 소스:*\n{discovery_source}"},
             {"type": "mrkdwn", "text": f"*탐색 종목:*\n{discovery_symbols_text}"},

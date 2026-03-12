@@ -27,6 +27,7 @@ class OrderResult:
     message: str = ""
     filled_quantity: int = 0
     filled_price: Optional[int] = None
+    submission_unknown: bool = False
 
 @dataclass
 class OrderExecutor:
@@ -170,7 +171,8 @@ class OrderExecutor:
             return OrderResult(
                 success=False,
                 order_id=idempotency_key,
-                message=str(e)
+                message=str(e),
+                submission_unknown=True,
             )
 
     def execute_with_retry(
@@ -208,6 +210,9 @@ class OrderExecutor:
             if result.success:
                 order.broker_order_id = result.broker_order_id
                 order.submitted_at = datetime.now(timezone.utc)
+                return result
+
+            if result.submission_unknown:
                 return result
 
             # Exponential backoff

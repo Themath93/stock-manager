@@ -12,7 +12,10 @@ from enum import Enum
 from typing import Any
 import logging
 
-from stock_manager.trading.guardrails import infer_buy_fill_from_balance
+from stock_manager.trading.guardrails import (
+    evaluate_pending_order_recovery,
+    infer_buy_fill_from_balance,
+)
 from stock_manager.trading.models import Order, OrderStatus, Position, PositionStatus
 
 logger = logging.getLogger(__name__)
@@ -241,11 +244,19 @@ def _recover_pending_orders(
 
         if order.side == "buy" and daily_order is not None:
             daily_filled_qty = _extract_daily_filled_qty(daily_order)
-            if daily_filled_qty > 0:
-                order.status = OrderStatus.FILLED
+            recovery_decision = evaluate_pending_order_recovery(
+                order_quantity=order.quantity,
+                filled_quantity=order.filled_quantity,
+                reconciled_filled_quantity=daily_filled_qty,
+            )
+            if recovery_decision.fill_delta > 0:
+                order.filled_quantity = recovery_decision.target_filled_quantity
+                order.status = (
+                    OrderStatus.FILLED
+                    if recovery_decision.status == "filled"
+                    else OrderStatus.PARTIAL_FILL
+                )
                 order.resolution_source = "daily_order"
-                order.unresolved_reason = None
-                order.filled_quantity = max(order.filled_quantity, min(order.quantity, daily_filled_qty))
                 order.filled_avg_price = _to_decimal(
                     daily_order.get("avg_prvs")
                     or daily_order.get("avg_prc")
@@ -254,6 +265,12 @@ def _recover_pending_orders(
                     or daily_order.get("avg_price")
                 )
                 order.filled_at = datetime.now(timezone.utc)
+                if recovery_decision.status == "filled":
+                    order.unresolved_reason = None
+                    continue
+                order.last_reconciled_at = datetime.now(timezone.utc)
+                order.unresolved_reason = "buy_not_filled_yet"
+                report.pending_orders.append(order_id)
                 continue
 
         if order.side == "buy" and broker_position is not None and broker_qty > 0:
@@ -294,12 +311,26 @@ def _recover_pending_orders(
                 continue
             if order.side == "sell":
                 daily_filled_qty = _extract_daily_filled_qty(daily_order)
-                if daily_filled_qty > 0:
-                    order.status = OrderStatus.FILLED
+                recovery_decision = evaluate_pending_order_recovery(
+                    order_quantity=order.quantity,
+                    filled_quantity=order.filled_quantity,
+                    reconciled_filled_quantity=daily_filled_qty,
+                )
+                if recovery_decision.fill_delta > 0:
+                    order.status = (
+                        OrderStatus.FILLED
+                        if recovery_decision.status == "filled"
+                        else OrderStatus.PARTIAL_FILL
+                    )
                     order.resolution_source = "daily_order"
-                    order.unresolved_reason = None
-                    order.filled_quantity = max(order.filled_quantity, min(order.quantity, daily_filled_qty))
+                    order.filled_quantity = recovery_decision.target_filled_quantity
                     order.filled_at = datetime.now(timezone.utc)
+                    if recovery_decision.status == "filled":
+                        order.unresolved_reason = None
+                        continue
+                    order.last_reconciled_at = datetime.now(timezone.utc)
+                    order.unresolved_reason = "sell_not_filled_yet"
+                    report.pending_orders.append(order_id)
                     continue
 
         order.last_reconciled_at = datetime.now(timezone.utc)

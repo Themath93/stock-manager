@@ -16,6 +16,7 @@ from typing import Any, Literal, Optional
 import logging
 import threading
 import time
+from uuid import uuid4
 
 from stock_manager.trading import (
     Order,
@@ -31,11 +32,18 @@ from stock_manager.trading import (
     RateLimiter,
 )
 from stock_manager.trading.guardrails import (
+    EngineOperabilityDecision,
+    OperationalState,
+    evaluate_engine_operability,
+    evaluate_order_permission,
+    evaluate_pending_order_recovery,
+    evaluate_realtime_startup,
     evaluate_runtime_guard,
     evaluate_startup_guard,
     evaluate_websocket_guard,
     infer_buy_fill_from_balance,
     resolve_auto_exit_order,
+    resolve_operational_state,
 )
 from stock_manager.monitoring import PriceMonitor, PositionReconciler
 from stock_manager.persistence import TradingState, save_state_atomic, load_state
@@ -55,6 +63,7 @@ from stock_manager.trading.logging import PipelineJsonLogger
 logger = logging.getLogger(__name__)
 
 _ACTIVE_PENDING_ORDER_STATUSES = {
+    OrderStatus.CREATED,
     OrderStatus.SUBMITTED,
     OrderStatus.PENDING_BROKER,
     OrderStatus.PARTIAL_FILL,
@@ -85,6 +94,9 @@ class EngineStatus:
     rate_limiter_available: int
     state_path: str
     is_paper_trading: bool
+    operational_state: str
+    buying_enabled: bool
+    buy_blocked_reason: str | None
     trading_enabled: bool
     recovery_result: str
     degraded_reason: str | None
@@ -136,8 +148,14 @@ class TradingEngine:
     _reconciler: PositionReconciler = field(init=False)
     _state: TradingState = field(init=False)
     _running: bool = field(default=False, init=False)
+    _buying_enabled: bool = field(default=False, init=False)
+    _buy_blocked_reason: str | None = field(default=None, init=False)
     _trading_enabled: bool = field(default=False, init=False)
     _degraded_reason: str | None = field(default=None, init=False)
+    _operational_state: OperationalState = field(default="blocked", init=False)
+    _last_market_data_success_at: datetime | None = field(default=None, init=False, repr=False)
+    _last_reconciliation_success_at: datetime | None = field(default=None, init=False, repr=False)
+    _last_balance_refresh_success_at: datetime | None = field(default=None, init=False, repr=False)
     _last_recovery_result: RecoveryResult = field(default=RecoveryResult.CLEAN, init=False)
     _daily_kill_switch_active: bool = field(default=False, init=False)
     _daily_kill_switch_triggered_at: datetime | None = field(default=None, init=False)
@@ -254,6 +272,10 @@ class TradingEngine:
 
         logger.info("Starting TradingEngine")
         self._guardrail_notifications_sent.clear()
+        self._clear_buy_guard()
+        self._last_market_data_success_at = None
+        self._last_reconciliation_success_at = None
+        self._last_balance_refresh_success_at = None
 
         # Load persisted state
         try:
@@ -271,6 +293,7 @@ class TradingEngine:
             logger.warning(f"Failed to load state: {e}. Starting with empty state.")
 
         self._restore_risk_controls()
+        self._seed_executor_idempotency_keys()
 
         # Run preflight checks
         preflight_errors = self._run_preflight_checks()
@@ -315,25 +338,42 @@ class TradingEngine:
             },
         )
 
-        if startup_guard.should_block_trading:
-            self._trading_enabled = False
-            self._degraded_reason = startup_guard.degraded_reason
-        else:
-            self._trading_enabled = True
+        self._note_reconciliation_success()
+        self._set_operational_state(
+            operational_state=startup_guard.operational_state,
+            degraded_reason=startup_guard.degraded_reason,
+        )
+
+        if self._daily_kill_switch_active:
+            self._latch_trading_guard(degraded_reason="daily_loss_killswitch")
 
         # Update state after reconciliation
         self._update_state()
         self._persist_state()
 
-        # Start background monitoring threads
-        symbols = list(self._position_manager.get_all_positions().keys())
-        quote_stream_active = self._start_realtime_streams(symbols)
-        if symbols and not quote_stream_active:
-            self._price_monitor.start(symbols, self._on_price_update)
-        self._reconciler.start()
-
         self._running = True
         self._start_monotonic = time.monotonic()
+
+        # Start background monitoring threads
+        symbols = list(self._position_manager.get_all_positions().keys())
+        realtime_startup = self._start_realtime_streams(symbols)
+        if symbols and not realtime_startup.quote_stream_active:
+            self._ensure_polling_fallback(symbols)
+        if realtime_startup.should_block_trading:
+            self._latch_trading_guard(degraded_reason=realtime_startup.degraded_reason)
+            self._notify_guardrail_once(
+                key="execution_stream_unavailable",
+                event_type="error.execution_stream_unavailable",
+                level=NotificationLevel.CRITICAL,
+                title="Execution Stream Unavailable",
+                error_type="ExecutionStreamUnavailable",
+                error_category="broker_stream",
+                operation="websocket_execution_stream_startup",
+                recoverable=bool(self.is_paper_trading or self.config.allow_unsafe_trading),
+                error_message="WebSocket execution stream unavailable during startup.",
+                is_paper_trading=self.is_paper_trading,
+            )
+        self._reconciler.start()
 
         self._start_strategy_orchestration()
         logger.info("TradingEngine started successfully")
@@ -346,6 +386,9 @@ class TradingEngine:
             position_count=len(self._position_manager.get_all_positions()),
             recovery_result=recovery_result.value,
             is_paper_trading=self.is_paper_trading,
+            operational_state=self._operational_state,
+            buying_enabled=self._buying_enabled,
+            buy_blocked_reason=self._buy_blocked_reason,
             trading_enabled=self._trading_enabled,
             degraded_reason=self._degraded_reason,
         )
@@ -396,7 +439,10 @@ class TradingEngine:
         self._persist_state()
 
         self._running = False
-        self._trading_enabled = False
+        self._set_operational_state(
+            operational_state="blocked",
+            degraded_reason=self._degraded_reason,
+        )
         logger.info("TradingEngine stopped")
 
         # Notify engine stopped
@@ -443,21 +489,14 @@ class TradingEngine:
         """
         symbol = symbol.strip().upper()
         self._ensure_running()
-        self._ensure_trading_allowed()
 
-        if self._has_pending_order(symbol, side="buy"):
-            reason = f"Pending BUY order already exists for {symbol}"
-            self._notify(
-                "order.rejected",
-                NotificationLevel.WARNING,
-                "Order Rejected",
-                symbol=symbol,
-                side="BUY",
-                quantity=quantity,
-                price=price,
-                reason=reason,
-            )
-            return OrderResult(success=False, order_id="", message=reason)
+        rejection = self._maybe_reject_buy(
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+        )
+        if rejection is not None:
+            return rejection
 
         # Market hours check - block buys outside trading hours
         if self._should_enforce_market_hours() and not self._is_market_open():
@@ -485,12 +524,23 @@ class TradingEngine:
             },
         )
 
-        if self._daily_kill_switch_active:
-            return self._build_kill_switch_rejection(symbol=symbol, quantity=quantity, price=price)
+        if not self._ensure_fresh_runtime_guardrails_for_buy(
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+        ):
+            return self._build_buy_guard_rejection(symbol=symbol, quantity=quantity, price=price)
 
-        self._refresh_risk_state(order_price=price, order_quantity=quantity)
-        if self._daily_kill_switch_active:
-            return self._build_kill_switch_rejection(symbol=symbol, quantity=quantity, price=price)
+        if not self._refresh_risk_state(order_price=price, order_quantity=quantity, for_buy=True):
+            return self._build_buy_guard_rejection(symbol=symbol, quantity=quantity, price=price)
+
+        rejection = self._maybe_reject_buy(
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+        )
+        if rejection is not None:
+            return rejection
 
         risk_result = self._risk_manager.validate_order(
             symbol=symbol,
@@ -525,27 +575,31 @@ class TradingEngine:
                 )
                 # Continue with order despite risk warning
 
-        order_quantity = risk_result.adjusted_quantity or quantity
+        order_quantity = (
+            risk_result.adjusted_quantity
+            if risk_result.adjusted_quantity is not None
+            else quantity
+        )
 
-        result = self._executor.buy(symbol=symbol, quantity=order_quantity, price=price)
+        current_position = self._position_manager.get_position(symbol)
+        with self._state_lock:
+            order = self._create_order_intent(
+                symbol=symbol,
+                side="buy",
+                quantity=order_quantity,
+                price=price,
+                origin=origin,
+                requested_stop_loss=stop_loss,
+                requested_take_profit=take_profit,
+                position_quantity_at_submit=current_position.quantity if current_position else 0,
+            )
+            self._state.pending_orders[order.order_id] = order
+            self._update_state_unlocked()
+        self._persist_state()
+
+        result = self._submit_order_intent(order)
 
         if result.success:
-            current_position = self._position_manager.get_position(symbol)
-            with self._state_lock:
-                order = self._register_submitted_order(
-                    symbol=symbol,
-                    side="buy",
-                    quantity=order_quantity,
-                    price=price,
-                    broker_order_id=result.broker_order_id,
-                    origin=origin,
-                    internal_order_id=result.order_id or None,
-                    requested_stop_loss=stop_loss,
-                    requested_take_profit=take_profit,
-                    position_quantity_at_submit=current_position.quantity if current_position else 0,
-                )
-                self._update_state_unlocked()
-            self._persist_state()
             self._log_runtime_event(
                 "order_state_transition",
                 order_id=order.order_id,
@@ -564,6 +618,19 @@ class TradingEngine:
                 price=price,
                 broker_order_id=result.broker_order_id,
                 order_id=order.order_id,
+            )
+        elif getattr(result, "submission_unknown", False) is True:
+            self._notify(
+                "order.unresolved",
+                NotificationLevel.WARNING,
+                "Order Unresolved",
+                symbol=symbol,
+                side="BUY",
+                quantity=order_quantity,
+                price=price,
+                broker_order_id=order.broker_order_id,
+                order_id=order.order_id,
+                reason="submission_result_unknown",
             )
         else:
             self._notify(
@@ -603,60 +670,40 @@ class TradingEngine:
         """
         symbol = symbol.strip().upper()
         self._ensure_running()
-        self._ensure_trading_allowed()
 
         position = self._position_manager.get_position(symbol)
-        if position is None or position.quantity <= 0:
-            reason = f"No open position for {symbol}"
-            self._notify(
-                "order.rejected",
-                NotificationLevel.WARNING,
-                "Order Rejected",
-                symbol=symbol,
-                side="SELL",
-                quantity=quantity,
-                price=price,
-                reason=reason,
-            )
-            return OrderResult(success=False, order_id="", message=reason)
-
-        if self._has_pending_order(symbol, side="sell"):
-            reason = f"Pending SELL order already exists for {symbol}"
-            self._notify(
-                "order.rejected",
-                NotificationLevel.WARNING,
-                "Order Rejected",
-                symbol=symbol,
-                side="SELL",
-                quantity=quantity,
-                price=price,
-                reason=reason,
-            )
-            return OrderResult(success=False, order_id="", message=reason)
+        rejection = self._maybe_reject_sell(
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+            position_quantity=position.quantity if position is not None else 0,
+        )
+        if rejection is not None:
+            return rejection
+        assert position is not None
 
         logger.info(
             f"Sell order requested: {symbol} qty={quantity} price={price}",
             extra={"symbol": symbol, "quantity": quantity, "price": price},
         )
 
-        # Execute order through executor
-        result = self._executor.sell(symbol=symbol, quantity=quantity, price=price)
+        with self._state_lock:
+            order = self._create_order_intent(
+                symbol=symbol,
+                side="sell",
+                quantity=quantity,
+                price=price,
+                origin=origin,
+                exit_reason=exit_reason,
+                position_quantity_at_submit=position.quantity,
+            )
+            self._state.pending_orders[order.order_id] = order
+            self._update_state_unlocked()
+        self._persist_state()
+
+        result = self._submit_order_intent(order)
 
         if result.success:
-            with self._state_lock:
-                order = self._register_submitted_order(
-                    symbol=symbol,
-                    side="sell",
-                    quantity=quantity,
-                    price=price,
-                    broker_order_id=result.broker_order_id,
-                    origin=origin,
-                    internal_order_id=result.order_id or None,
-                    exit_reason=exit_reason,
-                    position_quantity_at_submit=position.quantity,
-                )
-                self._update_state_unlocked()
-            self._persist_state()
             self._log_runtime_event(
                 "order_state_transition",
                 order_id=order.order_id,
@@ -676,6 +723,20 @@ class TradingEngine:
                 price=price,
                 broker_order_id=result.broker_order_id,
                 order_id=order.order_id,
+                exit_reason=exit_reason,
+            )
+        elif getattr(result, "submission_unknown", False) is True:
+            self._notify(
+                "order.unresolved",
+                NotificationLevel.WARNING,
+                "Order Unresolved",
+                symbol=symbol,
+                side="SELL",
+                quantity=quantity,
+                price=price,
+                broker_order_id=order.broker_order_id,
+                order_id=order.order_id,
+                reason="submission_result_unknown",
                 exit_reason=exit_reason,
             )
         else:
@@ -802,6 +863,7 @@ class TradingEngine:
         if isinstance(client_rate_available, int):
             rate_limiter_available = client_rate_available
 
+        operability = self.get_operability()
         return EngineStatus(
             running=self._running,
             position_count=len(self._position_manager.get_all_positions()),
@@ -810,6 +872,9 @@ class TradingEngine:
             rate_limiter_available=rate_limiter_available,
             state_path=str(self.state_path),
             is_paper_trading=self.is_paper_trading,
+            operational_state=operability.operational_state,
+            buying_enabled=self._buying_enabled,
+            buy_blocked_reason=self._buy_blocked_reason,
             trading_enabled=self._trading_enabled,
             recovery_result=self._last_recovery_result.value,
             degraded_reason=self._degraded_reason,
@@ -825,24 +890,37 @@ class TradingEngine:
         Returns:
             True if engine is running and all components are healthy
         """
-        if not self._running:
-            return False
+        return self.get_operability().is_healthy
 
-        if self._rate_limiter.available <= 0:
-            return False
-
-        has_positions = bool(self._position_manager.get_all_positions())
-        if not has_positions:
-            return True
-
-        if self._price_monitor.is_running:
-            return True
+    def get_operability(self) -> EngineOperabilityDecision:
+        """Return explicit health/readiness/session-liveness signals."""
+        rate_limiter_available = self._rate_limiter.available
+        client_rate_available = getattr(self.client, "request_rate_limiter_available", None)
+        if isinstance(client_rate_available, int):
+            rate_limiter_available = client_rate_available
 
         adapter = self._broker_adapter
-        if adapter is not None and bool(getattr(self.config, "websocket_monitoring_enabled", False)):
-            return bool(getattr(adapter, "websocket_connected", False))
-
-        return False
+        return evaluate_engine_operability(
+            running=self._running,
+            rate_limiter_available=rate_limiter_available,
+            reconciliation_fresh=not self._is_timestamp_stale(
+                self._last_reconciliation_success_at,
+                self._effective_reconciliation_staleness_sec(),
+            ),
+            has_positions=bool(self._position_manager.get_all_positions()),
+            price_monitor_running=self._price_monitor.is_running,
+            market_data_fresh=not self._is_timestamp_stale(
+                self._last_market_data_success_at,
+                self._effective_quote_staleness_sec(),
+            ),
+            websocket_monitoring_enabled=bool(
+                getattr(self.config, "websocket_monitoring_enabled", False)
+            ),
+            websocket_connected=bool(getattr(adapter, "websocket_connected", False))
+            if adapter is not None
+            else False,
+            operational_state=self._operational_state,
+        )
 
     # Internal helper methods
 
@@ -853,6 +931,7 @@ class TradingEngine:
             symbol: Stock symbol code
             price: Current price
         """
+        self._note_market_data_success()
         self._position_manager.update_price(symbol, price)
 
     def _resolve_broker_adapter(self) -> Any | None:
@@ -908,6 +987,7 @@ class TradingEngine:
         if not normalized:
             return
 
+        self._note_market_data_success()
         if not self._price_monitor.is_running:
             self._price_monitor.start(normalized, self._on_price_update)
             return
@@ -929,34 +1009,308 @@ class TradingEngine:
         self._guardrail_notifications_sent.add(key)
         self._notify(event_type, level, title, **details)
 
-    def _latch_trading_guard(self, *, degraded_reason: str | None) -> None:
-        self._trading_enabled = False
-        if degraded_reason and self._degraded_reason is None:
-            self._degraded_reason = degraded_reason
+    def _set_operational_state(
+        self,
+        *,
+        operational_state: OperationalState,
+        degraded_reason: str | None,
+    ) -> None:
+        self._operational_state = operational_state
+        self._buying_enabled = operational_state == "normal"
+        self._buy_blocked_reason = None if self._buying_enabled else degraded_reason
+        self._trading_enabled = self._buying_enabled
+        self._degraded_reason = None if operational_state == "normal" else degraded_reason
 
-    def _start_realtime_streams(self, symbols: list[str]) -> bool:
+    def _clear_buy_guard(self) -> None:
+        self._set_operational_state(operational_state="normal", degraded_reason=None)
+
+    def _seed_executor_idempotency_keys(self) -> None:
+        keys = {
+            order.idempotency_key
+            for order in self._state.pending_orders.values()
+            if isinstance(order, Order)
+            and order.status in {
+                OrderStatus.SUBMITTED,
+                OrderStatus.PENDING_BROKER,
+                OrderStatus.PARTIAL_FILL,
+            }
+            and order.idempotency_key
+        }
+        self._executor._submitted_keys.update(keys)
+
+    def _note_market_data_success(self) -> None:
+        self._last_market_data_success_at = datetime.now(timezone.utc)
+
+    def _note_reconciliation_success(self) -> None:
+        self._last_reconciliation_success_at = datetime.now(timezone.utc)
+
+    def _note_balance_refresh_success(self) -> None:
+        self._last_balance_refresh_success_at = datetime.now(timezone.utc)
+
+    def _effective_quote_staleness_sec(self) -> float:
+        configured = getattr(self.config, "quote_staleness_sec", None)
+        if configured is not None:
+            return float(configured)
+        polling_interval = float(getattr(self.config, "polling_interval_sec", 2.0) or 2.0)
+        return max(3 * polling_interval, 15.0)
+
+    def _effective_reconciliation_staleness_sec(self) -> float:
+        return float(getattr(self.config, "reconciliation_staleness_sec", 180.0))
+
+    @staticmethod
+    def _is_timestamp_stale(timestamp: datetime | None, threshold_sec: float) -> bool:
+        if threshold_sec <= 0:
+            return False
+        if timestamp is None:
+            return True
+        return (datetime.now(timezone.utc) - timestamp).total_seconds() > threshold_sec
+
+    def _is_monitoring_path_active(self) -> bool:
+        if self._price_monitor.is_running:
+            return True
+
         adapter = self._broker_adapter
-        if adapter is None:
+        if adapter is not None and bool(getattr(self.config, "websocket_monitoring_enabled", False)):
+            return bool(getattr(adapter, "websocket_connected", False))
+
+        return False
+
+    def _should_bypass_runtime_buy_guard(self) -> bool:
+        return self.is_paper_trading or self.config.allow_unsafe_trading
+
+    def _current_buy_block_reason(self) -> str | None:
+        if self._daily_kill_switch_active:
+            return "daily_loss_killswitch"
+        return self._buy_blocked_reason or self._degraded_reason
+
+    @staticmethod
+    def _order_rejection_reason(
+        *,
+        symbol: str,
+        side: Literal["buy", "sell"],
+        decision: Any,
+        degraded_reason: str | None,
+    ) -> str:
+        reject_code = getattr(decision, "reject_code", None)
+        if reject_code == "pending_same_side":
+            return f"Pending {side.upper()} order already exists for {symbol}"
+        if reject_code == "no_open_position":
+            return f"No open position for {symbol}"
+        if reject_code == "exceeds_position":
+            return "sell_quantity_exceeds_position"
+        if reject_code == "invalid_quantity":
+            return "invalid_order_quantity"
+        if reject_code == "trading_disabled":
+            return degraded_reason or "trading_disabled"
+        return degraded_reason or "trading_disabled"
+
+    def _reject_order(
+        self,
+        *,
+        symbol: str,
+        side: Literal["buy", "sell"],
+        quantity: int,
+        price: int | None,
+        reason: str,
+    ) -> OrderResult:
+        self._notify(
+            "order.rejected",
+            NotificationLevel.WARNING,
+            "Order Rejected",
+            symbol=symbol,
+            side=side.upper(),
+            quantity=quantity,
+            price=price,
+            reason=reason,
+        )
+        return OrderResult(success=False, order_id="", message=reason)
+
+    def _build_buy_guard_rejection(self, *, symbol: str, quantity: int, price: int) -> OrderResult:
+        reason = self._current_buy_block_reason() or "trading_disabled"
+        return self._reject_order(
+            symbol=symbol,
+            side="buy",
+            quantity=quantity,
+            price=price,
+            reason=reason,
+        )
+
+    def _maybe_reject_buy(self, *, symbol: str, quantity: int, price: int) -> OrderResult | None:
+        decision = evaluate_order_permission(
+            operational_state=self._operational_state,
+            side="buy",
+            position_quantity=0,
+            requested_quantity=quantity,
+            has_pending_same_side=self._has_pending_order(symbol, side="buy"),
+        )
+        if decision.allowed and not self._daily_kill_switch_active:
+            return None
+        reason = self._order_rejection_reason(
+            symbol=symbol,
+            side="buy",
+            decision=decision,
+            degraded_reason=self._current_buy_block_reason(),
+        )
+        return self._reject_order(
+            symbol=symbol,
+            side="buy",
+            quantity=quantity,
+            price=price,
+            reason=reason,
+        )
+
+    def _maybe_reject_sell(
+        self,
+        *,
+        symbol: str,
+        quantity: int,
+        price: int | None,
+        position_quantity: int,
+    ) -> OrderResult | None:
+        decision = evaluate_order_permission(
+            operational_state=self._operational_state,
+            side="sell",
+            position_quantity=position_quantity,
+            requested_quantity=quantity,
+            has_pending_same_side=self._has_pending_order(symbol, side="sell"),
+        )
+        if decision.allowed:
+            return None
+        reason = self._order_rejection_reason(
+            symbol=symbol,
+            side="sell",
+            decision=decision,
+            degraded_reason=self._degraded_reason,
+        )
+        return self._reject_order(
+            symbol=symbol,
+            side="sell",
+            quantity=quantity,
+            price=price,
+            reason=reason,
+        )
+
+    def _ensure_fresh_runtime_guardrails_for_buy(
+        self,
+        *,
+        symbol: str,
+        quantity: int,
+        price: int,
+    ) -> bool:
+        if self._should_bypass_runtime_buy_guard():
+            return True
+
+        if self._is_timestamp_stale(
+            self._last_reconciliation_success_at,
+            self._effective_reconciliation_staleness_sec(),
+        ):
+            self._latch_trading_guard(degraded_reason="reconciliation_stale")
+            self._notify_guardrail_once(
+                key="reconciliation_stale",
+                event_type="error.reconciliation_stale",
+                level=NotificationLevel.CRITICAL,
+                title="Reconciliation Stale",
+                error_type="ReconciliationStale",
+                error_category="broker_state",
+                operation="runtime_reconciliation",
+                recoverable=False,
+                error_message="Runtime reconciliation freshness exceeded threshold.",
+                threshold_sec=self._effective_reconciliation_staleness_sec(),
+                is_paper_trading=self.is_paper_trading,
+            )
             return False
 
+        if not self._position_manager.get_all_positions():
+            return True
+
+        if self._is_timestamp_stale(
+            self._last_market_data_success_at,
+            self._effective_quote_staleness_sec(),
+        ):
+            self._latch_trading_guard(degraded_reason="market_data_stale")
+            self._notify_guardrail_once(
+                key="market_data_stale",
+                event_type="error.market_data_stale",
+                level=NotificationLevel.CRITICAL,
+                title="Market Data Stale",
+                error_type="MarketDataStale",
+                error_category="market_data",
+                operation="price_monitoring",
+                recoverable=False,
+                error_message="Market data freshness exceeded threshold.",
+                threshold_sec=self._effective_quote_staleness_sec(),
+                symbol=symbol,
+                quantity=quantity,
+                price=price,
+                is_paper_trading=self.is_paper_trading,
+            )
+            return False
+
+        return True
+
+    def _latch_trading_guard(self, *, degraded_reason: str | None) -> None:
+        candidate_state = resolve_operational_state(degraded_reason=degraded_reason)
+        state_rank = {"normal": 0, "degraded_reduce_only": 1, "blocked": 2}
+        current_rank = state_rank[self._operational_state]
+        candidate_rank = state_rank[candidate_state]
+        if candidate_rank < current_rank:
+            return
+
+        next_reason = self._degraded_reason
+        if candidate_rank > current_rank:
+            next_reason = degraded_reason
+        elif degraded_reason and self._degraded_reason in (None, "daily_loss_killswitch"):
+            next_reason = degraded_reason
+
+        self._set_operational_state(
+            operational_state=candidate_state,
+            degraded_reason=next_reason,
+        )
+
+    def _start_realtime_streams(self, symbols: list[str]) -> Any:
+        adapter = self._broker_adapter
+        websocket_monitoring_enabled = bool(getattr(self.config, "websocket_monitoring_enabled", False))
+        websocket_execution_notice_enabled = bool(
+            getattr(self.config, "websocket_execution_notice_enabled", False)
+        )
         quote_stream_active = False
-        if bool(getattr(self.config, "websocket_monitoring_enabled", False)) and symbols:
+        execution_stream_active = not websocket_execution_notice_enabled
+        if adapter is None:
+            return evaluate_realtime_startup(
+                is_paper_trading=self.is_paper_trading,
+                allow_unsafe_trading=self.config.allow_unsafe_trading,
+                websocket_monitoring_enabled=websocket_monitoring_enabled,
+                websocket_execution_notice_enabled=websocket_execution_notice_enabled,
+                quote_subscription_succeeded=False,
+                execution_subscription_succeeded=execution_stream_active,
+            )
+
+        if websocket_monitoring_enabled and symbols:
             try:
                 adapter.subscribe_quotes(symbols=symbols, callback=self._on_websocket_quote)
                 quote_stream_active = True
+                self._note_market_data_success()
             except Exception:
                 logger.warning(
                     "WebSocket quote stream unavailable; falling back to polling",
                     exc_info=True,
                 )
 
-        if bool(getattr(self.config, "websocket_execution_notice_enabled", False)):
+        if websocket_execution_notice_enabled:
             try:
                 adapter.subscribe_executions(callback=self._on_websocket_execution)
+                execution_stream_active = True
             except Exception:
                 logger.warning("WebSocket execution stream unavailable", exc_info=True)
 
-        return quote_stream_active
+        return evaluate_realtime_startup(
+            is_paper_trading=self.is_paper_trading,
+            allow_unsafe_trading=self.config.allow_unsafe_trading,
+            websocket_monitoring_enabled=websocket_monitoring_enabled,
+            websocket_execution_notice_enabled=websocket_execution_notice_enabled,
+            quote_subscription_succeeded=quote_stream_active,
+            execution_subscription_succeeded=execution_stream_active,
+        )
 
     def _stop_realtime_streams(self) -> None:
         adapter = self._broker_adapter
@@ -978,6 +1332,7 @@ class TradingEngine:
         ):
             try:
                 adapter.subscribe_quotes(symbols=[normalized], callback=self._on_websocket_quote)
+                self._note_market_data_success()
                 return
             except Exception:
                 logger.warning(
@@ -986,6 +1341,7 @@ class TradingEngine:
                 )
 
         if not self._price_monitor.is_running:
+            self._note_market_data_success()
             self._price_monitor.start([], self._on_price_update)
         self._price_monitor.add_symbol(normalized)
 
@@ -1386,24 +1742,21 @@ class TradingEngine:
             reasons = [str(order.unresolved_reason) for order in unresolved if order.unresolved_reason]
             return len(unresolved), (reasons[0] if reasons else None), reasons[:3]
 
-    def _register_submitted_order(
+    def _create_order_intent(
         self,
         *,
         symbol: str,
         side: str,
         quantity: int,
         price: int | None,
-        broker_order_id: str | None,
         origin: str,
-        internal_order_id: str | None = None,
         requested_stop_loss: int | None = None,
         requested_take_profit: int | None = None,
         exit_reason: str | None = None,
         position_quantity_at_submit: int | None = None,
     ) -> Order:
-        now = datetime.now(timezone.utc)
-        order_id = self._coerce_optional_text(internal_order_id) or str(time.time_ns())
-        order = Order(
+        order_id = str(uuid4())
+        return Order(
             order_id=order_id,
             idempotency_key=order_id,
             symbol=symbol,
@@ -1411,18 +1764,78 @@ class TradingEngine:
             quantity=quantity,
             price=price,
             order_type="market" if price is None else "limit",
-            status=OrderStatus.SUBMITTED,
-            broker_order_id=self._coerce_optional_text(broker_order_id),
+            status=OrderStatus.CREATED,
             origin=origin,
             requested_stop_loss=requested_stop_loss,
             requested_take_profit=requested_take_profit,
             exit_reason=exit_reason,
             position_quantity_at_submit=position_quantity_at_submit,
-            submitted_at=now,
-            last_event_at=now,
+            last_event_at=datetime.now(timezone.utc),
         )
-        self._state.pending_orders[order.order_id] = order
-        return order
+
+    def _submit_order_intent(self, order: Order) -> OrderResult:
+        if order.side == "buy":
+            result = self._executor.buy(
+                symbol=order.symbol,
+                quantity=order.quantity,
+                price=order.price,
+                idempotency_key=order.idempotency_key,
+            )
+        else:
+            result = self._executor.sell(
+                symbol=order.symbol,
+                quantity=order.quantity,
+                price=order.price,
+                idempotency_key=order.idempotency_key,
+            )
+
+        now = datetime.now(timezone.utc)
+        with self._state_lock:
+            persisted_order = self._state.pending_orders.get(order.order_id)
+            if not isinstance(persisted_order, Order):
+                persisted_order = order
+                self._state.pending_orders[order.order_id] = persisted_order
+
+            persisted_order.submission_attempts += 1
+            persisted_order.last_event_at = now
+
+            if result.success:
+                persisted_order.status = OrderStatus.SUBMITTED
+                persisted_order.broker_order_id = self._coerce_optional_text(result.broker_order_id)
+                persisted_order.submitted_at = now
+                persisted_order.unresolved_reason = None
+            elif getattr(result, "submission_unknown", False) is True:
+                persisted_order.status = OrderStatus.PENDING_BROKER
+                persisted_order.submitted_at = persisted_order.submitted_at or now
+                persisted_order.unresolved_reason = "submission_result_unknown"
+                if not self._should_bypass_runtime_buy_guard():
+                    self._latch_trading_guard(degraded_reason="submission_result_unknown")
+                    self._notify_guardrail_once(
+                        key="submission_result_unknown",
+                        event_type="error.submission_result_unknown",
+                        level=NotificationLevel.CRITICAL,
+                        title="Order Submission Unknown",
+                        error_type="OrderSubmissionUnknown",
+                        error_category="broker_order",
+                        operation="order_submission",
+                        recoverable=False,
+                        error_message="Broker submission result is unknown after transport failure.",
+                        symbol=order.symbol,
+                        side=order.side.upper(),
+                        quantity=order.quantity,
+                        price=order.price,
+                        is_paper_trading=self.is_paper_trading,
+                    )
+            else:
+                persisted_order.status = OrderStatus.REJECTED
+                persisted_order.unresolved_reason = None
+                self._state.pending_orders.pop(order.order_id, None)
+
+            self._update_state_unlocked()
+
+        self._persist_state()
+        result.order_id = order.order_id
+        return result
 
     def _build_execution_key(self, event: Any) -> str:
         broker_order_id = getattr(event, "broker_order_id", None) or getattr(event, "order_id", None)
@@ -2047,13 +2460,16 @@ class TradingEngine:
 
             if order.side == "buy" and daily_order is not None:
                 daily_filled = self._extract_daily_filled_qty(daily_order)
-                inferred_target = min(order.quantity, daily_filled)
-                delta = max(0, inferred_target - order.filled_quantity)
-                if delta > 0:
+                recovery_decision = evaluate_pending_order_recovery(
+                    order_quantity=order.quantity,
+                    filled_quantity=order.filled_quantity,
+                    reconciled_filled_quantity=daily_filled,
+                )
+                if recovery_decision.fill_delta > 0:
                     self._apply_buy_fill(
                         order_key=order_key,
                         order=order,
-                        filled_quantity=delta,
+                        filled_quantity=recovery_decision.fill_delta,
                         fill_price=(
                             self._extract_daily_fill_price(daily_order)
                             or (broker_position.entry_price if broker_position is not None else None)
@@ -2062,6 +2478,7 @@ class TradingEngine:
                         source="daily_order",
                         notifications=notifications,
                     )
+                if recovery_decision.status == "filled":
                     order.unresolved_reason = None
                 else:
                     self._mark_order_unresolved(
@@ -2112,13 +2529,16 @@ class TradingEngine:
                 )
                 if daily_order is not None:
                     daily_filled = self._extract_daily_filled_qty(daily_order)
-                    inferred_target = min(order.quantity, daily_filled)
-                    delta = max(0, inferred_target - order.filled_quantity)
-                    if delta > 0:
+                    recovery_decision = evaluate_pending_order_recovery(
+                        order_quantity=order.quantity,
+                        filled_quantity=order.filled_quantity,
+                        reconciled_filled_quantity=daily_filled,
+                    )
+                    if recovery_decision.fill_delta > 0:
                         self._apply_sell_fill(
                             order_key=order_key,
                             order=order,
-                            filled_quantity=delta,
+                            filled_quantity=recovery_decision.fill_delta,
                             fill_price=(
                                 self._extract_daily_fill_price(daily_order)
                                 or (
@@ -2131,14 +2551,15 @@ class TradingEngine:
                             position_snapshot=local_snapshot,
                             notifications=notifications,
                         )
+                    if recovery_decision.status == "filled":
                         order.unresolved_reason = None
-                        continue
-                    self._mark_order_unresolved(
-                        order=order,
-                        reason=self._daily_order_status_text(daily_order) or "sell_not_filled_yet",
-                        notifications=notifications,
-                        raw_payload=daily_order,
-                    )
+                    else:
+                        self._mark_order_unresolved(
+                            order=order,
+                            reason=self._daily_order_status_text(daily_order) or "sell_not_filled_yet",
+                            notifications=notifications,
+                            raw_payload=daily_order,
+                        )
                     continue
 
                 if broker_position is None and daily_order is None:
@@ -2216,6 +2637,7 @@ class TradingEngine:
     def _on_reconciliation_cycle(self, result: Any) -> None:
         notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]] = []
         should_persist = False
+        self._note_reconciliation_success()
         try:
             with self._state_lock:
                 self._sync_pending_orders_from_broker(result, notifications)
@@ -2284,9 +2706,6 @@ class TradingEngine:
             except Exception:
                 self._daily_kill_switch_triggered_at = None
 
-        if self._daily_kill_switch_active and self._degraded_reason is None:
-            self._degraded_reason = "daily_loss_killswitch"
-
     def _export_risk_controls(self) -> dict[str, Any]:
         return {
             "daily_kill_switch_active": self._daily_kill_switch_active,
@@ -2305,22 +2724,6 @@ class TradingEngine:
             "daily_unrealized_pnl": str(self._daily_unrealized_pnl),
         }
 
-    def _build_kill_switch_rejection(
-        self, *, symbol: str, quantity: int, price: int
-    ) -> OrderResult:
-        reason = "daily_loss_killswitch"
-        self._notify(
-            "order.rejected",
-            NotificationLevel.WARNING,
-            "Order Rejected",
-            symbol=symbol,
-            side="BUY",
-            quantity=quantity,
-            price=price,
-            reason=reason,
-        )
-        return OrderResult(success=False, order_id="", message=reason)
-
     def _rollover_daily_metrics_if_needed(self, *, now: datetime) -> None:
         current_day = now.date().isoformat()
         if self._daily_pnl_date == current_day:
@@ -2335,7 +2738,7 @@ class TradingEngine:
         self._daily_kill_switch_active = False
         self._daily_kill_switch_triggered_at = None
         if self._degraded_reason == "daily_loss_killswitch":
-            self._degraded_reason = None
+            self._set_operational_state(operational_state="normal", degraded_reason=None)
 
         if had_active_kill_switch:
             self._notify(
@@ -2368,7 +2771,7 @@ class TradingEngine:
 
         self._daily_kill_switch_active = True
         self._daily_kill_switch_triggered_at = datetime.now(timezone.utc)
-        self._degraded_reason = "daily_loss_killswitch"
+        self._latch_trading_guard(degraded_reason="daily_loss_killswitch")
         self._notify(
             "risk.killswitch.triggered",
             NotificationLevel.CRITICAL,
@@ -2562,6 +2965,7 @@ class TradingEngine:
                     "tot_evlu_amt", "0"
                 )
                 self._risk_manager.portfolio_value = Decimal(total)
+                self._note_balance_refresh_success()
                 if self._risk_manager.portfolio_value <= 0:
                     errors.append("Portfolio value is 0 or negative")
         except Exception as e:
@@ -2609,11 +3013,6 @@ class TradingEngine:
         """Raise RuntimeError if engine is not running."""
         if not self._running:
             raise RuntimeError("Engine is not running. Call start() first.")
-
-    def _ensure_trading_allowed(self) -> None:
-        if not self._trading_enabled:
-            reason = self._degraded_reason or "trading_disabled"
-            raise RuntimeError(f"Trading is disabled: {reason}")
 
     def _coerce_recovery_result(self, result: Any) -> RecoveryResult:
         if isinstance(result, RecoveryResult):
@@ -2701,6 +3100,9 @@ class TradingEngine:
             )
             return
 
+        if self._running and not self._buying_enabled:
+            return
+
         symbols = self._normalize_symbol_entries(getattr(self.config, "strategy_symbols", ()))
         auto_discover = bool(getattr(self.config, "strategy_auto_discover", False))
         notify_discovery = False
@@ -2771,8 +3173,9 @@ class TradingEngine:
 
                 try:
                     price = self._get_current_price(symbol)
-                    self.buy(symbol, qty, price, origin="strategy")
-                    submitted += 1
+                    result = self.buy(symbol, qty, price, origin="strategy")
+                    if result.success:
+                        submitted += 1
                 except Exception as e:
                     logger.error("Buy submission failed", extra={"symbol": symbol}, exc_info=True)
                     self._notify(
@@ -2796,7 +3199,9 @@ class TradingEngine:
             self._auto_exit_last_trigger[key] = now
             return True
 
-    def _refresh_risk_state(self, *, order_price: int, order_quantity: int) -> None:
+    def _refresh_risk_state(
+        self, *, order_price: int, order_quantity: int, for_buy: bool = False
+    ) -> bool:
         self._rollover_daily_metrics_if_needed(now=datetime.now(timezone.utc))
 
         position_count = self._position_manager.position_count
@@ -2813,11 +3218,45 @@ class TradingEngine:
             balance_response = self._inquire_balance()
             output2 = balance_response.get("output2")
             if isinstance(output2, list) and output2:
-                portfolio_value = Decimal(str(output2[0].get("tot_evlu_amt", "0")))
+                portfolio_value = Decimal(
+                    str(output2[0].get("tot_evlu_amt") or output2[0].get("dnca_tot_amt") or "0")
+                )
+                if portfolio_value > 0:
+                    self._note_balance_refresh_success()
         except Exception:
             logger.debug("Failed to refresh risk state from broker balance", exc_info=True)
+            if for_buy and not self._should_bypass_runtime_buy_guard():
+                self._latch_trading_guard(degraded_reason="runtime_balance_unavailable")
+                self._notify_guardrail_once(
+                    key="runtime_balance_unavailable",
+                    event_type="error.runtime_balance_unavailable",
+                    level=NotificationLevel.CRITICAL,
+                    title="Runtime Balance Unavailable",
+                    error_type="RuntimeBalanceUnavailable",
+                    error_category="broker_state",
+                    operation="balance_refresh",
+                    recoverable=False,
+                    error_message="Broker balance refresh failed during buy precheck.",
+                    is_paper_trading=self.is_paper_trading,
+                )
+                return False
 
         if portfolio_value <= 0:
+            if for_buy and not self._should_bypass_runtime_buy_guard():
+                self._latch_trading_guard(degraded_reason="runtime_balance_unavailable")
+                self._notify_guardrail_once(
+                    key="runtime_balance_unavailable",
+                    event_type="error.runtime_balance_unavailable",
+                    level=NotificationLevel.CRITICAL,
+                    title="Runtime Balance Unavailable",
+                    error_type="RuntimeBalanceUnavailable",
+                    error_category="broker_state",
+                    operation="balance_refresh",
+                    recoverable=False,
+                    error_message="Broker balance refresh returned no usable portfolio value.",
+                    is_paper_trading=self.is_paper_trading,
+                )
+                return False
             order_value = Decimal(str(order_price)) * Decimal(order_quantity)
             max_position_size_pct = self._risk_manager.limits.max_position_size_pct
             if max_position_size_pct > 0:
@@ -2835,6 +3274,7 @@ class TradingEngine:
             current_exposure=current_exposure,
             position_count=position_count,
         )
+        return True
 
     @staticmethod
     def _is_recovery_result(value: Any, expected: RecoveryResult) -> bool:
@@ -2943,6 +3383,7 @@ class TradingEngine:
         # Extract current price from response
         # Response has structure: {"output": {"stck_prpr": "70000"}}
         if "output" in response and "stck_prpr" in response["output"]:
+            self._note_market_data_success()
             return int(response["output"]["stck_prpr"])
 
         raise ValueError(f"Failed to extract price from response: {response}")

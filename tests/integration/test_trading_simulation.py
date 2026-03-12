@@ -131,7 +131,7 @@ def test_buy_submit_then_execution_opens_position_and_arms_exit_targets(engine: 
 
     assert result.success is True
     assert engine.get_position("005930") is None
-    assert "BUY-1" in engine._state.pending_orders
+    assert result.order_id in engine._state.pending_orders
 
     engine._apply_execution_event(_buy_event(broker_order_id="B-1", quantity=10, price=70000))
 
@@ -153,14 +153,15 @@ def test_sell_submit_then_execution_closes_position_and_clears_pending(engine: T
         return_value=OrderResult(success=True, order_id="SELL-1", broker_order_id="S-1")
     )
 
-    engine.buy("005930", 10, 70000)
+    buy_result = engine.buy("005930", 10, 70000)
     engine._apply_execution_event(_buy_event(broker_order_id="B-1", quantity=10, price=70000))
 
     sell_result = engine.sell("005930", 10, price=None, origin="manual", exit_reason="MANUAL")
 
     assert sell_result.success is True
     assert engine.get_position("005930") is not None
-    assert "SELL-1" in engine._state.pending_orders
+    assert buy_result.order_id not in engine._state.pending_orders
+    assert sell_result.order_id in engine._state.pending_orders
 
     engine._apply_execution_event(_sell_event(broker_order_id="S-1", quantity=10, price=72000))
 
@@ -225,7 +226,7 @@ def test_reconciliation_does_not_auto_close_sell_from_balance_only(engine: Tradi
     )
     engine.buy("005930", 10, 70000)
     engine._apply_execution_event(_buy_event(broker_order_id="B-1", quantity=10, price=70000))
-    engine.sell("005930", 10, price=None, origin="manual", exit_reason="MANUAL")
+    sell_result = engine.sell("005930", 10, price=None, origin="manual", exit_reason="MANUAL")
 
     engine._safe_inquire_daily_orders = MagicMock(return_value={"output1": []})
     result = SimpleNamespace(
@@ -248,7 +249,7 @@ def test_reconciliation_does_not_auto_close_sell_from_balance_only(engine: Tradi
     engine._on_reconciliation_cycle(result)
 
     position = engine.get_position("005930")
-    pending_order = engine._state.pending_orders["SELL-1"]
+    pending_order = engine._state.pending_orders[sell_result.order_id]
     assert position is not None
     assert position.quantity == 10
     assert pending_order.unresolved_reason == "sell_requires_execution_or_daily_order_confirmation"
