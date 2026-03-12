@@ -20,6 +20,16 @@ class TestParseCommand:
         assert result.symbols == ()
         assert result.error is None
 
+    def test_start_help_parsed_as_dedicated_route(self):
+        result = parse_command("start help")
+        assert result.subcommand == "start-help"
+        assert result.error is None
+
+    def test_start_help_rejects_extra_flags(self):
+        result = parse_command("start help --mock")
+        assert result.subcommand == "start-help"
+        assert result.error == "start help does not accept additional flags."
+
     def test_start_with_strategy(self):
         result = parse_command("start --strategy consensus")
         assert result.subcommand == "start"

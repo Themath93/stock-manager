@@ -25,6 +25,12 @@ Scope:
 | Drift/GC Scheduled Gate | `uv run python scripts/mock_qa_gate.py --emit .sisyphus/evidence/mock-promotion-gate.json` | Yes | Yes (scheduled) | `.github/workflows/drift-gc.yml`, `stock_manager/qa/mock_gate.py` |
 | Build | `uv build` | Yes | Yes | `.github/workflows/ci.yml`, `AGENTS.md`, `README.md` |
 
+## Behavioral Invariant Evidence
+
+| Invariant | Local Evidence | PR CI Coverage | Nightly Coverage | Source of Truth |
+|---|---|---|---|---|
+| Engine market-hours policy by mode | `uv run pytest tests/unit/test_engine.py -k 'market_hours or start_warns_outside_market_hours_in_live_mode or start_logs_mock_market_hours_override' --no-cov -q` and `uv run pytest tests/integration/test_trading_simulation.py -k 'scenario5' --no-cov -q` | `tests/unit/test_engine.py` is covered by `.github/workflows/ci.yml` through `tests/unit tests/fixtures` | `tests/integration/test_trading_simulation.py` is covered by `.github/workflows/nightly-full-suite.yml` | `docs/runtime-trading-guardrails.md`, `docs/adr/0010-engine-market-hours-enforcement-by-mode.md` |
+
 ## Gap List (Week-1)
 
 | Gap | Impact | Planned Action |
@@ -36,9 +42,11 @@ Scope:
 - [ADR-0001: Mock-first safety gate](adr/0001-mock-first-safety-gate.md) — Drift/GC gate의 mock-first 정책 근거.
 - [ADR-0002: Coverage threshold 85%](adr/0002-coverage-threshold-85.md) — 85% 커버리지 임계값 결정 근거.
 - [ADR-0009: KIS endpoint authority and mode isolation](adr/0009-kis-endpoint-authority-and-mode-isolation.md) — mock/real endpoint drift 방지 근거.
+- [ADR-0010: Engine market-hours enforcement by mode](adr/0010-engine-market-hours-enforcement-by-mode.md) — 엔진 장시간 정책 범위와 문서 출처.
 
 ## Verification Checklist
 
 - [ ] Coverage threshold is consistent in CI, pytest config, and root docs.
 - [ ] Every gate has a command and enforcement location.
+- [ ] Behavioral invariants have a discoverable evidence path.
 - [ ] New contributors can find this matrix from AGENTS and README.

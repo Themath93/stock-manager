@@ -1,0 +1,16 @@
+{
+  "output1": [
+    {
+      "pdno": "005930",
+      "hldg_qty": "3",
+      "pchs_avg_pric": "70100",
+      "prpr": "70100"
+    }
+  ],
+  "output2": [
+    {
+      "dnca_tot_amt": "9900000",
+      "tot_evlu_amt": "10110300"
+    }
+  ]
+}

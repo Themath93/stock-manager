@@ -1,0 +1,15 @@
+{
+  "header": {
+    "tr_id": "H0STCNI0"
+  },
+  "output": {
+    "pdno": "005930",
+    "odno": "71012346",
+    "sll_bk_dvsn": "1",
+    "cntg_pr": "71900",
+    "cntg_qty": "2",
+    "tot_ccld_qty": "2",
+    "rmn_qty": "8",
+    "ord_stts": "partial_fill"
+  }
+}

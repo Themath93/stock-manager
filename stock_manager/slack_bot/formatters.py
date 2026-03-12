@@ -136,14 +136,40 @@ def format_status(status: "EngineStatus | None", session_info: dict) -> dict:
         position_count = status.position_count
         trading_active = status.trading_enabled
         price_monitor = status.price_monitor_running
+        source_raw = getattr(status, "strategy_discovery_source", None)
+        symbols_raw = getattr(status, "strategy_discovery_symbols", ())
+        reason_raw = getattr(status, "strategy_discovery_reason", None)
+        updated_at_raw = getattr(status, "strategy_discovery_updated_at", None)
+
+        discovery_source = source_raw if isinstance(source_raw, str) and source_raw else "N/A"
+        if isinstance(symbols_raw, tuple):
+            discovery_symbols = symbols_raw
+        elif isinstance(symbols_raw, list):
+            discovery_symbols = tuple(symbols_raw)
+        else:
+            discovery_symbols = ()
+        discovery_symbols_text = ", ".join(discovery_symbols) if discovery_symbols else "(없음)"
+        discovery_updated_at = (
+            updated_at_raw if isinstance(updated_at_raw, str) and updated_at_raw else "N/A"
+        )
+        discovery_reason = reason_raw if isinstance(reason_raw, str) and reason_raw else None
 
         runtime_fields: list[dict] = [
             {"type": "mrkdwn", "text": f"*보유종목:*\n{position_count}"},
             {"type": "mrkdwn", "text": f"*매매:*\n{'🟢 활성' if trading_active else '🔴 비활성'}"},
             {"type": "mrkdwn", "text": f"*가격 모니터:*\n{'🟢 활성' if price_monitor else '🔴 비활성'}"},
+            {"type": "mrkdwn", "text": f"*탐색 소스:*\n{discovery_source}"},
+            {"type": "mrkdwn", "text": f"*탐색 종목:*\n{discovery_symbols_text}"},
+            {"type": "mrkdwn", "text": f"*최근 탐색:*\n{discovery_updated_at}"},
         ]
         blocks.append({"type": "divider"})
         blocks.append({"type": "section", "fields": runtime_fields})
+
+        if discovery_reason:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"ℹ️ *탐색 사유:* {discovery_reason}"},
+            })
 
         # Section 3: Health (only if degraded)
         if status.degraded_reason:
@@ -281,6 +307,7 @@ def format_help() -> dict:
                     "type": "mrkdwn",
                     "text": "*세션 관리*\n"
                         "• `/sm start` - 트레이딩 세션 시작\n"
+                        "• `/sm start help` - 시작 가능한 전략/예시 명령 안내\n"
                         "  `--strategy NAME` 전략 지정\n"
                         "  `--symbols A,B` 종목 지정\n"
                         "  `--duration SEC` 실행 시간(초)\n"
@@ -328,6 +355,69 @@ def format_help() -> dict:
                             "예시: `/sm start --strategy consensus --auto-discover --discovery-limit 7 --fallback-symbols 005930,000660 --mock`\n"
                             "예시: `/sm start --strategy consensus --auto-discover --discovery-limit 7 --fallback-symbols 005930,000660 --llm-mode selective --mock`\n"
                             "예시: `/sm start --duration 3600 --order-quantity 5`",
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def format_start_help() -> dict:
+    """Format `/sm start help` response with strategy guide and example commands."""
+    return {
+        "text": "/sm start 전략 안내",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "시작 전략 가이드", "emoji": True},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*지원 전략*\n"
+                    "• `graham` - 벤저민 그레이엄 스타일 가치 스크리너입니다. "
+                    "명시한 종목을 보수적으로 점검할 때 적합합니다.\n"
+                    "• `consensus` - 10개 투자 페르소나 + advisory를 조합한 합의형 전략입니다. "
+                    "자동 탐색과 `--llm-mode selective`를 함께 쓰려면 이 전략을 사용해야 합니다.",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*전략 선택 기준*\n"
+                    "• 명시 종목을 빠르게 보수적으로 돌리고 싶으면 `graham`\n"
+                    "• 자동 탐색, 합의 투표, selective LLM 보강이 필요하면 `consensus`\n"
+                    "• `--llm-mode selective`는 `consensus`에서만 허용됩니다.",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*예시 명령*\n"
+                    "• Graham mock:\n"
+                    "`/sm start --strategy graham --symbols 005930,000660 --duration 1800 --mock`\n"
+                    "• Consensus mock:\n"
+                    "`/sm start --strategy consensus --symbols 005930,000660 --duration 1800 --mock`\n"
+                    "• Consensus auto-discover mock:\n"
+                    "`/sm start --strategy consensus --auto-discover --discovery-limit 7 --fallback-symbols 005930,000660 --mock`\n"
+                    "• Consensus selective LLM mock:\n"
+                    "`/sm start --strategy consensus --auto-discover --discovery-limit 7 --fallback-symbols 005930,000660 --llm-mode selective --mock`\n"
+                    "• Consensus live:\n"
+                    "`/sm start --strategy consensus --symbols 005930,000660 --duration 1800 --no-mock`",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "실전(`--no-mock`)은 promotion gate를 통과해야 시작됩니다.",
                     }
                 ],
             },

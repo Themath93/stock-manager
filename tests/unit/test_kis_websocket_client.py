@@ -8,6 +8,7 @@ import pytest
 from stock_manager.adapters.broker.kis.exceptions import KISAPIError
 from stock_manager.adapters.broker.kis.websocket_client import (
     KISWebSocketClient,
+    get_default_execution_notice_tr_id,
     get_kis_websocket_url,
 )
 
@@ -101,9 +102,18 @@ def test_get_kis_websocket_url() -> None:
     assert get_kis_websocket_url(is_paper_trading=False) == "ws://ops.koreainvestment.com:21000"
 
 
+def test_get_default_execution_notice_tr_id() -> None:
+    assert get_default_execution_notice_tr_id(is_paper_trading=True) == "H0STCNI9"
+    assert get_default_execution_notice_tr_id(is_paper_trading=False) == "H0STCNI0"
+
+
 def test_connect_replays_stored_subscriptions() -> None:
     factory = _DummyFactory()
-    client = KISWebSocketClient(websocket_url="ws://test", websocket_app_factory=factory)
+    client = KISWebSocketClient(
+        websocket_url="ws://test",
+        is_paper_trading=False,
+        websocket_app_factory=factory,
+    )
 
     client.subscribe_quotes(["005930", "  "])
     client.subscribe_executions()
@@ -123,7 +133,23 @@ def test_connect_replays_stored_subscriptions() -> None:
     assert first["body"]["tr_key"] == "005930"
 
     second = app.sent_payloads[1]
+    assert second["body"]["tr_id"] == "H0STCNI0"
     assert second["body"]["tr_key"] == "ALL"
+
+
+def test_subscribe_executions_uses_paper_notice_default() -> None:
+    factory = _DummyFactory()
+    client = KISWebSocketClient(
+        websocket_url="ws://test",
+        is_paper_trading=True,
+        websocket_app_factory=factory,
+    )
+    client.connect(approval_key="approval-key", timeout_sec=1.0)
+
+    app = factory.instances[0]
+    client.subscribe_executions()
+
+    assert app.sent_payloads[-1]["body"]["tr_id"] == "H0STCNI9"
 
 
 def test_subscribe_quotes_when_connected_sends_immediately() -> None:
@@ -173,7 +199,8 @@ def test_on_message_dispatches_quote_event() -> None:
     assert event.ask_quantity == Decimal("120")
 
 
-def test_on_message_dispatches_execution_event() -> None:
+@pytest.mark.parametrize("tr_id", ["H0STCNT0", "H0STCNI0", "H0STCNI9"])
+def test_on_message_dispatches_execution_event(tr_id: str) -> None:
     factory = _DummyFactory()
     client = KISWebSocketClient(websocket_url="ws://test", websocket_app_factory=factory)
 
@@ -181,7 +208,7 @@ def test_on_message_dispatches_execution_event() -> None:
     client.register_execution_callback(received.append)
 
     message = {
-        "header": {"tr_id": "H0STCNT0"},
+        "header": {"tr_id": tr_id},
         "output": {
             "pdno": "005930",
             "odno": "12345",

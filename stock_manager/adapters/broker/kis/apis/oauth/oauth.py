@@ -450,7 +450,7 @@ def generate_hash_key_paper(
 def approve_websocket_key(
     app_key: str,
     app_secret: str,
-    access_token: str,
+    access_token: str | None = None,
     is_paper_trading: bool = True,
     custtype: Literal["P", "B"] = "P",
 ) -> Dict[str, Any]:
@@ -464,11 +464,12 @@ def approve_websocket_key(
     Args:
         app_key: KIS OpenAPI application key issued from the portal.
         app_secret: KIS OpenAPI application secret issued from the portal.
-        access_token: Valid OAuth access token for authentication.
+        access_token: Optional OAuth access token included as the request body
+            `token` field when provided.
         is_paper_trading: Whether to use paper trading (True) or real trading (False).
             Defaults to True for paper trading environment.
-        custtype: Customer type. 'P' for individual, 'B' for corporate.
-            Defaults to 'P' (individual).
+        custtype: Retained for backward compatibility. This endpoint uses JSON body
+            credentials instead of customer-type headers.
 
     Returns:
         Dict[str, Any]: API response containing:
@@ -504,13 +505,15 @@ def approve_websocket_key(
 
     headers = {
         "Content-Type": "application/json",
-        "appkey": app_key,
-        "appsecret": app_secret,
-        "Authorization": f"Bearer {access_token}",
-        "custtype": custtype,
     }
 
-    data: dict[str, Any] = {}
+    data: dict[str, Any] = {
+        "grant_type": "client_credentials",
+        "appkey": app_key,
+        "secretkey": app_secret,
+    }
+    if access_token:
+        data["token"] = access_token
 
     response = httpx.post(url, json=data, headers=headers, timeout=30.0)
     response.raise_for_status()
@@ -521,7 +524,7 @@ def approve_websocket_key(
 def approve_websocket_key_real(
     app_key: str,
     app_secret: str,
-    access_token: str,
+    access_token: str | None = None,
     custtype: Literal["P", "B"] = "P",
 ) -> Dict[str, Any]:
     """
@@ -532,7 +535,8 @@ def approve_websocket_key_real(
     Args:
         app_key: KIS OpenAPI application key issued from the portal.
         app_secret: KIS OpenAPI application secret issued from the portal.
-        access_token: Valid OAuth access token for authentication.
+        access_token: Optional OAuth access token included as the request body
+            `token` field when provided.
         custtype: Customer type. 'P' for individual, 'B' for corporate.
             Defaults to 'P' (individual).
 
@@ -559,7 +563,7 @@ def approve_websocket_key_real(
 def approve_websocket_key_paper(
     app_key: str,
     app_secret: str,
-    access_token: str,
+    access_token: str | None = None,
     custtype: Literal["P", "B"] = "P",
 ) -> Dict[str, Any]:
     """
@@ -570,7 +574,8 @@ def approve_websocket_key_paper(
     Args:
         app_key: KIS OpenAPI application key issued from the portal.
         app_secret: KIS OpenAPI application secret issued from the portal.
-        access_token: Valid OAuth access token for authentication.
+        access_token: Optional OAuth access token included as the request body
+            `token` field when provided.
         custtype: Customer type. 'P' for individual, 'B' for corporate.
             Defaults to 'P' (individual).
 

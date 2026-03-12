@@ -24,6 +24,7 @@ Status convention:
 | [0007](0007-threading-concurrency-strategy.md) | Thread-Per-Component Concurrency Strategy | Accepted | 2026-03-02 |
 | [0008](0008-pydantic-settings-dataclasses-split.md) | Pydantic-Settings for Config, Dataclasses for Domain | Accepted | 2026-03-02 |
 | [0009](0009-kis-endpoint-authority-and-mode-isolation.md) | KIS Endpoint Authority and Mode Isolation | Accepted | 2026-03-05 |
+| [0010](0010-engine-market-hours-enforcement-by-mode.md) | Engine Market-Hours Enforcement By Mode | Accepted | 2026-03-06 |
 
 ## Template
 

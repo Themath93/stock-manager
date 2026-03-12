@@ -6,6 +6,7 @@ from stock_manager.adapters.broker.kis.websocket_client import (
     KISExecutionEvent,
     KISQuoteEvent,
     KISWebSocketClient,
+    get_default_execution_notice_tr_id,
     get_kis_websocket_url,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "KISQuoteEvent",
     "KISRestClient",
     "KISWebSocketClient",
+    "get_default_execution_notice_tr_id",
     "get_kis_websocket_url",
 ]

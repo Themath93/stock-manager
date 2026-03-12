@@ -792,8 +792,13 @@ class TestApproveWebsocketKey:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         assert call_args[0][0] == "https://openapivts.koreainvestment.com:29443/oauth2/Approval"
-        assert call_args[1]["headers"]["Authorization"] == f"Bearer {TEST_ACCESS_TOKEN}"
-        assert call_args[1]["json"] == {}
+        assert call_args[1]["headers"] == {"Content-Type": "application/json"}
+        assert call_args[1]["json"] == {
+            "grant_type": "client_credentials",
+            "appkey": TEST_APP_KEY,
+            "secretkey": TEST_APP_SECRET,
+            "token": TEST_ACCESS_TOKEN,
+        }
 
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_approve_websocket_key_real_trading_success(self, mock_post):
@@ -816,10 +821,12 @@ class TestApproveWebsocketKey:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         assert call_args[0][0] == "https://openapi.koreainvestment.com:9443/oauth2/Approval"
+        assert call_args[1]["headers"] == {"Content-Type": "application/json"}
+        assert call_args[1]["json"]["token"] == TEST_ACCESS_TOKEN
 
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
-    def test_approve_websocket_key_with_corporate_custtype(self, mock_post):
-        """Test WebSocket approval key with corporate customer type."""
+    def test_approve_websocket_key_omits_token_when_not_provided(self, mock_post):
+        """Token should only be included in the body when it is provided."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = SUCCESS_WEBSOCKET_RESPONSE
@@ -828,7 +835,6 @@ class TestApproveWebsocketKey:
         result = approve_websocket_key(
             app_key=TEST_APP_KEY,
             app_secret=TEST_APP_SECRET,
-            access_token=TEST_ACCESS_TOKEN,
             custtype="B",
         )
 
@@ -836,7 +842,12 @@ class TestApproveWebsocketKey:
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert call_args[1]["headers"]["custtype"] == "B"
+        assert call_args[1]["headers"] == {"Content-Type": "application/json"}
+        assert call_args[1]["json"] == {
+            "grant_type": "client_credentials",
+            "appkey": TEST_APP_KEY,
+            "secretkey": TEST_APP_SECRET,
+        }
 
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
     def test_approve_websocket_key_http_error_403(self, mock_post):
@@ -908,10 +919,11 @@ class TestApproveWebsocketKeyReal:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         assert call_args[0][0] == "https://openapi.koreainvestment.com:9443/oauth2/Approval"
+        assert call_args[1]["json"]["token"] == TEST_ACCESS_TOKEN
 
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
-    def test_approve_websocket_key_real_with_custtype(self, mock_post):
-        """Test real trading WebSocket key with customer type."""
+    def test_approve_websocket_key_real_accepts_legacy_custtype_arg(self, mock_post):
+        """custtype remains accepted for compatibility but is not sent as a header."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = SUCCESS_WEBSOCKET_RESPONSE
@@ -928,7 +940,8 @@ class TestApproveWebsocketKeyReal:
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert call_args[1]["headers"]["custtype"] == "B"
+        assert call_args[1]["headers"] == {"Content-Type": "application/json"}
+        assert "token" in call_args[1]["json"]
 
 
 # =============================================================================
@@ -959,10 +972,11 @@ class TestApproveWebsocketKeyPaper:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         assert call_args[0][0] == "https://openapivts.koreainvestment.com:29443/oauth2/Approval"
+        assert call_args[1]["json"]["token"] == TEST_ACCESS_TOKEN
 
     @patch("stock_manager.adapters.broker.kis.apis.oauth.oauth.httpx.post")
-    def test_approve_websocket_key_paper_with_custtype(self, mock_post):
-        """Test paper trading WebSocket key with customer type."""
+    def test_approve_websocket_key_paper_accepts_legacy_custtype_arg(self, mock_post):
+        """custtype remains accepted for compatibility but is not sent as a header."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = SUCCESS_WEBSOCKET_RESPONSE
@@ -979,4 +993,5 @@ class TestApproveWebsocketKeyPaper:
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert call_args[1]["headers"]["custtype"] == "B"
+        assert call_args[1]["headers"] == {"Content-Type": "application/json"}
+        assert "token" in call_args[1]["json"]

@@ -48,6 +48,13 @@ class PipelineJsonLogger:
             with open(filepath, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
 
+    def log_runtime_event(self, event: str, **payload: Any) -> None:
+        """Log a generic runtime event for engine/probe observability."""
+        self._write({
+            "event": event,
+            **payload,
+        })
+
     # --- 12 typed event methods ---
 
     def log_state_change(

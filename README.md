@@ -32,6 +32,69 @@ CLI (main.py)
        └─ Slack Notifications (Block Kit, 5채널 라우팅)
 ```
 
+### KIS API 교신 아키텍처
+
+```mermaid
+flowchart LR
+    subgraph Entry["진입점"]
+        Trade["CLI trade buy/sell"]
+        Run["CLI run / Slack session"]
+        Smoke["CLI smoke / verify"]
+    end
+
+    subgraph App["stock-manager 내부"]
+        Config["KISConfig<br/>.env, mock/live, 계좌/자격증명"]
+        Rest["KISRestClient<br/>OAuth, 인증 헤더, rate limit, retry"]
+        Cache["Token Cache<br/>~/.stock_manager/kis_token_paper|real.json"]
+        Engine["TradingEngine<br/>전략 실행, 모니터링, 재조정"]
+        Fetcher["TechnicalDataFetcher<br/>현재가, 재무, OHLCV 수집"]
+        Executor["OrderExecutor<br/>매수/매도 주문"]
+        Recon["PriceMonitor / PositionReconciler"]
+        Adapter["KISBrokerAdapter<br/>REST + WebSocket 퍼사드"]
+        WS["KISWebSocketClient<br/>실시간 호가/체결 구독"]
+    end
+
+    subgraph KIS["한국투자 OpenAPI"]
+        OAuth["OAuth 토큰<br/>/oauth2/tokenP"]
+        Approval["WebSocket 승인키<br/>/oauth2/Approval"]
+        RestAPI["REST API<br/>/uapi/...<br/>현재가, 재무, 잔고, 주문"]
+        WSMock["Mock WS<br/>ws://ops.koreainvestment.com:31000"]
+        WSReal["Real WS<br/>ws://ops.koreainvestment.com:21000"]
+    end
+
+    Trade --> Config
+    Run --> Config
+    Smoke --> Config
+
+    Config --> Rest
+    Rest <--> Cache
+
+    Trade -->|직접 주문 경로| Executor
+    Smoke -->|인증/가격/잔고 점검| Rest
+    Run -->|엔진 경로| Engine
+
+    Engine --> Fetcher
+    Engine --> Executor
+    Engine --> Recon
+    Engine -->|실시간 모드 사용 시| Adapter
+
+    Fetcher -->|시세/재무/기간시세 조회| Rest
+    Executor -->|현금 주문| Rest
+    Recon -->|가격/잔고 재확인| Rest
+
+    Adapter -->|REST 위임| Rest
+    Adapter -->|승인키 발급| Approval
+    Adapter -->|WS 연결/구독| WS
+
+    Rest --> OAuth
+    Rest --> RestAPI
+    WS -->|mock| WSMock
+    WS -->|real| WSReal
+
+    WSMock -->|실시간 호가/체결 이벤트| Engine
+    WSReal -->|실시간 호가/체결 이벤트| Engine
+```
+
 ## 저장소 구조 (요약)
 
 ```
@@ -57,6 +120,7 @@ stock_manager/
 ## 지식 맵 (Harness)
 
 - [docs/knowledge-map.md](docs/knowledge-map.md): 에이전트/개발자 공통 진입 지도 (entry point, 모듈 경계, 검증 명령).
+- [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md): 엔진 런타임 가드레일과 market-hours 정책의 authoritative source.
 - [docs/quality-gates.md](docs/quality-gates.md): lint/type/test/build 품질 게이트의 현재 강제 위치(CI/local/manual) 매트릭스.
 - [docs/harness-engineering-plan.md](docs/harness-engineering-plan.md): 로직 변경 없이 harness 성숙도를 높이는 단계별 계획.
 - [docs/harness-week1-execution-plan.md](docs/harness-week1-execution-plan.md): Audit 결과 기반 1주 실행 계획(작업, 완료 기준, 증거).
@@ -170,9 +234,13 @@ stock-manager setup
 - 기본 동작은 **dry-run**(실행 없음)입니다.
 - 모의 모드에서 주문을 제출하려면 `--execute`를 사용합니다.
 - 실거래 실행은 `--execute --confirm-live`를 사용하고, 승격 게이트 통과가 필요합니다.
+- `trade buy --execute`는 broker-direct 경로이며 `TradingEngine` local market-hours guard를 적용하지 않습니다. 정책 범위는 [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md)를 따릅니다.
 
 ### `stock-manager run`
 거래 엔진 루프를 시작합니다.
+
+- `run`과 Slack 세션은 `TradingEngine` 경로를 사용하므로 engine market-hours policy를 따릅니다.
+- live에서는 local buy block이 적용되고, mock에서는 local block을 우회합니다. 상세 정책은 [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md)를 참고하세요.
 
 권장 실행 순서:
 1. 로컬 점검을 위해 `stock-manager run --skip-auth` 실행.
@@ -213,6 +281,9 @@ stock-manager setup
 - 포맷/경로 개요는 `docs/knowledge-map.md`와 `stock_manager/notifications/formatters.py`를 참고하세요.
 
 Slack 사용 여부는 환경 변수로 제어하며, 사용 시 필수 키는 `doctor`에서 확인합니다.
+
+- 사람용 `/sm` 운영 가이드: [docs/slack-sm-human/README.md](docs/slack-sm-human/README.md)
+- AI용 `/sm` 명령 생성 규칙: [docs/slack-sm-ai/README.md](docs/slack-sm-ai/README.md)
 
 ## Mock Promotion Gate (mock → live)
 실거래는 mock promotion gate 통과 전에는 차단됩니다.

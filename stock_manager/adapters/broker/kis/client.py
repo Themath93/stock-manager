@@ -19,7 +19,11 @@ from stock_manager.adapters.broker.kis.config import (
     KISConfig,
     KISConnectionState,
 )
-from stock_manager.adapters.broker.kis.token_cache import load_cached_token, save_cached_token
+from stock_manager.adapters.broker.kis.token_cache import (
+    invalidate_cached_token,
+    load_cached_token,
+    save_cached_token,
+)
 from stock_manager.adapters.broker.kis.exceptions import (
     KISAPIError,
     KISAuthenticationError,
@@ -157,7 +161,7 @@ class KISRestClient:
             "appsecret": self.config.effective_app_secret.get_secret_value(),
         }
 
-    def authenticate(self) -> KISAccessToken:
+    def authenticate(self, force_refresh: bool = False) -> KISAccessToken:
         """Authenticate with KIS API and obtain access token.
 
         Makes a POST request to the OAuth token endpoint to retrieve an
@@ -177,7 +181,11 @@ class KISRestClient:
         """
         # Fast-path: reuse in-memory token if still valid.
         now = datetime.now(timezone.utc)
-        if self.state.is_authenticated and self.state.access_token is not None:
+        if (
+            not force_refresh
+            and self.state.is_authenticated
+            and self.state.access_token is not None
+        ):
             # If we don't know expiry, assume valid to avoid unnecessary re-issuance.
             if self.state.access_token_expires_at is None:
                 return self.state.access_token
@@ -185,7 +193,7 @@ class KISRestClient:
                 return self.state.access_token
 
         # Disk cache: reuse token across processes/restarts (avoids KIS OAuth rate limits).
-        if self.config.token_cache_enabled:
+        if self.config.token_cache_enabled and not force_refresh:
             cached = load_cached_token(
                 self.config.get_token_cache_path(),
                 app_key=self.config.effective_app_key.get_secret_value(),
@@ -329,10 +337,6 @@ class KISRestClient:
             if headers:
                 request_headers.update(headers)
 
-            # Add personal account header if available
-            if self.config.account_number:
-                request_headers["hashkey"] = self.config.account_number
-
             try:
                 response = self._http_client.request(
                     method=method,
@@ -349,7 +353,7 @@ class KISRestClient:
                         and not reauth_attempted
                     ):
                         reauth_attempted = True
-                        self.authenticate()
+                        self._force_reauthenticate()
                         continue
 
                 if response.status_code == 429:
@@ -373,6 +377,18 @@ class KISRestClient:
                             status_code=response.status_code,
                             response_data=error_data,
                         )
+                    if (
+                        require_auth
+                        and self.config.auto_reauth_enabled
+                        and not reauth_attempted
+                        and self._should_force_reauth(
+                            status_code=response.status_code,
+                            data=error_data,
+                        )
+                    ):
+                        reauth_attempted = True
+                        self._force_reauthenticate()
+                        continue
 
                 response.raise_for_status()
                 data = response.json()
@@ -388,10 +404,10 @@ class KISRestClient:
                         require_auth
                         and self.config.auto_reauth_enabled
                         and not reauth_attempted
-                        and self._is_auth_error_response(data)
+                        and self._should_force_reauth(status_code=response.status_code, data=data)
                     ):
                         reauth_attempted = True
-                        self.authenticate()
+                        self._force_reauthenticate()
                         continue
                     raise self._create_api_error_from_response(data)
 
@@ -405,21 +421,21 @@ class KISRestClient:
             except httpx.HTTPStatusError as e:
                 status_code = e.response.status_code
 
-                if (
-                    status_code in (401, 403)
-                    and require_auth
-                    and self.config.auto_reauth_enabled
-                    and not reauth_attempted
-                ):
-                    reauth_attempted = True
-                    self.authenticate()
-                    continue
-
                 error_data = None
                 try:
                     error_data = e.response.json()
                 except Exception:
                     pass
+
+                if (
+                    require_auth
+                    and self.config.auto_reauth_enabled
+                    and not reauth_attempted
+                    and self._should_force_reauth(status_code=status_code, data=error_data)
+                ):
+                    reauth_attempted = True
+                    self._force_reauthenticate()
+                    continue
 
                 if self._is_rate_limit_payload(error_data):
                     if self._should_retry_status(429, attempt, max_attempts):
@@ -535,11 +551,37 @@ class KISRestClient:
 
     def _is_auth_error_response(self, data: dict[str, Any]) -> bool:
         """Best-effort check for authentication error payloads."""
+        msg_cd = str(data.get("msg_cd", "")).upper()
+        error_code = str(data.get("error_code", "")).upper()
+        if msg_cd == "EGW00123" or error_code == "EGW00123":
+            return True
         msg = " ".join(
             str(data.get(key, ""))
             for key in ("msg1", "error", "error_description", "message")
         ).lower()
         return any(keyword in msg for keyword in ("token", "auth", "인증"))
+
+    def _should_force_reauth(
+        self,
+        *,
+        status_code: int | None,
+        data: dict[str, Any] | None,
+    ) -> bool:
+        if status_code in (401, 403):
+            return True
+        if not isinstance(data, dict):
+            return False
+        return self._is_auth_error_response(data)
+
+    def _invalidate_current_auth_state(self) -> None:
+        self.state.clear_token()
+        if not self.config.token_cache_enabled:
+            return
+        invalidate_cached_token(self.config.get_token_cache_path())
+
+    def _force_reauthenticate(self) -> KISAccessToken:
+        self._invalidate_current_auth_state()
+        return self.authenticate(force_refresh=True)
 
     def _is_rate_limit_payload(self, data: dict[str, Any] | None) -> bool:
         """Detect KIS rate-limit payloads regardless of HTTP status code."""

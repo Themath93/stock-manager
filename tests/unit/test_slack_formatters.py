@@ -278,6 +278,26 @@ class TestFormatReconciliationEvent:
         assert result["color"] == "#ECB22E"
         assert "3건 불일치 발견" in result["text"]
 
+    def test_format_reconciliation_discrepancy_shows_primary_reason_when_counts_are_zero(self):
+        event = NotificationEvent(
+            event_type="reconciliation.discrepancy",
+            level=NotificationLevel.WARNING,
+            title="Reconciliation Discrepancy",
+            details={
+                "orphan_positions": [],
+                "missing_positions": [],
+                "quantity_mismatches": {},
+                "discrepancy_count": 1,
+                "primary_discrepancy": "Failed to query broker: 기간이 만료된 token 입니다.",
+                "discrepancies_sample": ["Failed to query broker: 기간이 만료된 token 입니다."],
+            },
+        )
+
+        result = format_reconciliation_event(event)
+
+        assert "원인:" in result["text"]
+        assert "기간이 만료된 token 입니다." in str(result["blocks"])
+
 
 class TestFormatRecoveryEvent:
     """Test recovery event formatting."""

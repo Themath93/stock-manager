@@ -32,7 +32,12 @@ causing startup failures or strategy-time network/API errors.
 - Fails build if `_BASE_URL = "https://..."` or `path = "https://..."` appears in wrappers.
 
 3. Documentation/ADR
-- This runbook + ADR-0009 define the policy and failure handling path.
+- This runbook + ADR-0009 define the endpoint authority policy and failure handling path.
+
+## Related Runtime Trading Policy
+
+- Engine market-hours enforcement by mode is documented in [runtime-trading-guardrails.md](runtime-trading-guardrails.md).
+- This runbook is not the primary source for engine buy/sell runtime policy.
 
 ## Payload + Rate Limit Runbook
 

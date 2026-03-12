@@ -12,13 +12,16 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 import logging
 import threading
 import time
 
 from stock_manager.trading import (
+    Order,
+    OrderStatus,
     Position,
+    PositionStatus,
     TradingConfig,
     OrderExecutor,
     OrderResult,
@@ -40,8 +43,28 @@ from stock_manager.notifications import (
     NotificationEvent,
     NotificationLevel,
 )
+from stock_manager.trading.logging import PipelineJsonLogger
 
 logger = logging.getLogger(__name__)
+
+_ACTIVE_PENDING_ORDER_STATUSES = {
+    OrderStatus.SUBMITTED,
+    OrderStatus.PENDING_BROKER,
+    OrderStatus.PARTIAL_FILL,
+}
+_UNRESOLVED_ORDER_WARNING_AGE_SEC = 30.0
+
+
+StrategyDiscoverySource = Literal["manual", "mock_fallback", "volume_rank", "fallback", "none"]
+
+
+@dataclass(frozen=True)
+class StrategyDiscoveryResult:
+    """Resolved symbol candidates and their source metadata."""
+
+    symbols: tuple[str, ...]
+    source: StrategyDiscoverySource
+    reason: str | None = None
 
 
 @dataclass
@@ -58,6 +81,10 @@ class EngineStatus:
     trading_enabled: bool
     recovery_result: str
     degraded_reason: str | None
+    strategy_discovery_source: str | None
+    strategy_discovery_symbols: tuple[str, ...]
+    strategy_discovery_reason: str | None
+    strategy_discovery_updated_at: str | None
 
 
 @dataclass
@@ -117,10 +144,19 @@ class TradingEngine:
     )
     _strategy_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _auto_exit_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _state_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _auto_exit_last_trigger: dict[tuple[str, str], float] = field(
         default_factory=dict, init=False, repr=False
     )
     _broker_adapter: Any | None = field(default=None, init=False, repr=False)
+    _processed_execution_keys: list[str] = field(default_factory=list, init=False, repr=False)
+    _processed_execution_key_set: set[str] = field(default_factory=set, init=False, repr=False)
+    _strategy_discovery_source: StrategyDiscoverySource | None = field(default=None, init=False)
+    _strategy_discovery_symbols: tuple[str, ...] = field(default_factory=tuple, init=False)
+    _strategy_discovery_reason: str | None = field(default=None, init=False)
+    _strategy_discovery_updated_at: str | None = field(default=None, init=False)
+    _strategy_discovery_last_fingerprint: str | None = field(default=None, init=False, repr=False)
+    _runtime_logger: PipelineJsonLogger = field(init=False, repr=False)
 
     def __post_init__(self):
         """Initialize all trading components with proper dependencies."""
@@ -167,10 +203,16 @@ class TradingEngine:
             position_manager=self._position_manager,
             inquire_balance_func=self._inquire_balance,
             interval=60.0,  # Check every minute
-            on_discrepancy=self._handle_discrepancy,
+            on_discrepancy=None,
+            on_cycle_complete=self._on_reconciliation_cycle,
+            apply_state=False,
         )
 
         self._broker_adapter = self._resolve_broker_adapter()
+        self._runtime_logger = PipelineJsonLogger(
+            log_dir=self.state_path.parent / "runtime",
+            prefix="engine-runtime",
+        )
 
         # Initialize empty state
         self._state = TradingState(positions={}, last_updated=datetime.now(timezone.utc))
@@ -230,9 +272,11 @@ class TradingEngine:
             local_state=self._state,
             client=self.client,
             inquire_balance_func=self._inquire_balance,
+            inquire_daily_orders_func=self._inquire_daily_orders,
             save_state_func=save_state_atomic,
             state_path=self.state_path,
         )
+        self._sync_position_manager_from_state()
         recovery_result = self._coerce_recovery_result(recovery_report.result)
         self._last_recovery_result = recovery_result
         self._degraded_reason = None
@@ -361,6 +405,7 @@ class TradingEngine:
         price: int,
         stop_loss: Optional[int] = None,
         take_profit: Optional[int] = None,
+        origin: str = "manual",
     ) -> OrderResult:
         """Place a buy order with risk validation.
 
@@ -377,11 +422,26 @@ class TradingEngine:
         Raises:
             RuntimeError: If engine is not running
         """
+        symbol = symbol.strip().upper()
         self._ensure_running()
         self._ensure_trading_allowed()
 
+        if self._has_pending_order(symbol, side="buy"):
+            reason = f"Pending BUY order already exists for {symbol}"
+            self._notify(
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Order Rejected",
+                symbol=symbol,
+                side="BUY",
+                quantity=quantity,
+                price=price,
+                reason=reason,
+            )
+            return OrderResult(success=False, order_id="", message=reason)
+
         # Market hours check - block buys outside trading hours
-        if self.config.market_hours_enabled and not self._is_market_open():
+        if self._should_enforce_market_hours() and not self._is_market_open():
             reason = "Market is closed (trading hours: 09:00-15:20 KST, weekdays)"
             self._notify(
                 "order.rejected",
@@ -451,32 +511,38 @@ class TradingEngine:
         result = self._executor.buy(symbol=symbol, quantity=order_quantity, price=price)
 
         if result.success:
-            if stop_loss:
-                position = self._position_manager.get_position(symbol)
-                if position:
-                    position.stop_loss = Decimal(str(stop_loss))
-
-            if take_profit:
-                position = self._position_manager.get_position(symbol)
-                if position:
-                    position.take_profit = Decimal(str(take_profit))
-
-            if stop_loss or take_profit:
-                self._ensure_symbol_monitoring(symbol)
-
-            # Persist state after successful order
-            self._update_state()
+            with self._state_lock:
+                order = self._register_submitted_order(
+                    symbol=symbol,
+                    side="buy",
+                    quantity=order_quantity,
+                    price=price,
+                    broker_order_id=result.broker_order_id,
+                    origin=origin,
+                    internal_order_id=result.order_id or None,
+                    requested_stop_loss=stop_loss,
+                    requested_take_profit=take_profit,
+                )
+                self._update_state_unlocked()
             self._persist_state()
-
+            self._log_runtime_event(
+                "order_state_transition",
+                order_id=order.order_id,
+                symbol=symbol,
+                side="buy",
+                status=order.status.value,
+                resolution_source=None,
+            )
             self._notify(
-                "order.filled",
+                "order.submitted",
                 NotificationLevel.INFO,
-                "Order Filled",
+                "Order Submitted",
                 symbol=symbol,
                 side="BUY",
                 quantity=order_quantity,
                 price=price,
                 broker_order_id=result.broker_order_id,
+                order_id=order.order_id,
             )
         else:
             self._notify(
@@ -492,7 +558,15 @@ class TradingEngine:
 
         return result
 
-    def sell(self, symbol: str, quantity: int, price: int | None = None) -> OrderResult:
+    def sell(
+        self,
+        symbol: str,
+        quantity: int,
+        price: int | None = None,
+        *,
+        origin: str = "manual",
+        exit_reason: str | None = None,
+    ) -> OrderResult:
         """Place a sell order to exit a position.
 
         Args:
@@ -506,8 +580,38 @@ class TradingEngine:
         Raises:
             RuntimeError: If engine is not running
         """
+        symbol = symbol.strip().upper()
         self._ensure_running()
         self._ensure_trading_allowed()
+
+        position = self._position_manager.get_position(symbol)
+        if position is None or position.quantity <= 0:
+            reason = f"No open position for {symbol}"
+            self._notify(
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Order Rejected",
+                symbol=symbol,
+                side="SELL",
+                quantity=quantity,
+                price=price,
+                reason=reason,
+            )
+            return OrderResult(success=False, order_id="", message=reason)
+
+        if self._has_pending_order(symbol, side="sell"):
+            reason = f"Pending SELL order already exists for {symbol}"
+            self._notify(
+                "order.rejected",
+                NotificationLevel.WARNING,
+                "Order Rejected",
+                symbol=symbol,
+                side="SELL",
+                quantity=quantity,
+                price=price,
+                reason=reason,
+            )
+            return OrderResult(success=False, order_id="", message=reason)
 
         logger.info(
             f"Sell order requested: {symbol} qty={quantity} price={price}",
@@ -515,33 +619,43 @@ class TradingEngine:
         )
 
         # Execute order through executor
-        position_before_sell = self._position_manager.get_position(symbol)
         result = self._executor.sell(symbol=symbol, quantity=quantity, price=price)
 
         if result.success:
-            self._record_realized_pnl(
-                position=position_before_sell,
-                sold_quantity=quantity,
-                sold_price=price or 0,
-            )
-            # Remove symbol from monitoring if position fully closed
-            position = self._position_manager.get_position(symbol)
-            if not position or position.quantity == 0:
-                self._price_monitor.remove_symbol(symbol)
-
-            # Persist state after successful order
-            self._update_state()
+            with self._state_lock:
+                order = self._register_submitted_order(
+                    symbol=symbol,
+                    side="sell",
+                    quantity=quantity,
+                    price=price,
+                    broker_order_id=result.broker_order_id,
+                    origin=origin,
+                    internal_order_id=result.order_id or None,
+                    exit_reason=exit_reason,
+                    position_quantity_at_submit=position.quantity,
+                )
+                self._update_state_unlocked()
             self._persist_state()
-
+            self._log_runtime_event(
+                "order_state_transition",
+                order_id=order.order_id,
+                symbol=symbol,
+                side="sell",
+                status=order.status.value,
+                resolution_source=None,
+                exit_reason=exit_reason,
+            )
             self._notify(
-                "order.filled",
+                "order.submitted",
                 NotificationLevel.INFO,
-                "Order Filled",
+                "Order Submitted",
                 symbol=symbol,
                 side="SELL",
                 quantity=quantity,
                 price=price,
                 broker_order_id=result.broker_order_id,
+                order_id=order.order_id,
+                exit_reason=exit_reason,
             )
         else:
             self._notify(
@@ -598,25 +712,7 @@ class TradingEngine:
             RuntimeError: If engine is not running
         """
         self._ensure_running()
-
-        from datetime import date
-        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
-            inquire_daily_ccld,
-        )
-
-        request_config = inquire_daily_ccld(
-            cano=self.account_number,
-            acnt_prdt_cd=self.account_product_code,
-            ord_dt=date.today().strftime("%Y%m%d"),
-            is_paper_trading=self.is_paper_trading,
-        )
-
-        return self.client.make_request(
-            method="GET",
-            path=request_config["url_path"],
-            params=request_config["params"],
-            headers={"tr_id": request_config["tr_id"]},
-        )
+        return self._inquire_daily_orders()
 
     def liquidate_all(self) -> list[dict]:
         """Market-sell all open positions.
@@ -651,7 +747,13 @@ class TradingEngine:
             }
 
             try:
-                order_result = self.sell(symbol=symbol, quantity=pos.quantity, price=None)
+                order_result = self.sell(
+                    symbol=symbol,
+                    quantity=pos.quantity,
+                    price=None,
+                    origin="liquidate_all",
+                    exit_reason="LIQUIDATE_ALL",
+                )
                 result_entry["success"] = order_result.success
                 result_entry["message"] = order_result.message or ""
                 result_entry["broker_order_id"] = order_result.broker_order_id
@@ -690,6 +792,10 @@ class TradingEngine:
             trading_enabled=self._trading_enabled,
             recovery_result=self._last_recovery_result.value,
             degraded_reason=self._degraded_reason,
+            strategy_discovery_source=self._strategy_discovery_source,
+            strategy_discovery_symbols=self._strategy_discovery_symbols,
+            strategy_discovery_reason=self._strategy_discovery_reason,
+            strategy_discovery_updated_at=self._strategy_discovery_updated_at,
         )
 
     def is_healthy(self) -> bool:
@@ -831,10 +937,10 @@ class TradingEngine:
 
     def _on_websocket_execution(self, event: Any) -> None:
         symbol = str(getattr(event, "symbol", "")).strip().upper()
-        order_id = getattr(event, "order_id", None)
+        order_id = getattr(event, "broker_order_id", None) or getattr(event, "order_id", None)
         side = getattr(event, "side", None)
-        price = getattr(event, "price", None)
-        quantity = getattr(event, "quantity", None)
+        price = getattr(event, "executed_price", None) or getattr(event, "price", None)
+        quantity = getattr(event, "executed_quantity", None) or getattr(event, "quantity", None)
 
         self._notify(
             "order.execution_notice",
@@ -848,25 +954,32 @@ class TradingEngine:
         )
 
         try:
-            result = self._reconciler.reconcile_now()
-            if not result.is_clean:
-                self._handle_discrepancy(result)
-            self._update_state()
-            self._persist_state()
+            self._apply_execution_event(event)
+            self._reconciler.reconcile_now()
         except Exception:
             logger.debug("Execution reconciliation failed", exc_info=True)
 
-    def _discover_strategy_symbols(self) -> list[str]:
+    def _discover_strategy_symbols(self) -> StrategyDiscoveryResult:
         limit = int(getattr(self.config, "strategy_discovery_limit", 0) or 0)
         if limit <= 0:
-            return []
+            return StrategyDiscoveryResult(
+                symbols=(),
+                source="none",
+                reason="discovery_limit_non_positive",
+            )
 
         fallback = self._normalize_symbol_entries(
             getattr(self.config, "strategy_discovery_fallback_symbols", ())
         )
+        fallback_symbols = tuple(fallback[:limit])
 
         if self.is_paper_trading:
-            return fallback[:limit]
+            reason = "paper_trading_mode" if fallback_symbols else "paper_trading_mode_no_fallback"
+            return StrategyDiscoveryResult(
+                symbols=fallback_symbols,
+                source="mock_fallback",
+                reason=reason,
+            )
 
         try:
             from stock_manager.adapters.broker.kis.apis.domestic_stock.ranking import (
@@ -890,14 +1003,27 @@ class TradingEngine:
             )
         except Exception:
             logger.warning("Strategy symbol discovery failed", exc_info=True)
-            return fallback[:limit]
+            return StrategyDiscoveryResult(
+                symbols=fallback_symbols,
+                source="fallback",
+                reason="volume_rank_request_failed",
+            )
 
-        if str(response.get("rt_cd", "1")) != "0":
-            return fallback[:limit]
+        rt_cd = str(response.get("rt_cd", "1"))
+        if rt_cd != "0":
+            return StrategyDiscoveryResult(
+                symbols=fallback_symbols,
+                source="fallback",
+                reason=f"volume_rank_rt_cd_{rt_cd}",
+            )
 
         output = response.get("output", [])
         if not isinstance(output, list):
-            return fallback[:limit]
+            return StrategyDiscoveryResult(
+                symbols=fallback_symbols,
+                source="fallback",
+                reason="volume_rank_output_invalid",
+            )
 
         discovered: list[str] = []
         seen: set[str] = set()
@@ -913,8 +1039,16 @@ class TradingEngine:
                 break
 
         if discovered:
-            return discovered
-        return fallback[:limit]
+            return StrategyDiscoveryResult(
+                symbols=tuple(discovered),
+                source="volume_rank",
+                reason=None,
+            )
+        return StrategyDiscoveryResult(
+            symbols=fallback_symbols,
+            source="fallback",
+            reason="volume_rank_empty_output",
+        )
 
     @staticmethod
     def _extract_discovery_symbol(payload: dict[str, Any]) -> str:
@@ -959,10 +1093,56 @@ class TradingEngine:
 
         return normalized
 
+    def _update_strategy_discovery_state(
+        self,
+        *,
+        source: StrategyDiscoverySource,
+        symbols: tuple[str, ...],
+        reason: str | None,
+        notify_discovery: bool,
+    ) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        fingerprint = f"{source}|{','.join(symbols)}|{reason or ''}"
+        changed = fingerprint != self._strategy_discovery_last_fingerprint
+
+        self._strategy_discovery_source = source
+        self._strategy_discovery_symbols = symbols
+        self._strategy_discovery_reason = reason
+        self._strategy_discovery_updated_at = now_iso
+        self._strategy_discovery_last_fingerprint = fingerprint
+
+        log_payload: dict[str, Any] = {
+            "source": source,
+            "symbols": list(symbols),
+            "reason": reason,
+            "changed": changed,
+            "notify_discovery": notify_discovery,
+        }
+        if changed:
+            logger.info("Strategy symbol resolution updated", extra=log_payload)
+            if notify_discovery:
+                notify_payload: dict[str, Any] = {
+                    "discovery_source": source,
+                    "symbols": list(symbols),
+                    "symbol_count": len(symbols),
+                }
+                if reason:
+                    notify_payload["discovery_reason"] = reason
+                self._notify(
+                    "pipeline.screening_complete",
+                    NotificationLevel.INFO,
+                    "종목 탐색 완료",
+                    **notify_payload,
+                )
+        else:
+            logger.debug("Strategy symbol resolution unchanged", extra=log_payload)
+
     def _persist_state(self):
         """Save current state to disk atomically."""
         try:
-            save_state_atomic(self._state, self.state_path)
+            with self._state_lock:
+                snapshot = TradingState.from_dict(self._state.to_dict())
+            save_state_atomic(snapshot, self.state_path)
             logger.debug(f"State persisted to {self.state_path}")
         except Exception as e:
             logger.error(f"Failed to persist state: {e}", exc_info=True)
@@ -975,9 +1155,941 @@ class TradingEngine:
 
     def _update_state(self):
         """Sync positions from position manager to state."""
+        with self._state_lock:
+            self._update_state_unlocked()
+
+    def _update_state_unlocked(self) -> None:
         self._state.positions = self._position_manager.get_all_positions()
         self._state.risk_controls = self._export_risk_controls()
         self._state.last_updated = datetime.now(timezone.utc)
+
+    def _queue_notification(
+        self,
+        notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]],
+        event_type: str,
+        level: NotificationLevel,
+        title: str,
+        **details: Any,
+    ) -> None:
+        notifications.append((event_type, level, title, details))
+
+    def _emit_notifications(
+        self, notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]]
+    ) -> None:
+        for event_type, level, title, details in notifications:
+            self._notify(event_type, level, title, **details)
+
+    def _log_runtime_event(self, event: str, **payload: Any) -> None:
+        try:
+            self._runtime_logger.log_runtime_event(event, **payload)
+        except Exception:
+            logger.debug("Runtime logger write failed", exc_info=True)
+
+    def _sync_position_manager_from_state(self) -> None:
+        desired_positions = self._state.positions if isinstance(self._state.positions, dict) else {}
+        current_positions = self._position_manager.get_all_positions()
+
+        for symbol in set(current_positions) - set(desired_positions):
+            self._position_manager.close_position(symbol)
+
+        for symbol, raw in desired_positions.items():
+            desired = raw if isinstance(raw, Position) else None
+            if desired is None:
+                continue
+
+            current = self._position_manager.get_position(symbol)
+            if current is None:
+                self._position_manager.open_position(desired)
+                continue
+
+            current.quantity = desired.quantity
+            current.entry_price = desired.entry_price
+            current.current_price = desired.current_price
+            current.stop_loss = desired.stop_loss
+            current.take_profit = desired.take_profit
+            current.unrealized_pnl = desired.unrealized_pnl
+            current.status = desired.status
+
+    def _inquire_daily_orders(self, client=None) -> dict:
+        from datetime import date
+        from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
+            inquire_daily_ccld,
+        )
+
+        request_config = inquire_daily_ccld(
+            cano=self.account_number,
+            acnt_prdt_cd=self.account_product_code,
+            ord_dt=date.today().strftime("%Y%m%d"),
+            is_paper_trading=self.is_paper_trading,
+        )
+
+        request_client = client or self.client
+        return request_client.make_request(
+            method="GET",
+            path=request_config["url_path"],
+            params=request_config["params"],
+            headers={"tr_id": request_config["tr_id"]},
+        )
+
+    def _has_pending_order(self, symbol: str, *, side: str | None = None) -> bool:
+        with self._state_lock:
+            return self._has_pending_order_unlocked(symbol, side=side)
+
+    def _has_pending_order_unlocked(self, symbol: str, *, side: str | None = None) -> bool:
+        for order in self._state.pending_orders.values():
+            if not isinstance(order, Order):
+                continue
+            if order.status not in _ACTIVE_PENDING_ORDER_STATUSES:
+                continue
+            if order.symbol != symbol:
+                continue
+            if side is not None and order.side != side:
+                continue
+            return True
+        return False
+
+    def _active_pending_orders_unlocked(self) -> list[Order]:
+        return [
+            order
+            for order in self._state.pending_orders.values()
+            if isinstance(order, Order) and order.status in _ACTIVE_PENDING_ORDER_STATUSES
+        ]
+
+    def _unresolved_orders_summary(self) -> tuple[int, str | None, list[str]]:
+        with self._state_lock:
+            unresolved = [
+                order
+                for order in self._active_pending_orders_unlocked()
+                if order.unresolved_reason not in (None, "")
+            ]
+            reasons = [str(order.unresolved_reason) for order in unresolved if order.unresolved_reason]
+            return len(unresolved), (reasons[0] if reasons else None), reasons[:3]
+
+    def _register_submitted_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: int | None,
+        broker_order_id: str | None,
+        origin: str,
+        internal_order_id: str | None = None,
+        requested_stop_loss: int | None = None,
+        requested_take_profit: int | None = None,
+        exit_reason: str | None = None,
+        position_quantity_at_submit: int | None = None,
+    ) -> Order:
+        now = datetime.now(timezone.utc)
+        order_id = self._coerce_optional_text(internal_order_id) or str(time.time_ns())
+        order = Order(
+            order_id=order_id,
+            idempotency_key=order_id,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            order_type="market" if price is None else "limit",
+            status=OrderStatus.SUBMITTED,
+            broker_order_id=self._coerce_optional_text(broker_order_id),
+            origin=origin,
+            requested_stop_loss=requested_stop_loss,
+            requested_take_profit=requested_take_profit,
+            exit_reason=exit_reason,
+            position_quantity_at_submit=position_quantity_at_submit,
+            submitted_at=now,
+            last_event_at=now,
+        )
+        self._state.pending_orders[order.order_id] = order
+        return order
+
+    def _build_execution_key(self, event: Any) -> str:
+        broker_order_id = getattr(event, "broker_order_id", None) or getattr(event, "order_id", None)
+        side = getattr(event, "side", None)
+        quantity = getattr(event, "executed_quantity", None) or getattr(event, "quantity", None)
+        price = getattr(event, "executed_price", None) or getattr(event, "price", None)
+        status = getattr(event, "event_status", None)
+        timestamp = getattr(event, "timestamp", None)
+        parts = [
+            str(broker_order_id or ""),
+            str(side or ""),
+            str(quantity or ""),
+            str(price or ""),
+            str(status or ""),
+            str(timestamp or ""),
+        ]
+        return "|".join(parts)
+
+    def _remember_execution_key(self, key: str) -> bool:
+        if not key:
+            return False
+        if key in self._processed_execution_key_set:
+            return True
+        self._processed_execution_key_set.add(key)
+        self._processed_execution_keys.append(key)
+        if len(self._processed_execution_keys) > 256:
+            oldest = self._processed_execution_keys.pop(0)
+            self._processed_execution_key_set.discard(oldest)
+        return False
+
+    def _find_matching_pending_order(
+        self, event: Any
+    ) -> tuple[str | None, Order | None, str | None]:
+        broker_order_id = getattr(event, "broker_order_id", None) or getattr(event, "order_id", None)
+        symbol = str(getattr(event, "symbol", "")).strip().upper()
+        side = getattr(event, "side", None)
+        expected_delta = self._event_reported_quantity(event)
+
+        if broker_order_id:
+            for order_key, order in self._state.pending_orders.items():
+                if not isinstance(order, Order) or order.status not in _ACTIVE_PENDING_ORDER_STATUSES:
+                    continue
+                if order.broker_order_id == str(broker_order_id):
+                    return order_key, order, None
+
+        candidates: list[tuple[str, Order]] = []
+        for order_key, order in self._state.pending_orders.items():
+            if not isinstance(order, Order) or order.status not in _ACTIVE_PENDING_ORDER_STATUSES:
+                continue
+            if symbol and order.symbol != symbol:
+                continue
+            if side is not None and order.side != side:
+                continue
+            candidates.append((order_key, order))
+
+        if not candidates:
+            return None, None, "no_matching_pending_order"
+
+        if len(candidates) == 1:
+            return candidates[0][0], candidates[0][1], None
+
+        if expected_delta is not None:
+            qty_candidates = [
+                (order_key, order)
+                for order_key, order in candidates
+                if max(order.quantity - order.filled_quantity, 0) >= expected_delta
+            ]
+            if len(qty_candidates) == 1:
+                return qty_candidates[0][0], qty_candidates[0][1], None
+            candidates = qty_candidates or candidates
+
+        candidates.sort(
+            key=lambda item: item[1].submitted_at or datetime.min.replace(tzinfo=timezone.utc)
+        )
+        latest_time = candidates[-1][1].submitted_at
+        latest_candidates = [
+            (order_key, order)
+            for order_key, order in candidates
+            if order.submitted_at == latest_time
+        ]
+        if len(latest_candidates) == 1:
+            return latest_candidates[0][0], latest_candidates[0][1], None
+        return None, None, "ambiguous_execution_match"
+
+    def _event_reported_quantity(self, event: Any) -> int | None:
+        reported = getattr(event, "executed_quantity", None) or getattr(event, "quantity", None)
+        if reported in (None, ""):
+            return None
+        try:
+            return max(0, int(Decimal(str(reported))))
+        except Exception:
+            return None
+
+    def _resolve_fill_delta(self, order: Order, event: Any) -> int:
+        cumulative = getattr(event, "cumulative_quantity", None)
+        if cumulative is not None:
+            target_filled = min(order.quantity, int(Decimal(str(cumulative))))
+            return max(0, target_filled - order.filled_quantity)
+
+        reported = getattr(event, "executed_quantity", None) or getattr(event, "quantity", None)
+        if reported in (None, ""):
+            return 0
+        reported_qty = max(0, int(Decimal(str(reported))))
+        return max(0, min(order.quantity - order.filled_quantity, reported_qty))
+
+    def _apply_execution_event(self, event: Any) -> None:
+        notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]] = []
+        persisted = False
+        key = self._build_execution_key(event)
+        raw_payload = getattr(event, "raw_payload", None)
+
+        with self._state_lock:
+            if self._remember_execution_key(key):
+                logger.debug("Ignoring duplicated execution notice", extra={"key": key})
+                self._log_runtime_event("execution_deduped", key=key)
+                return
+
+            order_key, order, unresolved_reason = self._find_matching_pending_order(event)
+            if order is None or order_key is None:
+                reason = unresolved_reason or "unmatched_execution_notice"
+                logger.warning(
+                    "Execution notice did not match a pending order",
+                    extra={"key": key, "reason": reason},
+                )
+                self._log_runtime_event(
+                    "unmatched_execution",
+                    key=key,
+                    reason=reason,
+                    payload=raw_payload,
+                )
+                self._queue_notification(
+                    notifications,
+                    "order.unresolved",
+                    NotificationLevel.WARNING,
+                    "Order Unresolved",
+                    symbol=str(getattr(event, "symbol", "")).strip().upper() or None,
+                    side=getattr(event, "side", None),
+                    reason=reason,
+                    resolution_source="execution",
+                    raw_payload=raw_payload,
+                )
+            else:
+                order.unresolved_reason = None
+                fill_delta = self._resolve_fill_delta(order, event)
+                if fill_delta > 0:
+                    fill_price = getattr(event, "executed_price", None) or getattr(event, "price", None)
+                    if order.side == "buy":
+                        self._apply_buy_fill(
+                            order_key=order_key,
+                            order=order,
+                            filled_quantity=fill_delta,
+                            fill_price=fill_price,
+                            source="execution",
+                            notifications=notifications,
+                        )
+                    else:
+                        self._apply_sell_fill(
+                            order_key=order_key,
+                            order=order,
+                            filled_quantity=fill_delta,
+                            fill_price=fill_price,
+                            source="execution",
+                            position_snapshot=None,
+                            notifications=notifications,
+                        )
+                    self._update_state_unlocked()
+                    persisted = True
+
+        if persisted:
+            self._persist_state()
+        self._emit_notifications(notifications)
+
+    def _apply_buy_fill(
+        self,
+        *,
+        order_key: str,
+        order: Order,
+        filled_quantity: int,
+        fill_price: Any,
+        source: str,
+        notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]],
+    ) -> None:
+        fill_price_decimal = self._to_decimal(fill_price) or self._to_decimal(order.price) or Decimal("0")
+        now = datetime.now(timezone.utc)
+        previous_quantity = order.filled_quantity
+        new_total = previous_quantity + filled_quantity
+        total_cost = (order.filled_avg_price or Decimal("0")) * Decimal(previous_quantity)
+        total_cost += fill_price_decimal * Decimal(filled_quantity)
+        order.filled_quantity = new_total
+        if new_total > 0:
+            order.filled_avg_price = total_cost / Decimal(new_total)
+        order.last_event_at = now
+        order.resolution_source = source
+        order.last_reconciled_at = now if source != "execution" else order.last_reconciled_at
+        order.status = OrderStatus.FILLED if order.filled_quantity >= order.quantity else OrderStatus.PARTIAL_FILL
+        if order.status == OrderStatus.FILLED:
+            order.filled_at = now
+        order.broker_last_seen_status = "filled" if order.status == OrderStatus.FILLED else "partial_fill"
+
+        position = self._position_manager.get_position(order.symbol)
+        if position is None:
+            self._position_manager.open_position(
+                Position(
+                    symbol=order.symbol,
+                    quantity=filled_quantity,
+                    entry_price=fill_price_decimal,
+                    current_price=fill_price_decimal,
+                    status=PositionStatus.OPEN if source == "execution" else PositionStatus.OPEN_RECONCILED,
+                )
+            )
+            position = self._position_manager.get_position(order.symbol)
+            if position is not None:
+                self._queue_notification(
+                    notifications,
+                    "position.opened",
+                    NotificationLevel.INFO,
+                    "Position Opened",
+                    symbol=order.symbol,
+                    quantity=position.quantity,
+                    entry_price=str(position.entry_price),
+                    source=source,
+                )
+        elif position is not None:
+            total_position_cost = (position.entry_price * Decimal(position.quantity)) + (
+                fill_price_decimal * Decimal(filled_quantity)
+            )
+            position.quantity += filled_quantity
+            if position.quantity > 0:
+                position.entry_price = total_position_cost / Decimal(position.quantity)
+            position.current_price = fill_price_decimal
+            position.status = PositionStatus.OPEN if source == "execution" else PositionStatus.OPEN_RECONCILED
+
+        if position is not None:
+            self._apply_exit_targets(position, order)
+            self._ensure_symbol_monitoring(order.symbol)
+
+        if source != "execution":
+            self._queue_notification(
+                notifications,
+                "order.reconciled",
+                NotificationLevel.INFO,
+                "Order Reconciled",
+                symbol=order.symbol,
+                side="BUY",
+                quantity=filled_quantity,
+                price=str(fill_price_decimal),
+                broker_order_id=order.broker_order_id,
+                order_id=order.order_id,
+                resolution_source=source,
+            )
+        event_type = "order.filled" if order.status == OrderStatus.FILLED else "order.partially_filled"
+        event_title = "Order Filled" if order.status == OrderStatus.FILLED else "Order Partially Filled"
+        self._queue_notification(
+            notifications,
+            event_type,
+            NotificationLevel.INFO,
+            event_title,
+            symbol=order.symbol,
+            side="BUY",
+            quantity=filled_quantity,
+            price=str(fill_price_decimal),
+            broker_order_id=order.broker_order_id,
+            order_id=order.order_id,
+            executed_quantity=str(filled_quantity),
+            executed_price=str(fill_price_decimal),
+        )
+        if order.status == OrderStatus.FILLED:
+            self._state.pending_orders.pop(order_key, None)
+        self._log_runtime_event(
+            "order_state_transition",
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            status=order.status.value,
+            resolution_source=source,
+            filled_quantity=order.filled_quantity,
+        )
+
+    def _apply_sell_fill(
+        self,
+        *,
+        order_key: str,
+        order: Order,
+        filled_quantity: int,
+        fill_price: Any,
+        source: str,
+        position_snapshot: Any | None = None,
+        notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]],
+    ) -> None:
+        fill_price_decimal = self._to_decimal(fill_price) or self._to_decimal(order.price) or Decimal("0")
+        now = datetime.now(timezone.utc)
+        previous_quantity = order.filled_quantity
+        new_total = previous_quantity + filled_quantity
+        total_cost = (order.filled_avg_price or Decimal("0")) * Decimal(previous_quantity)
+        total_cost += fill_price_decimal * Decimal(filled_quantity)
+        order.filled_quantity = new_total
+        if new_total > 0:
+            order.filled_avg_price = total_cost / Decimal(new_total)
+        order.last_event_at = now
+        order.resolution_source = source
+        order.last_reconciled_at = now if source != "execution" else order.last_reconciled_at
+        order.status = OrderStatus.FILLED if order.filled_quantity >= order.quantity else OrderStatus.PARTIAL_FILL
+        if order.status == OrderStatus.FILLED:
+            order.filled_at = now
+        order.broker_last_seen_status = "filled" if order.status == OrderStatus.FILLED else "partial_fill"
+
+        position = self._position_manager.get_position(order.symbol)
+        closed_position = False
+        if position is not None:
+            effective_qty = min(filled_quantity, max(position.quantity, 0))
+            if effective_qty > 0:
+                self._record_realized_pnl(
+                    position=position,
+                    sold_quantity=effective_qty,
+                    sold_price=int(fill_price_decimal),
+                )
+                if effective_qty >= position.quantity:
+                    self._position_manager.close_position(order.symbol)
+                    self._price_monitor.remove_symbol(order.symbol)
+                    closed_position = True
+                else:
+                    position.quantity -= effective_qty
+                    position.current_price = fill_price_decimal
+                    position.unrealized_pnl = (
+                        fill_price_decimal - position.entry_price
+                    ) * Decimal(position.quantity)
+                    self._queue_notification(
+                        notifications,
+                        "position.reduced",
+                        NotificationLevel.INFO,
+                        "Position Reduced",
+                        symbol=order.symbol,
+                        quantity=position.quantity,
+                        entry_price=str(position.entry_price),
+                        source=source,
+                    )
+        elif position_snapshot is not None and getattr(position_snapshot, "entry_price", None) is not None:
+            self._record_realized_pnl_from_values(
+                entry_price=position_snapshot.entry_price,
+                sold_quantity=filled_quantity,
+                sold_price=int(fill_price_decimal),
+            )
+            closed_position = bool(
+                getattr(position_snapshot, "quantity", 0) <= filled_quantity
+            )
+
+        if source != "execution":
+            self._queue_notification(
+                notifications,
+                "order.reconciled",
+                NotificationLevel.INFO,
+                "Order Reconciled",
+                symbol=order.symbol,
+                side="SELL",
+                quantity=filled_quantity,
+                price=str(fill_price_decimal),
+                broker_order_id=order.broker_order_id,
+                order_id=order.order_id,
+                resolution_source=source,
+                exit_reason=order.exit_reason,
+            )
+        event_type = "order.filled" if order.status == OrderStatus.FILLED else "order.partially_filled"
+        event_title = "Order Filled" if order.status == OrderStatus.FILLED else "Order Partially Filled"
+        self._queue_notification(
+            notifications,
+            event_type,
+            NotificationLevel.INFO,
+            event_title,
+            symbol=order.symbol,
+            side="SELL",
+            quantity=filled_quantity,
+            price=str(fill_price_decimal),
+            broker_order_id=order.broker_order_id,
+            order_id=order.order_id,
+            executed_quantity=str(filled_quantity),
+            executed_price=str(fill_price_decimal),
+            exit_reason=order.exit_reason,
+        )
+        if closed_position:
+            self._queue_notification(
+                notifications,
+                "position.closed",
+                NotificationLevel.INFO,
+                "Position Closed",
+                symbol=order.symbol,
+                source=source,
+                exit_reason=order.exit_reason,
+            )
+        if order.status == OrderStatus.FILLED:
+            self._state.pending_orders.pop(order_key, None)
+        self._log_runtime_event(
+            "order_state_transition",
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            status=order.status.value,
+            resolution_source=source,
+            filled_quantity=order.filled_quantity,
+            exit_reason=order.exit_reason,
+        )
+
+    def _apply_exit_targets(self, position: Position, order: Order) -> None:
+        if order.requested_stop_loss is not None:
+            position.stop_loss = Decimal(str(order.requested_stop_loss))
+        elif position.stop_loss is None and position.entry_price > 0:
+            position.stop_loss = self._build_default_exit_price(
+                entry_price=position.entry_price,
+                pct=Decimal(str(self.config.default_stop_loss_pct)),
+                direction="down",
+            )
+
+        if order.requested_take_profit is not None:
+            position.take_profit = Decimal(str(order.requested_take_profit))
+        elif position.take_profit is None and position.entry_price > 0:
+            position.take_profit = self._build_default_exit_price(
+                entry_price=position.entry_price,
+                pct=Decimal(str(self.config.default_take_profit_pct)),
+                direction="up",
+            )
+
+    @staticmethod
+    def _coerce_optional_text(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, (str, int, float, Decimal)):
+            return str(value)
+        return None
+
+    @staticmethod
+    def _build_default_exit_price(
+        *, entry_price: Decimal, pct: Decimal, direction: Literal["down", "up"]
+    ) -> Decimal:
+        multiplier = Decimal("1") - pct if direction == "down" else Decimal("1") + pct
+        return Decimal(int((entry_price * multiplier).to_integral_value()))
+
+    @staticmethod
+    def _to_decimal(value: Any) -> Decimal | None:
+        if value in (None, "", "-"):
+            return None
+        try:
+            return Decimal(str(value).replace(",", ""))
+        except Exception:
+            return None
+
+    def _record_realized_pnl_from_values(
+        self, *, entry_price: Decimal, sold_quantity: int, sold_price: int
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        self._rollover_daily_metrics_if_needed(now=now)
+        effective_qty = max(int(sold_quantity), 0)
+        if effective_qty <= 0:
+            return
+        realized = (Decimal(str(sold_price)) - entry_price) * Decimal(effective_qty)
+        self._daily_realized_pnl += realized
+
+    def _safe_inquire_daily_orders(self) -> dict[str, Any] | None:
+        try:
+            return self._inquire_daily_orders()
+        except Exception:
+            logger.debug("Daily order inquiry failed during broker sync", exc_info=True)
+            return None
+
+    def _find_daily_order_match(
+        self, order: Order, daily_orders: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        for item in daily_orders:
+            if not isinstance(item, dict):
+                continue
+            broker_order_id = item.get("odno") or item.get("ODNO")
+            if broker_order_id not in (None, "") and order.broker_order_id:
+                if str(broker_order_id) == order.broker_order_id:
+                    return item, None
+        candidates: list[dict[str, Any]] = []
+        for item in daily_orders:
+            if not isinstance(item, dict):
+                continue
+            symbol = item.get("pdno") or item.get("PDNO")
+            if str(symbol or "") != order.symbol:
+                continue
+            side_code = item.get("sll_buy_dvsn_cd") or item.get("SLL_BUY_DVSN_CD")
+            side = "buy" if str(side_code) == "02" else "sell" if str(side_code) == "01" else None
+            if side == order.side:
+                candidates.append(item)
+        if len(candidates) == 1:
+            return candidates[0], None
+        if len(candidates) > 1:
+            return None, "ambiguous_daily_order_match"
+        return None, "no_daily_order_match"
+
+    def _extract_daily_filled_qty(self, item: dict[str, Any]) -> int:
+        for key in (
+            "tot_ccld_qty",
+            "TOT_CCLD_QTY",
+            "ccld_qty",
+            "CCLD_QTY",
+            "tot_ccld_cqty",
+            "TOT_CCLD_CQTY",
+        ):
+            value = item.get(key)
+            if value not in (None, ""):
+                try:
+                    return int(Decimal(str(value)))
+                except Exception:
+                    continue
+        return 0
+
+    def _extract_daily_fill_price(self, item: dict[str, Any]) -> Decimal | None:
+        for key in ("avg_prvs", "avg_prc", "ccld_avg_prc", "ord_avg_prc", "avg_price"):
+            value = item.get(key)
+            if value not in (None, ""):
+                return self._to_decimal(value)
+        return None
+
+    @staticmethod
+    def _daily_order_looks_rejected(item: dict[str, Any]) -> bool:
+        payload = " ".join(
+            str(item.get(key, ""))
+            for key in ("ord_stts", "ord_sttus", "ccld_dvsn", "msg1", "status")
+        ).lower()
+        return any(token in payload for token in ("reject", "거부", "취소", "cancel"))
+
+    @staticmethod
+    def _daily_order_status_text(item: dict[str, Any]) -> str | None:
+        payload = " ".join(
+            str(item.get(key, ""))
+            for key in ("ord_stts", "ord_sttus", "ccld_dvsn", "status", "msg1")
+        ).strip()
+        return payload or None
+
+    def _mark_order_unresolved(
+        self,
+        *,
+        order: Order,
+        reason: str,
+        notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]],
+        raw_payload: Any | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        order.unresolved_reason = reason
+        order.last_reconciled_at = now
+        self._log_runtime_event(
+            "pending_order_unresolved",
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            reason=reason,
+            age_sec=self._pending_order_age_sec(order),
+            payload=raw_payload,
+        )
+        if self._pending_order_age_sec(order) < _UNRESOLVED_ORDER_WARNING_AGE_SEC:
+            return
+        self._queue_notification(
+            notifications,
+            "order.unresolved",
+            NotificationLevel.WARNING,
+            "Order Unresolved",
+            symbol=order.symbol,
+            side=order.side.upper(),
+            quantity=order.quantity,
+            price=order.price,
+            broker_order_id=order.broker_order_id,
+            order_id=order.order_id,
+            reason=reason,
+            pending_age_sec=round(self._pending_order_age_sec(order), 1),
+            raw_payload=raw_payload,
+        )
+
+    def _pending_order_age_sec(self, order: Order) -> float:
+        base_time = order.submitted_at or order.created_at
+        if base_time is None:
+            return 0.0
+        return max(0.0, (datetime.now(timezone.utc) - base_time).total_seconds())
+
+    def _sync_pending_orders_from_broker(
+        self,
+        result: Any,
+        notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]],
+    ) -> None:
+        if not self._state.pending_orders:
+            return
+
+        daily_orders_response = self._safe_inquire_daily_orders()
+        daily_orders = (
+            daily_orders_response.get("output1", [])
+            if isinstance(daily_orders_response, dict)
+            else []
+        )
+        if not isinstance(daily_orders, list):
+            daily_orders = []
+
+        for order_key, order in list(self._state.pending_orders.items()):
+            if not isinstance(order, Order):
+                continue
+            if order.status not in _ACTIVE_PENDING_ORDER_STATUSES:
+                continue
+
+            daily_order, daily_match_reason = self._find_daily_order_match(order, daily_orders)
+            order.last_reconciled_at = datetime.now(timezone.utc)
+            order.broker_last_seen_status = (
+                self._daily_order_status_text(daily_order) if daily_order is not None else None
+            )
+            if daily_order is not None and self._daily_order_looks_rejected(daily_order):
+                order.status = OrderStatus.REJECTED
+                order.last_event_at = datetime.now(timezone.utc)
+                order.unresolved_reason = None
+                self._queue_notification(
+                    notifications,
+                    "order.rejected",
+                    NotificationLevel.WARNING,
+                    "Order Rejected",
+                    symbol=order.symbol,
+                    side=order.side.upper(),
+                    quantity=order.quantity,
+                    price=order.price,
+                    reason="Broker reported rejected/cancelled order",
+                )
+                self._state.pending_orders.pop(order_key, None)
+                continue
+
+            broker_position = result.broker_positions.get(order.symbol)
+            local_snapshot = result.local_positions.get(order.symbol)
+
+            if order.side == "buy" and daily_order is not None:
+                daily_filled = self._extract_daily_filled_qty(daily_order)
+                inferred_target = min(order.quantity, daily_filled)
+                delta = max(0, inferred_target - order.filled_quantity)
+                if delta > 0:
+                    self._apply_buy_fill(
+                        order_key=order_key,
+                        order=order,
+                        filled_quantity=delta,
+                        fill_price=(
+                            self._extract_daily_fill_price(daily_order)
+                            or (broker_position.entry_price if broker_position is not None else None)
+                            or order.price
+                        ),
+                        source="daily_order",
+                        notifications=notifications,
+                    )
+                    order.unresolved_reason = None
+                else:
+                    self._mark_order_unresolved(
+                        order=order,
+                        reason=self._daily_order_status_text(daily_order) or "buy_not_filled_yet",
+                        notifications=notifications,
+                        raw_payload=daily_order,
+                    )
+                continue
+
+            if order.side == "buy" and broker_position is not None and broker_position.quantity > 0:
+                inferred_target = min(order.quantity, broker_position.quantity)
+                delta = max(0, inferred_target - order.filled_quantity)
+                if delta > 0:
+                    self._apply_buy_fill(
+                        order_key=order_key,
+                        order=order,
+                        filled_quantity=delta,
+                        fill_price=broker_position.entry_price or order.price,
+                        source="balance",
+                        notifications=notifications,
+                    )
+                    order.unresolved_reason = None
+                    continue
+
+            if order.side == "sell":
+                original_qty = order.position_quantity_at_submit or (
+                    local_snapshot.quantity if local_snapshot is not None else order.quantity
+                )
+                if daily_order is not None:
+                    daily_filled = self._extract_daily_filled_qty(daily_order)
+                    inferred_target = min(order.quantity, daily_filled)
+                    delta = max(0, inferred_target - order.filled_quantity)
+                    if delta > 0:
+                        self._apply_sell_fill(
+                            order_key=order_key,
+                            order=order,
+                            filled_quantity=delta,
+                            fill_price=(
+                                self._extract_daily_fill_price(daily_order)
+                                or (
+                                    broker_position.current_price
+                                    if broker_position is not None
+                                    else order.price
+                                )
+                            ),
+                            source="daily_order",
+                            position_snapshot=local_snapshot,
+                            notifications=notifications,
+                        )
+                        order.unresolved_reason = None
+                        continue
+                    self._mark_order_unresolved(
+                        order=order,
+                        reason=self._daily_order_status_text(daily_order) or "sell_not_filled_yet",
+                        notifications=notifications,
+                        raw_payload=daily_order,
+                    )
+                    continue
+
+                if broker_position is None and daily_order is None:
+                    self._mark_order_unresolved(
+                        order=order,
+                        reason="sell_requires_execution_or_daily_order_confirmation",
+                        notifications=notifications,
+                        raw_payload=None,
+                    )
+                    continue
+
+                broker_remaining = broker_position.quantity if broker_position is not None else 0
+                if broker_remaining >= original_qty:
+                    self._mark_order_unresolved(
+                        order=order,
+                        reason=daily_match_reason or "sell_not_filled_yet",
+                        notifications=notifications,
+                        raw_payload=daily_order,
+                    )
+                    continue
+
+                if daily_match_reason == "ambiguous_daily_order_match":
+                    self._mark_order_unresolved(
+                        order=order,
+                        reason=daily_match_reason,
+                        notifications=notifications,
+                        raw_payload=daily_orders,
+                    )
+                    continue
+
+            if order.unresolved_reason is None and daily_match_reason in {
+                "ambiguous_daily_order_match",
+                "no_daily_order_match",
+            }:
+                self._mark_order_unresolved(
+                    order=order,
+                    reason=daily_match_reason,
+                    notifications=notifications,
+                    raw_payload=daily_orders,
+                )
+
+    def _apply_reconciled_positions(self, broker_positions: dict[str, Any]) -> None:
+        for symbol, snapshot in broker_positions.items():
+            position = self._position_manager.get_position(symbol)
+            if position is None:
+                self._position_manager.open_position(
+                    Position(
+                        symbol=symbol,
+                        quantity=snapshot.quantity,
+                        entry_price=snapshot.entry_price or Decimal("0"),
+                        current_price=snapshot.current_price,
+                        status=PositionStatus.OPEN_RECONCILED,
+                    )
+                )
+                position = self._position_manager.get_position(symbol)
+            elif position is not None:
+                position.quantity = snapshot.quantity
+                if snapshot.entry_price is not None and (
+                    position.entry_price <= 0 or position.status == PositionStatus.OPEN_RECONCILED
+                ):
+                    position.entry_price = snapshot.entry_price
+                if snapshot.current_price is not None:
+                    position.current_price = snapshot.current_price
+                    position.unrealized_pnl = (
+                        snapshot.current_price - position.entry_price
+                    ) * Decimal(position.quantity)
+                if position.status in {PositionStatus.STALE, PositionStatus.CLOSED}:
+                    position.status = PositionStatus.OPEN_RECONCILED
+
+            if position is not None and position.entry_price > 0:
+                placeholder_order = Order(symbol=symbol, side="buy")
+                self._apply_exit_targets(position, placeholder_order)
+                self._ensure_symbol_monitoring(symbol)
+
+    def _on_reconciliation_cycle(self, result: Any) -> None:
+        notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]] = []
+        should_persist = False
+        try:
+            with self._state_lock:
+                self._sync_pending_orders_from_broker(result, notifications)
+                self._apply_reconciled_positions(result.broker_positions)
+                self._update_state_unlocked()
+                should_persist = True
+        except Exception:
+            logger.debug("Reconciliation cycle apply failed", exc_info=True)
+
+        if should_persist:
+            self._persist_state()
+        self._emit_notifications(notifications)
+        if not result.is_clean:
+            self._handle_discrepancy(result)
 
     def _restore_risk_controls(self) -> None:
         controls = self._state.risk_controls if isinstance(self._state.risk_controls, dict) else {}
@@ -1145,6 +2257,9 @@ class TradingEngine:
         if not position or position.quantity == 0:
             logger.warning(f"No position found for stop-loss: {symbol}")
             return
+        if self._has_pending_order(symbol, side="sell"):
+            logger.info("Skipping stop-loss auto-exit; pending sell exists", extra={"symbol": symbol})
+            return
         if not self._should_process_auto_exit(symbol, trigger_type="stop_loss"):
             logger.info("Skipping duplicate stop-loss auto-exit", extra={"symbol": symbol})
             return
@@ -1152,7 +2267,13 @@ class TradingEngine:
         # Get current price for market order
         try:
             current_price = self._get_current_price(symbol)
-            result = self.sell(symbol=symbol, quantity=position.quantity, price=current_price)
+            result = self.sell(
+                symbol=symbol,
+                quantity=position.quantity,
+                price=current_price,
+                origin="stop_loss",
+                exit_reason="STOP_LOSS",
+            )
 
             if result.success:
                 logger.info(f"Stop-loss order executed for {symbol}: {result.order_id}")
@@ -1187,6 +2308,12 @@ class TradingEngine:
         if not position or position.quantity == 0:
             logger.warning(f"No position found for take-profit: {symbol}")
             return
+        if self._has_pending_order(symbol, side="sell"):
+            logger.info(
+                "Skipping take-profit auto-exit; pending sell exists",
+                extra={"symbol": symbol},
+            )
+            return
         if not self._should_process_auto_exit(symbol, trigger_type="take_profit"):
             logger.info("Skipping duplicate take-profit auto-exit", extra={"symbol": symbol})
             return
@@ -1194,7 +2321,13 @@ class TradingEngine:
         # Get current price for limit order
         try:
             current_price = self._get_current_price(symbol)
-            result = self.sell(symbol=symbol, quantity=position.quantity, price=current_price)
+            result = self.sell(
+                symbol=symbol,
+                quantity=position.quantity,
+                price=current_price,
+                origin="take_profit",
+                exit_reason="TAKE_PROFIT",
+            )
 
             if result.success:
                 logger.info(f"Take-profit order executed for {symbol}: {result.order_id}")
@@ -1226,6 +2359,8 @@ class TradingEngine:
             },
         )
 
+        discrepancy_texts = [str(item) for item in result.discrepancies if item is not None]
+        unresolved_count, primary_unresolved_reason, unresolved_reasons = self._unresolved_orders_summary()
         self._notify(
             "reconciliation.discrepancy",
             NotificationLevel.WARNING,
@@ -1235,6 +2370,11 @@ class TradingEngine:
             orphan_positions=result.orphan_positions,
             missing_positions=result.missing_positions,
             quantity_mismatches=result.quantity_mismatches,
+            primary_discrepancy=discrepancy_texts[0] if discrepancy_texts else None,
+            discrepancies_sample=discrepancy_texts[:3],
+            unresolved_order_count=unresolved_count,
+            primary_unresolved_reason=primary_unresolved_reason,
+            unresolved_reasons=unresolved_reasons,
         )
 
     def _run_preflight_checks(self) -> list[str]:
@@ -1267,11 +2407,20 @@ class TradingEngine:
 
         # 3. Market hours info (warning only, not an error)
         if self.config.market_hours_enabled and not self._is_market_open():
-            logger.warning(
-                "Engine starting outside market hours - buy orders will be blocked"
-            )
+            if self._should_enforce_market_hours():
+                logger.warning(
+                    "Engine starting outside market hours - buy orders will be blocked"
+                )
+            else:
+                logger.info(
+                    "Engine starting outside market hours - mock mode: local market-hours block disabled"
+                )
 
         return errors
+
+    def _should_enforce_market_hours(self) -> bool:
+        """Return whether engine-managed buy orders should be restricted by market hours."""
+        return self.config.market_hours_enabled and (not self.is_paper_trading)
 
     def _is_market_open(self) -> bool:
         """Check if Korean stock market is currently open.
@@ -1309,9 +2458,22 @@ class TradingEngine:
     def _start_strategy_orchestration(self) -> None:
         strategy = getattr(self.config, "strategy", None)
         symbols = list(getattr(self.config, "strategy_symbols", ()))
+        auto_discover = bool(getattr(self.config, "strategy_auto_discover", False))
         if strategy is None:
+            self._update_strategy_discovery_state(
+                source="none",
+                symbols=(),
+                reason="strategy_not_configured",
+                notify_discovery=False,
+            )
             return
-        if not symbols and not bool(getattr(self.config, "strategy_auto_discover", False)):
+        if not symbols and not auto_discover:
+            self._update_strategy_discovery_state(
+                source="none",
+                symbols=(),
+                reason="symbols_not_configured",
+                notify_discovery=False,
+            )
             return
 
         try:
@@ -1363,17 +2525,43 @@ class TradingEngine:
     def _run_strategy_cycle(self) -> None:
         strategy = getattr(self.config, "strategy", None)
         if strategy is None:
+            self._update_strategy_discovery_state(
+                source="none",
+                symbols=(),
+                reason="strategy_not_configured",
+                notify_discovery=False,
+            )
             return
 
-        symbols = list(getattr(self.config, "strategy_symbols", ()))
-        if not symbols and bool(getattr(self.config, "strategy_auto_discover", False)):
-            symbols = self._discover_strategy_symbols()
-        if not symbols:
-            return
+        symbols = self._normalize_symbol_entries(getattr(self.config, "strategy_symbols", ()))
+        auto_discover = bool(getattr(self.config, "strategy_auto_discover", False))
+        notify_discovery = False
+        discovery_source: StrategyDiscoverySource = "manual"
+        discovery_reason: str | None = None
+
+        if not symbols and auto_discover:
+            discovery_result = self._discover_strategy_symbols()
+            symbols = list(discovery_result.symbols)
+            discovery_source = discovery_result.source
+            discovery_reason = discovery_result.reason
+            notify_discovery = True
+        elif not symbols:
+            discovery_source = "none"
+            discovery_reason = "symbols_not_configured"
 
         max_symbols = int(getattr(self.config, "strategy_max_symbols_per_cycle", 0) or 0)
         if max_symbols > 0:
             symbols = symbols[:max_symbols]
+
+        self._update_strategy_discovery_state(
+            source=discovery_source,
+            symbols=tuple(symbols),
+            reason=discovery_reason,
+            notify_discovery=notify_discovery,
+        )
+
+        if not symbols:
+            return
 
         with self._strategy_lock:
             try:
@@ -1410,10 +2598,12 @@ class TradingEngine:
 
                 if self._position_manager.get_position(symbol) is not None:
                     continue
+                if self._has_pending_order(symbol, side="buy"):
+                    continue
 
                 try:
                     price = self._get_current_price(symbol)
-                    self.buy(symbol, qty, price)
+                    self.buy(symbol, qty, price, origin="strategy")
                     submitted += 1
                 except Exception as e:
                     logger.error("Buy submission failed", extra={"symbol": symbol}, exc_info=True)

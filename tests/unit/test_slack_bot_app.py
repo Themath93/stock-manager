@@ -57,6 +57,28 @@ def test_dispatch_command_help_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert kwargs["response_type"] == "ephemeral"
 
 
+def test_dispatch_command_start_help_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    respond = MagicMock()
+    session_manager = MagicMock()
+
+    monkeypatch.setattr(
+        "stock_manager.slack_bot.command_parser.parse_command",
+        lambda _text: ParsedCommand(subcommand="start-help"),
+    )
+
+    slack_app._dispatch_command(
+        text="start help",
+        user_id="U1",
+        respond=respond,
+        session_manager=session_manager,
+    )
+
+    respond.assert_called_once()
+    kwargs = respond.call_args.kwargs
+    assert kwargs["response_type"] == "ephemeral"
+    assert "전략" in kwargs["text"]
+
+
 def test_dispatch_command_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
     respond = MagicMock()
     session_manager = MagicMock()

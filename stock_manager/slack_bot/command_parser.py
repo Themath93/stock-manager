@@ -49,6 +49,14 @@ def parse_command(text: str) -> ParsedCommand:
     except ValueError as exc:
         return ParsedCommand(subcommand="help", error=f"Parse error: {exc}")
 
+    if len(tokens) >= 2 and tokens[0].lower() == "start" and tokens[1].lower() == "help":
+        if len(tokens) > 2:
+            return ParsedCommand(
+                subcommand="start-help",
+                error="start help does not accept additional flags.",
+            )
+        return ParsedCommand(subcommand="start-help")
+
     subcommand = tokens[0].lower()
     if subcommand not in _VALID_SUBCOMMANDS:
         return ParsedCommand(subcommand=subcommand, error=f"Unknown subcommand: {subcommand}")

@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from stock_manager.main import build_app
 import stock_manager.cli.trading_commands as trading_commands
+import stock_manager.cli.verify_commands as verify_commands
 from stock_manager.adapters.broker.kis.exceptions import KISAPIError
 
 
@@ -22,6 +23,102 @@ def test_help_includes_run_trade_smoke_commands() -> None:
     assert "run" in result.stdout
     assert "trade" in result.stdout
     assert "smoke" in result.stdout
+    assert "verify" in result.stdout
+
+
+def test_verify_live_roundtrip_blocks_without_confirm_live(monkeypatch) -> None:
+    runner = CliRunner()
+    called = {"value": False}
+
+    def _fake_probe(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("probe helper must not run without --confirm-live")
+
+    monkeypatch.setattr(verify_commands, "_run_live_roundtrip_probe", _fake_probe)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "verify",
+            "live-roundtrip",
+            "--symbol",
+            "005930",
+            "--quantity",
+            "1",
+            "--max-notional",
+            "100000",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--confirm-live" in result.stdout
+    assert called["value"] is False
+
+
+def test_verify_live_roundtrip_reports_probe_failure(monkeypatch) -> None:
+    runner = CliRunner()
+
+    def _fake_probe(*args, **kwargs):
+        raise verify_commands.LiveRoundTripProbeError("promotion gate blocked")
+
+    monkeypatch.setattr(verify_commands, "_run_live_roundtrip_probe", _fake_probe)
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "verify",
+            "live-roundtrip",
+            "--symbol",
+            "005930",
+            "--quantity",
+            "1",
+            "--max-notional",
+            "100000",
+            "--confirm-live",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "promotion gate blocked" in result.stdout
+
+
+def test_verify_live_roundtrip_success(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        verify_commands,
+        "_run_live_roundtrip_probe",
+        lambda config: verify_commands.LiveRoundTripProbeResult(
+            artifact_dir=tmp_path / "artifacts",
+            current_price=70000,
+            notional=70000,
+            buy_order_id="BUY-1",
+            sell_order_id="SELL-1",
+            final_reconciliation="clean",
+            startup_recovery="clean",
+            captured_quote_count=1,
+            captured_execution_count=2,
+        ),
+    )
+
+    result = runner.invoke(
+        build_app(),
+        [
+            "verify",
+            "live-roundtrip",
+            "--symbol",
+            "005930",
+            "--quantity",
+            "1",
+            "--max-notional",
+            "100000",
+            "--confirm-live",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Live roundtrip OK" in result.stdout
+    assert str(tmp_path / "artifacts") in result.stdout
 
 
 def test_trade_buy_is_dry_run_by_default(monkeypatch) -> None:
