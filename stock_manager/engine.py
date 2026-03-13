@@ -32,12 +32,19 @@ from stock_manager.trading import (
     RateLimiter,
 )
 from stock_manager.trading.guardrails import (
+    BrokerTruthSnapshot,
     EngineOperabilityDecision,
     OperationalState,
+    RuntimeFaultDecision,
+    build_execution_dedupe_key,
+    evaluate_execution_integrity,
     evaluate_engine_operability,
     evaluate_order_permission,
     evaluate_pending_order_recovery,
     evaluate_realtime_startup,
+    evaluate_runtime_fault,
+    evaluate_session_handoff,
+    evaluate_submission_recovery,
     evaluate_runtime_guard,
     evaluate_startup_guard,
     evaluate_websocket_guard,
@@ -100,6 +107,11 @@ class EngineStatus:
     trading_enabled: bool
     recovery_result: str
     degraded_reason: str | None
+    operator_action_required: bool
+    last_broker_snapshot_at: str | None
+    open_order_count: int
+    snapshot_stale: bool
+    handoff_reason: str | None
     strategy_discovery_source: str | None
     strategy_discovery_symbols: tuple[str, ...]
     strategy_discovery_reason: str | None
@@ -156,6 +168,7 @@ class TradingEngine:
     _last_market_data_success_at: datetime | None = field(default=None, init=False, repr=False)
     _last_reconciliation_success_at: datetime | None = field(default=None, init=False, repr=False)
     _last_balance_refresh_success_at: datetime | None = field(default=None, init=False, repr=False)
+    _last_broker_snapshot_at: datetime | None = field(default=None, init=False, repr=False)
     _last_recovery_result: RecoveryResult = field(default=RecoveryResult.CLEAN, init=False)
     _daily_kill_switch_active: bool = field(default=False, init=False)
     _daily_kill_switch_triggered_at: datetime | None = field(default=None, init=False)
@@ -183,6 +196,11 @@ class TradingEngine:
     _strategy_discovery_last_fingerprint: str | None = field(default=None, init=False, repr=False)
     _runtime_logger: PipelineJsonLogger = field(init=False, repr=False)
     _guardrail_notifications_sent: set[str] = field(default_factory=set, init=False, repr=False)
+    _operator_action_required: bool = field(default=False, init=False)
+    _open_order_count: int = field(default=0, init=False)
+    _snapshot_stale: bool = field(default=False, init=False)
+    _handoff_reason: str | None = field(default=None, init=False)
+    _last_broker_snapshot: BrokerTruthSnapshot | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         """Initialize all trading components with proper dependencies."""
@@ -276,6 +294,12 @@ class TradingEngine:
         self._last_market_data_success_at = None
         self._last_reconciliation_success_at = None
         self._last_balance_refresh_success_at = None
+        self._last_broker_snapshot_at = None
+        self._operator_action_required = False
+        self._open_order_count = 0
+        self._snapshot_stale = False
+        self._handoff_reason = None
+        self._last_broker_snapshot = None
 
         # Load persisted state
         try:
@@ -293,6 +317,7 @@ class TradingEngine:
             logger.warning(f"Failed to load state: {e}. Starting with empty state.")
 
         self._restore_risk_controls()
+        self._restore_runtime_metadata()
         self._seed_executor_idempotency_keys()
 
         # Run preflight checks
@@ -306,6 +331,7 @@ class TradingEngine:
             client=self.client,
             inquire_balance_func=self._inquire_balance,
             inquire_daily_orders_func=self._inquire_daily_orders,
+            fetch_account_truth_func=self._fetch_account_truth,
             save_state_func=save_state_atomic,
             state_path=self.state_path,
         )
@@ -426,6 +452,28 @@ class TradingEngine:
             raise RuntimeError("Engine is not running")
 
         logger.info("Stopping TradingEngine")
+        handoff = evaluate_session_handoff(
+            has_positions=bool(self._position_manager.get_all_positions()),
+            operator_action_required=self._operator_action_required,
+        )
+        if handoff.require_operator_handoff:
+            self._handoff_reason = handoff.summary
+            snapshot = self._capture_account_truth(reason=handoff.summary or "operator_handoff")
+            self._log_runtime_event(
+                "operator.handoff_required",
+                summary=handoff.summary,
+                position_count=len(self._position_manager.get_all_positions()),
+                snapshot=self._snapshot_payload(snapshot) if snapshot is not None else None,
+            )
+            self._notify(
+                "operator.handoff_required",
+                NotificationLevel.WARNING,
+                "Operator Handoff Required",
+                summary=handoff.summary,
+                position_count=len(self._position_manager.get_all_positions()),
+                operator_action_required=self._operator_action_required,
+                open_order_count=self._open_order_count,
+            )
 
         self._stop_strategy_orchestration(timeout=timeout / 2)
 
@@ -782,7 +830,19 @@ class TradingEngine:
             RuntimeError: If engine is not running
         """
         self._ensure_running()
-        return self._inquire_balance()
+        snapshot = self._fetch_account_truth()
+        return {
+            "output1": list(snapshot.positions),
+            "output2": [dict(snapshot.cash)],
+            "_snapshot_metadata": {
+                "fetched_at": snapshot.fetched_at.isoformat(),
+                "snapshot_ok": snapshot.snapshot_ok,
+                "open_order_count": len(snapshot.open_orders),
+                "operator_action_required": self._operator_action_required,
+                "snapshot_stale": self._snapshot_stale,
+                "handoff_reason": self._handoff_reason,
+            },
+        }
 
     def get_daily_orders(self) -> dict:
         """Get today's order/execution history via broker API.
@@ -794,7 +854,48 @@ class TradingEngine:
             RuntimeError: If engine is not running
         """
         self._ensure_running()
-        return self._inquire_daily_orders()
+        response = self._inquire_daily_orders()
+        try:
+            snapshot = self._fetch_account_truth()
+            response["_snapshot_metadata"] = {
+                "fetched_at": snapshot.fetched_at.isoformat(),
+                "snapshot_ok": snapshot.snapshot_ok,
+                "open_order_count": len(snapshot.open_orders),
+                "operator_action_required": self._operator_action_required,
+                "snapshot_stale": self._snapshot_stale,
+                "handoff_reason": self._handoff_reason,
+            }
+        except Exception:
+            response["_snapshot_metadata"] = {
+                "fetched_at": (
+                    self._last_broker_snapshot_at.isoformat()
+                    if self._last_broker_snapshot_at is not None
+                    else None
+                ),
+                "snapshot_ok": False,
+                "open_order_count": self._open_order_count,
+                "operator_action_required": self._operator_action_required,
+                "snapshot_stale": True,
+                "handoff_reason": self._handoff_reason,
+            }
+        return response
+
+    def get_open_orders(self) -> dict:
+        """Get the current broker open orders via the account-truth snapshot."""
+        self._ensure_running()
+        snapshot = self._fetch_account_truth()
+        return {
+            "output1": list(snapshot.open_orders),
+            "_view": "open_orders",
+            "_snapshot_metadata": {
+                "fetched_at": snapshot.fetched_at.isoformat(),
+                "snapshot_ok": snapshot.snapshot_ok,
+                "open_order_count": len(snapshot.open_orders),
+                "operator_action_required": self._operator_action_required,
+                "snapshot_stale": self._snapshot_stale,
+                "handoff_reason": self._handoff_reason,
+            },
+        }
 
     def liquidate_all(self) -> list[dict]:
         """Market-sell all open positions.
@@ -878,6 +979,15 @@ class TradingEngine:
             trading_enabled=self._trading_enabled,
             recovery_result=self._last_recovery_result.value,
             degraded_reason=self._degraded_reason,
+            operator_action_required=self._operator_action_required,
+            last_broker_snapshot_at=(
+                self._last_broker_snapshot_at.isoformat()
+                if self._last_broker_snapshot_at is not None
+                else None
+            ),
+            open_order_count=self._open_order_count,
+            snapshot_stale=self._snapshot_stale,
+            handoff_reason=self._handoff_reason,
             strategy_discovery_source=self._strategy_discovery_source,
             strategy_discovery_symbols=self._strategy_discovery_symbols,
             strategy_discovery_reason=self._strategy_discovery_reason,
@@ -937,15 +1047,6 @@ class TradingEngine:
     def _resolve_broker_adapter(self) -> Any | None:
         if self.broker_adapter is not None:
             return self.broker_adapter
-
-        websocket_monitoring_enabled = bool(
-            getattr(self.config, "websocket_monitoring_enabled", False)
-        )
-        websocket_execution_notice_enabled = bool(
-            getattr(self.config, "websocket_execution_notice_enabled", False)
-        )
-        if not websocket_monitoring_enabled and not websocket_execution_notice_enabled:
-            return None
 
         try:
             from stock_manager.adapters.broker.kis.broker_adapter import KISBrokerAdapter
@@ -1267,6 +1368,54 @@ class TradingEngine:
             degraded_reason=next_reason,
         )
 
+    def _apply_runtime_fault(self, *, fault: str, handoff_reason: str | None = None) -> RuntimeFaultDecision:
+        decision = evaluate_runtime_fault(fault=fault)
+        if decision.action != "log_only":
+            degraded_reason = decision.degraded_reason or self._degraded_reason
+            self._latch_trading_guard(degraded_reason=degraded_reason)
+        if decision.operator_action_required:
+            self._operator_action_required = True
+            if handoff_reason:
+                self._handoff_reason = handoff_reason
+        return decision
+
+    @staticmethod
+    def _normalize_open_order_side(value: Any) -> str | None:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"buy", "b", "2", "02"}:
+            return "buy"
+        if normalized in {"sell", "s", "1", "01"}:
+            return "sell"
+        return None
+
+    def _find_matching_open_order(
+        self,
+        *,
+        order: Order,
+        open_orders: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        for item in open_orders:
+            if not isinstance(item, dict):
+                continue
+            broker_order_id = item.get("broker_order_id")
+            if order.broker_order_id and broker_order_id not in (None, ""):
+                if str(broker_order_id) == order.broker_order_id:
+                    return item
+
+        candidates: list[dict[str, Any]] = []
+        for item in open_orders:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("symbol") or "").strip().upper() != order.symbol:
+                continue
+            if self._normalize_open_order_side(item.get("side")) != order.side:
+                continue
+            candidates.append(item)
+
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
     def _start_realtime_streams(self, symbols: list[str]) -> Any:
         adapter = self._broker_adapter
         websocket_monitoring_enabled = bool(getattr(self.config, "websocket_monitoring_enabled", False))
@@ -1381,6 +1530,11 @@ class TradingEngine:
             self._reconciler.reconcile_now()
         except Exception:
             logger.debug("Execution reconciliation failed", exc_info=True)
+            self._apply_runtime_fault(
+                fault="execution_apply_failed",
+                handoff_reason="execution_apply_failed",
+            )
+            self._capture_account_truth(reason="execution_apply_failed")
 
     def _on_websocket_lifecycle(self, event: Any) -> None:
         if not self._running:
@@ -1638,7 +1792,142 @@ class TradingEngine:
     def _update_state_unlocked(self) -> None:
         self._state.positions = self._position_manager.get_all_positions()
         self._state.risk_controls = self._export_risk_controls()
+        self._state.runtime_metadata = self._export_runtime_metadata()
         self._state.last_updated = datetime.now(timezone.utc)
+
+    def _export_runtime_metadata(self) -> dict[str, Any]:
+        snapshot = self._last_broker_snapshot
+        serialized_snapshot: dict[str, Any] | None = None
+        if snapshot is not None:
+            serialized_snapshot = {
+                "cash": dict(snapshot.cash),
+                "positions": list(snapshot.positions),
+                "open_orders": list(snapshot.open_orders),
+                "fetched_at": snapshot.fetched_at.isoformat(),
+                "snapshot_ok": snapshot.snapshot_ok,
+            }
+
+        return {
+            "operator_action_required": self._operator_action_required,
+            "last_broker_snapshot_at": (
+                self._last_broker_snapshot_at.isoformat()
+                if self._last_broker_snapshot_at is not None
+                else None
+            ),
+            "open_order_count": self._open_order_count,
+            "snapshot_stale": self._snapshot_stale,
+            "handoff_reason": self._handoff_reason,
+            "last_broker_snapshot": serialized_snapshot,
+        }
+
+    def _restore_runtime_metadata(self) -> None:
+        metadata = (
+            self._state.runtime_metadata
+            if isinstance(getattr(self._state, "runtime_metadata", None), dict)
+            else {}
+        )
+        self._operator_action_required = bool(metadata.get("operator_action_required", False))
+        self._open_order_count = int(metadata.get("open_order_count", 0) or 0)
+        self._snapshot_stale = bool(metadata.get("snapshot_stale", False))
+        handoff_reason = metadata.get("handoff_reason")
+        self._handoff_reason = str(handoff_reason) if handoff_reason not in (None, "") else None
+
+        last_snapshot_at = metadata.get("last_broker_snapshot_at")
+        self._last_broker_snapshot_at = None
+        if last_snapshot_at not in (None, ""):
+            try:
+                self._last_broker_snapshot_at = datetime.fromisoformat(str(last_snapshot_at))
+            except Exception:
+                self._last_broker_snapshot_at = None
+
+        self._last_broker_snapshot = None
+        raw_snapshot = metadata.get("last_broker_snapshot")
+        if not isinstance(raw_snapshot, dict):
+            return
+
+        fetched_at_raw = raw_snapshot.get("fetched_at")
+        fetched_at = datetime.now(timezone.utc)
+        if fetched_at_raw not in (None, ""):
+            try:
+                fetched_at = datetime.fromisoformat(str(fetched_at_raw))
+            except Exception:
+                fetched_at = datetime.now(timezone.utc)
+
+        raw_positions = raw_snapshot.get("positions", [])
+        raw_open_orders = raw_snapshot.get("open_orders", [])
+        self._last_broker_snapshot = BrokerTruthSnapshot(
+            cash=raw_snapshot.get("cash", {}) if isinstance(raw_snapshot.get("cash"), dict) else {},
+            positions=tuple(item for item in raw_positions if isinstance(item, dict)),
+            open_orders=tuple(item for item in raw_open_orders if isinstance(item, dict)),
+            fetched_at=fetched_at,
+            snapshot_ok=bool(raw_snapshot.get("snapshot_ok", False)),
+        )
+
+    def _set_broker_snapshot(self, snapshot: BrokerTruthSnapshot) -> None:
+        self._last_broker_snapshot = snapshot
+        self._last_broker_snapshot_at = snapshot.fetched_at
+        self._open_order_count = len(snapshot.open_orders)
+        self._snapshot_stale = False
+        self._note_balance_refresh_success()
+
+    def _fetch_account_truth(self) -> BrokerTruthSnapshot:
+        adapter = self._broker_adapter
+        if adapter is not None and hasattr(adapter, "fetch_account_truth"):
+            snapshot = adapter.fetch_account_truth()
+        else:
+            balance_response = self._inquire_balance()
+            output2 = balance_response.get("output2", [])
+            cash_summary = output2[0] if isinstance(output2, list) and output2 else {}
+            positions = balance_response.get("output1", [])
+            if not isinstance(positions, list):
+                positions = []
+            snapshot = BrokerTruthSnapshot(
+                cash=cash_summary if isinstance(cash_summary, dict) else {},
+                positions=tuple(item for item in positions if isinstance(item, dict)),
+                open_orders=(),
+                fetched_at=datetime.now(timezone.utc),
+                snapshot_ok=True,
+            )
+        self._set_broker_snapshot(snapshot)
+        return snapshot
+
+    def _mark_snapshot_unavailable(self, *, reason: str) -> None:
+        self._snapshot_stale = True
+        self._handoff_reason = self._handoff_reason or reason
+
+    @staticmethod
+    def _snapshot_payload(snapshot: BrokerTruthSnapshot) -> dict[str, Any]:
+        return {
+            "cash": dict(snapshot.cash),
+            "positions": list(snapshot.positions),
+            "open_orders": list(snapshot.open_orders),
+            "fetched_at": snapshot.fetched_at.isoformat(),
+            "snapshot_ok": snapshot.snapshot_ok,
+        }
+
+    def _capture_account_truth(self, *, reason: str) -> BrokerTruthSnapshot | None:
+        try:
+            snapshot = self._fetch_account_truth()
+            self._log_runtime_event(
+                "account.snapshot",
+                reason=reason,
+                snapshot=self._snapshot_payload(snapshot),
+            )
+            with self._state_lock:
+                self._update_state_unlocked()
+            self._persist_state()
+            return snapshot
+        except Exception as exc:
+            self._mark_snapshot_unavailable(reason=reason)
+            self._log_runtime_event(
+                "account.snapshot_failed",
+                reason=reason,
+                error=str(exc),
+            )
+            with self._state_lock:
+                self._update_state_unlocked()
+            self._persist_state()
+            return None
 
     def _queue_notification(
         self,
@@ -1834,25 +2123,89 @@ class TradingEngine:
             self._update_state_unlocked()
 
         self._persist_state()
+        if getattr(result, "submission_unknown", False) is True:
+            recovered_broker_order_id = self._recover_submission_unknown_order(order.order_id)
+            if recovered_broker_order_id not in (None, ""):
+                result.broker_order_id = recovered_broker_order_id
         result.order_id = order.order_id
         return result
 
+    def _recover_submission_unknown_order(self, order_id: str) -> str | None:
+        matched_broker_order_id: str | None = None
+        for attempt in range(1, 4):
+            try:
+                snapshot = self._fetch_account_truth()
+            except Exception:
+                self._mark_snapshot_unavailable(reason="open_order_truth_unavailable")
+                snapshot = None
+
+            with self._state_lock:
+                order = self._state.pending_orders.get(order_id)
+                if not isinstance(order, Order):
+                    return matched_broker_order_id
+
+                open_order = (
+                    self._find_matching_open_order(order=order, open_orders=snapshot.open_orders)
+                    if snapshot is not None
+                    else None
+                )
+                decision = evaluate_submission_recovery(
+                    matched_broker_order_id=(
+                        str(open_order.get("broker_order_id"))
+                        if isinstance(open_order, dict)
+                        and open_order.get("broker_order_id") not in (None, "")
+                        else None
+                    ),
+                    final_attempt=attempt == 3,
+                )
+                if decision.bind_broker_order and decision.matched_broker_order_id is not None:
+                    matched_broker_order_id = decision.matched_broker_order_id
+                    order.broker_order_id = decision.matched_broker_order_id
+                    order.last_reconciled_at = datetime.now(timezone.utc)
+                    order.unresolved_reason = (
+                        str(open_order.get("status"))
+                        if isinstance(open_order, dict) and open_order.get("status") not in (None, "")
+                        else "submission_result_unknown"
+                    )
+                    self._update_state_unlocked()
+                    self._persist_state()
+                    return matched_broker_order_id
+
+                if decision.operator_action_required:
+                    order.unresolved_reason = "submission_result_unknown"
+                    order.last_reconciled_at = datetime.now(timezone.utc)
+                    self._apply_runtime_fault(
+                        fault="submission_result_unknown",
+                        handoff_reason="submission_result_unknown",
+                    )
+                    self._update_state_unlocked()
+                    self._persist_state()
+                    return None
+
+            if attempt < 3:
+                time.sleep(5.0)
+
+        return matched_broker_order_id
+
     def _build_execution_key(self, event: Any) -> str:
-        broker_order_id = getattr(event, "broker_order_id", None) or getattr(event, "order_id", None)
-        side = getattr(event, "side", None)
-        quantity = getattr(event, "executed_quantity", None) or getattr(event, "quantity", None)
-        price = getattr(event, "executed_price", None) or getattr(event, "price", None)
-        status = getattr(event, "event_status", None)
-        timestamp = getattr(event, "timestamp", None)
-        parts = [
-            str(broker_order_id or ""),
-            str(side or ""),
-            str(quantity or ""),
-            str(price or ""),
-            str(status or ""),
-            str(timestamp or ""),
-        ]
-        return "|".join(parts)
+        return (
+            build_execution_dedupe_key(
+                broker_order_id=(
+                    getattr(event, "broker_order_id", None) or getattr(event, "order_id", None)
+                ),
+                side=getattr(event, "side", None),
+                cumulative_quantity=getattr(event, "cumulative_quantity", None),
+                remaining_quantity=getattr(event, "remaining_quantity", None),
+                event_status=getattr(event, "event_status", None),
+                executed_quantity=(
+                    getattr(event, "executed_quantity", None) or getattr(event, "quantity", None)
+                ),
+                executed_price=(
+                    getattr(event, "executed_price", None) or getattr(event, "price", None)
+                ),
+            )
+            or ""
+        )
 
     def _remember_execution_key(self, key: str) -> bool:
         if not key:
@@ -1946,16 +2299,22 @@ class TradingEngine:
         persisted = False
         key = self._build_execution_key(event)
         raw_payload = getattr(event, "raw_payload", None)
+        integrity_failure_reason: str | None = None
 
         with self._state_lock:
-            if self._remember_execution_key(key):
+            if key and self._remember_execution_key(key):
                 logger.debug("Ignoring duplicated execution notice", extra={"key": key})
                 self._log_runtime_event("execution_deduped", key=key)
                 return
 
             order_key, order, unresolved_reason = self._find_matching_pending_order(event)
-            if order is None or order_key is None:
-                reason = unresolved_reason or "unmatched_execution_notice"
+            integrity_decision = evaluate_execution_integrity(
+                dedupe_key=key or None,
+                matched_pending_order=order is not None and order_key is not None,
+            )
+            if not integrity_decision.apply_event:
+                reason = integrity_decision.reason or unresolved_reason or "unmatched_execution_notice"
+                integrity_failure_reason = reason
                 logger.warning(
                     "Execution notice did not match a pending order",
                     extra={"key": key, "reason": reason},
@@ -1969,7 +2328,7 @@ class TradingEngine:
                 self._queue_notification(
                     notifications,
                     "order.unresolved",
-                    NotificationLevel.WARNING,
+                    NotificationLevel.CRITICAL,
                     "Order Unresolved",
                     symbol=str(getattr(event, "symbol", "")).strip().upper() or None,
                     side=getattr(event, "side", None),
@@ -1978,6 +2337,8 @@ class TradingEngine:
                     raw_payload=raw_payload,
                 )
             else:
+                assert order_key is not None
+                assert order is not None
                 order.unresolved_reason = None
                 fill_delta = self._resolve_fill_delta(order, event)
                 if fill_delta > 0:
@@ -2004,7 +2365,13 @@ class TradingEngine:
                     self._update_state_unlocked()
                     persisted = True
 
-        if persisted:
+        if integrity_failure_reason is not None:
+            self._apply_runtime_fault(
+                fault=integrity_failure_reason,
+                handoff_reason=integrity_failure_reason,
+            )
+            self._capture_account_truth(reason=integrity_failure_reason)
+        elif persisted:
             self._persist_state()
         self._emit_notifications(notifications)
 
@@ -2413,6 +2780,7 @@ class TradingEngine:
         self,
         result: Any,
         notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]],
+        account_truth: BrokerTruthSnapshot | None = None,
     ) -> None:
         if not self._state.pending_orders:
             return
@@ -2425,6 +2793,7 @@ class TradingEngine:
         )
         if not isinstance(daily_orders, list):
             daily_orders = []
+        open_orders = account_truth.open_orders if account_truth is not None else ()
 
         for order_key, order in list(self._state.pending_orders.items()):
             if not isinstance(order, Order):
@@ -2433,6 +2802,7 @@ class TradingEngine:
                 continue
 
             daily_order, daily_match_reason = self._find_daily_order_match(order, daily_orders)
+            open_order = self._find_matching_open_order(order=order, open_orders=open_orders)
             order.last_reconciled_at = datetime.now(timezone.utc)
             order.broker_last_seen_status = (
                 self._daily_order_status_text(daily_order) if daily_order is not None else None
@@ -2478,12 +2848,18 @@ class TradingEngine:
                         source="daily_order",
                         notifications=notifications,
                     )
-                if recovery_decision.status == "filled":
+                if recovery_decision.status == "filled" and open_order is None:
                     order.unresolved_reason = None
                 else:
+                    if open_order is not None:
+                        order.status = OrderStatus.PARTIAL_FILL
                     self._mark_order_unresolved(
                         order=order,
-                        reason=self._daily_order_status_text(daily_order) or "buy_not_filled_yet",
+                        reason=(
+                            str(open_order.get("status"))
+                            if isinstance(open_order, dict) and open_order.get("status") not in (None, "")
+                            else self._daily_order_status_text(daily_order) or "buy_not_filled_yet"
+                        ),
                         notifications=notifications,
                         raw_payload=daily_order,
                     )
@@ -2505,12 +2881,18 @@ class TradingEngine:
                         source="balance",
                         notifications=notifications,
                     )
-                    if order.status == OrderStatus.FILLED:
+                    if order.status == OrderStatus.FILLED and open_order is None:
                         order.unresolved_reason = None
                     else:
+                        if open_order is not None:
+                            order.status = OrderStatus.PARTIAL_FILL
                         self._mark_order_unresolved(
                             order=order,
-                            reason="buy_fill_requires_quantity_increase",
+                            reason=(
+                                str(open_order.get("status"))
+                                if isinstance(open_order, dict) and open_order.get("status") not in (None, "")
+                                else "buy_fill_requires_quantity_increase"
+                            ),
                             notifications=notifications,
                             raw_payload=result.broker_positions.get(order.symbol),
                         )
@@ -2551,15 +2933,37 @@ class TradingEngine:
                             position_snapshot=local_snapshot,
                             notifications=notifications,
                         )
-                    if recovery_decision.status == "filled":
+                    if recovery_decision.status == "filled" and open_order is None:
                         order.unresolved_reason = None
                     else:
+                        if open_order is not None:
+                            order.status = OrderStatus.PARTIAL_FILL
                         self._mark_order_unresolved(
                             order=order,
-                            reason=self._daily_order_status_text(daily_order) or "sell_not_filled_yet",
+                            reason=(
+                                str(open_order.get("status"))
+                                if isinstance(open_order, dict) and open_order.get("status") not in (None, "")
+                                else self._daily_order_status_text(daily_order) or "sell_not_filled_yet"
+                            ),
                             notifications=notifications,
                             raw_payload=daily_order,
                         )
+                    continue
+
+                if open_order is not None:
+                    order.status = (
+                        OrderStatus.PARTIAL_FILL if order.filled_quantity > 0 else OrderStatus.SUBMITTED
+                    )
+                    self._mark_order_unresolved(
+                        order=order,
+                        reason=(
+                            str(open_order.get("status"))
+                            if open_order.get("status") not in (None, "")
+                            else "open_order_active"
+                        ),
+                        notifications=notifications,
+                        raw_payload=open_order,
+                    )
                     continue
 
                 if broker_position is None and daily_order is None:
@@ -2637,15 +3041,34 @@ class TradingEngine:
     def _on_reconciliation_cycle(self, result: Any) -> None:
         notifications: list[tuple[str, NotificationLevel, str, dict[str, Any]]] = []
         should_persist = False
+        account_truth: BrokerTruthSnapshot | None = None
         self._note_reconciliation_success()
         try:
+            account_truth = self._fetch_account_truth()
+        except Exception:
+            logger.debug("Open-order broker truth refresh failed", exc_info=True)
+            self._mark_snapshot_unavailable(reason="open_order_truth_unavailable")
+            self._apply_runtime_fault(
+                fault="open_order_truth_unavailable",
+                handoff_reason="open_order_truth_unavailable",
+            )
+        try:
             with self._state_lock:
-                self._sync_pending_orders_from_broker(result, notifications)
+                self._sync_pending_orders_from_broker(
+                    result,
+                    notifications,
+                    account_truth=account_truth,
+                )
                 self._apply_reconciled_positions(result.broker_positions)
                 self._update_state_unlocked()
                 should_persist = True
         except Exception:
             logger.debug("Reconciliation cycle apply failed", exc_info=True)
+            self._apply_runtime_fault(
+                fault="runtime_reconciliation_drift",
+                handoff_reason="runtime_reconciliation_apply_failed",
+            )
+            self._capture_account_truth(reason="runtime_reconciliation_apply_failed")
 
         if should_persist:
             self._persist_state()
@@ -2956,26 +3379,34 @@ class TradingEngine:
         """
         errors: list[str] = []
 
-        # 1. Balance inquiry → auto-set portfolio_value
+        if not self.is_paper_trading and self._operator_action_required:
+            errors.append("Operator action is required from previous session state")
+
+        # 1. Broker truth inquiry → auto-set portfolio_value
         try:
-            balance = self._inquire_balance()
-            output2 = balance.get("output2", [{}])
-            if output2:
-                total = output2[0].get("dnca_tot_amt") or output2[0].get(
-                    "tot_evlu_amt", "0"
-                )
-                self._risk_manager.portfolio_value = Decimal(total)
-                self._note_balance_refresh_success()
-                if self._risk_manager.portfolio_value <= 0:
-                    errors.append("Portfolio value is 0 or negative")
+            snapshot = self._fetch_account_truth()
+            cash_summary = snapshot.cash if isinstance(snapshot.cash, dict) else {}
+            total = (
+                cash_summary.get("nass_amt")
+                or cash_summary.get("dnca_tot_amt")
+                or cash_summary.get("tot_evlu_amt")
+                or "0"
+            )
+            try:
+                self._risk_manager.portfolio_value = Decimal(str(total))
+            except Exception:
+                self._risk_manager.portfolio_value = Decimal("0")
+            if self._risk_manager.portfolio_value <= 0:
+                logger.warning("Portfolio value is 0 or negative")
         except Exception as e:
-            errors.append(f"Balance inquiry failed: {e}")
+            self._mark_snapshot_unavailable(reason="startup_broker_truth_unavailable")
+            errors.append(f"Broker truth inquiry failed: {e}")
 
         # 2. Slack notification connectivity test
         health_check_fn = getattr(self.notifier, "health_check", None)
         if health_check_fn is not None:
             if not health_check_fn():
-                errors.append("Slack notification health check failed")
+                logger.warning("Slack notification health check failed")
 
         # 3. Market hours info (warning only, not an error)
         if self.config.market_hours_enabled and not self._is_market_open():

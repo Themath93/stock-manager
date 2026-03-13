@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 
 AutoExitTrigger = Literal["stop_loss", "take_profit"]
@@ -12,6 +13,7 @@ OrderSide = Literal["buy", "sell"]
 PendingOrderRecoveryStatus = Literal["unresolved", "partial_fill", "filled"]
 RecoveryMode = Literal["warn", "block"]
 WebSocketLifecycleStatus = Literal["connected", "closed", "reconnect_exhausted"]
+RuntimeFaultAction = Literal["log_only", "reduce_only", "blocked"]
 OrderPermissionRejectCode = Literal[
     "trading_disabled",
     "pending_same_side",
@@ -36,6 +38,19 @@ _DEGRADED_REDUCE_ONLY_REASONS = {
 class AutoExitOrderDecision:
     order_type: Literal["market", "limit"]
     price: int | None
+
+
+@dataclass(frozen=True)
+class BrokerTruthSnapshot:
+    cash: dict[str, Any]
+    positions: tuple[dict[str, Any], ...]
+    open_orders: tuple[dict[str, Any], ...]
+    fetched_at: datetime
+    snapshot_ok: bool
+
+    @property
+    def open_order_count(self) -> int:
+        return len(self.open_orders)
 
 
 @dataclass(frozen=True)
@@ -94,6 +109,39 @@ class OrderPermissionDecision:
 
 
 @dataclass(frozen=True)
+class SubmissionRecoveryDecision:
+    bind_broker_order: bool
+    matched_broker_order_id: str | None
+    keep_pending: bool
+    downgrade_to_reduce_only: bool
+    operator_action_required: bool
+
+
+@dataclass(frozen=True)
+class ExecutionIntegrityDecision:
+    apply_event: bool
+    dedupe_key: str | None
+    downgrade_to_reduce_only: bool
+    operator_action_required: bool
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeFaultDecision:
+    action: RuntimeFaultAction
+    degraded_reason: str | None
+    operator_action_required: bool
+
+    @property
+    def operational_state(self) -> OperationalState:
+        if self.action == "blocked":
+            return "blocked"
+        if self.action == "reduce_only":
+            return "degraded_reduce_only"
+        return "normal"
+
+
+@dataclass(frozen=True)
 class RealtimeStartupDecision:
     quote_stream_active: bool
     start_polling_fallback: bool
@@ -111,6 +159,13 @@ class EngineOperabilityDecision:
     is_ready_for_new_orders: bool
     should_keep_session_running: bool
     operational_state: OperationalState
+
+
+@dataclass(frozen=True)
+class SessionHandoffDecision:
+    should_stop: bool
+    require_operator_handoff: bool
+    summary: str | None
 
 
 def resolve_auto_exit_order(
@@ -225,6 +280,202 @@ def evaluate_pending_order_recovery(
         target_filled_quantity=target_filled_quantity,
         fill_delta=fill_delta,
         status=status,
+    )
+
+
+def evaluate_submission_recovery(
+    *,
+    matched_broker_order_id: str | None,
+    final_attempt: bool,
+) -> SubmissionRecoveryDecision:
+    """Return how a submission-unknown order should be tracked after broker inquiry."""
+    normalized_id = (
+        str(matched_broker_order_id).strip()
+        if matched_broker_order_id not in (None, "")
+        else None
+    )
+    if normalized_id is not None:
+        return SubmissionRecoveryDecision(
+            bind_broker_order=True,
+            matched_broker_order_id=normalized_id,
+            keep_pending=True,
+            downgrade_to_reduce_only=True,
+            operator_action_required=False,
+        )
+
+    return SubmissionRecoveryDecision(
+        bind_broker_order=False,
+        matched_broker_order_id=None,
+        keep_pending=True,
+        downgrade_to_reduce_only=True,
+        operator_action_required=final_attempt,
+    )
+
+
+def build_execution_dedupe_key(
+    *,
+    broker_order_id: str | None,
+    side: str | None,
+    cumulative_quantity: Any,
+    remaining_quantity: Any,
+    event_status: str | None,
+    executed_quantity: Any,
+    executed_price: Any,
+) -> str | None:
+    """Build a deterministic dedupe key using only broker-derived fields."""
+    normalized_broker_order_id = (
+        str(broker_order_id).strip() if broker_order_id not in (None, "") else ""
+    )
+    normalized_side = str(side).strip() if side not in (None, "") else ""
+    normalized_status = str(event_status).strip() if event_status not in (None, "") else ""
+    normalized_cumulative = (
+        str(cumulative_quantity).strip() if cumulative_quantity not in (None, "") else ""
+    )
+    normalized_remaining = (
+        str(remaining_quantity).strip() if remaining_quantity not in (None, "") else ""
+    )
+    normalized_quantity = (
+        str(executed_quantity).strip() if executed_quantity not in (None, "") else ""
+    )
+    normalized_price = str(executed_price).strip() if executed_price not in (None, "") else ""
+
+    if not normalized_broker_order_id:
+        return None
+
+    if normalized_cumulative:
+        return "|".join(
+            [
+                normalized_broker_order_id,
+                normalized_side,
+                normalized_cumulative,
+                normalized_remaining,
+                normalized_status,
+            ]
+        )
+
+    if normalized_quantity and normalized_price:
+        return "|".join(
+            [
+                normalized_broker_order_id,
+                normalized_side,
+                normalized_quantity,
+                normalized_price,
+                normalized_status,
+            ]
+        )
+
+    return None
+
+
+def evaluate_execution_integrity(
+    *,
+    dedupe_key: str | None,
+    matched_pending_order: bool,
+    apply_error: bool = False,
+) -> ExecutionIntegrityDecision:
+    """Decide whether an execution event is safe to apply to local state."""
+    if apply_error:
+        return ExecutionIntegrityDecision(
+            apply_event=False,
+            dedupe_key=dedupe_key,
+            downgrade_to_reduce_only=True,
+            operator_action_required=True,
+            reason="execution_apply_failed",
+        )
+
+    if not dedupe_key:
+        return ExecutionIntegrityDecision(
+            apply_event=False,
+            dedupe_key=None,
+            downgrade_to_reduce_only=True,
+            operator_action_required=True,
+            reason="execution_key_missing",
+        )
+
+    if not matched_pending_order:
+        return ExecutionIntegrityDecision(
+            apply_event=False,
+            dedupe_key=dedupe_key,
+            downgrade_to_reduce_only=True,
+            operator_action_required=True,
+            reason="unmatched_execution_notice",
+        )
+
+    return ExecutionIntegrityDecision(
+        apply_event=True,
+        dedupe_key=dedupe_key,
+        downgrade_to_reduce_only=False,
+        operator_action_required=False,
+        reason=None,
+    )
+
+
+def evaluate_runtime_fault(*, fault: str) -> RuntimeFaultDecision:
+    """Map runtime faults into log-only, reduce-only, or blocked actions."""
+    normalized_fault = fault.strip().lower()
+    if normalized_fault in {
+        "submission_unknown",
+        "submission_result_unknown",
+        "unmatched_execution",
+        "unmatched_execution_notice",
+        "execution_apply_failed",
+        "execution_key_missing",
+        "open_order_truth_unavailable",
+        "runtime_reconciliation_drift",
+        "operator_action_required",
+    }:
+        degraded_reason = None
+        if normalized_fault in {"submission_unknown", "submission_result_unknown"}:
+            degraded_reason = "submission_result_unknown"
+        elif normalized_fault == "runtime_reconciliation_drift":
+            degraded_reason = "runtime_reconciliation_drift"
+
+        return RuntimeFaultDecision(
+            action="reduce_only",
+            degraded_reason=degraded_reason,
+            operator_action_required=True,
+        )
+
+    if normalized_fault in {
+        "startup_auth_failed",
+        "startup_broker_truth_unavailable",
+        "startup_state_and_truth_unavailable",
+    }:
+        return RuntimeFaultDecision(
+            action="blocked",
+            degraded_reason="startup_recovery_failed",
+            operator_action_required=True,
+        )
+
+    return RuntimeFaultDecision(
+        action="log_only",
+        degraded_reason=None,
+        operator_action_required=False,
+    )
+
+
+def evaluate_session_handoff(
+    *,
+    has_positions: bool,
+    operator_action_required: bool,
+) -> SessionHandoffDecision:
+    """Return how shutdown should be presented to the operator."""
+    if has_positions:
+        return SessionHandoffDecision(
+            should_stop=True,
+            require_operator_handoff=True,
+            summary="open_positions_remain",
+        )
+    if operator_action_required:
+        return SessionHandoffDecision(
+            should_stop=True,
+            require_operator_handoff=True,
+            summary="operator_action_required",
+        )
+    return SessionHandoffDecision(
+        should_stop=True,
+        require_operator_handoff=False,
+        summary=None,
     )
 
 

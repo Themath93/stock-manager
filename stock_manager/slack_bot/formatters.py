@@ -185,6 +185,30 @@ def format_status(status: "EngineStatus | None", session_info: dict) -> dict:
                 "type": "section",
                 "text": {"type": "mrkdwn", "text": f"⚠️ *저하 원인:* {status.degraded_reason}"},
             })
+        if getattr(status, "operator_action_required", False):
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "🛠️ *운영자 조치 필요:* "
+                        f"{getattr(status, 'handoff_reason', None) or 'manual review required'}"
+                    ),
+                },
+            })
+        snapshot_bits: list[str] = []
+        if getattr(status, "last_broker_snapshot_at", None):
+            snapshot_bits.append(
+                f"최근 snapshot: {getattr(status, 'last_broker_snapshot_at', None)}"
+            )
+        snapshot_bits.append(
+            "snapshot stale: yes" if getattr(status, "snapshot_stale", False) else "snapshot stale: no"
+        )
+        snapshot_bits.append(f"open orders: {getattr(status, 'open_order_count', 0)}")
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": " | ".join(snapshot_bits)}],
+        })
 
     return {
         "text": f"엔진 상태: {state}",
@@ -480,6 +504,23 @@ def format_balance(balance_data: dict) -> dict:
             "text": {"type": "mrkdwn", "text": "_보유 종목이 없습니다._"},
         })
 
+    metadata = balance_data.get("_snapshot_metadata", {})
+    if isinstance(metadata, dict):
+        details = []
+        fetched_at = metadata.get("fetched_at")
+        if fetched_at:
+            details.append(f"snapshot: {fetched_at}")
+        details.append(
+            "stale: yes" if metadata.get("snapshot_stale") else "stale: no"
+        )
+        details.append(f"open orders: {metadata.get('open_order_count', 0)}")
+        if metadata.get("operator_action_required"):
+            details.append("operator action required")
+        handoff_reason = metadata.get("handoff_reason")
+        if handoff_reason:
+            details.append(f"handoff: {handoff_reason}")
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": " | ".join(details)}]})
+
     return {"text": "계좌 잔고", "blocks": blocks}
 
 
@@ -492,16 +533,46 @@ def format_orders(orders_data: dict) -> dict:
     from datetime import datetime, timezone
 
     output1 = orders_data.get("output1", [])
+    is_open_order_view = orders_data.get("_view") == "open_orders"
 
     blocks: list[dict] = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": "당일 주문 내역", "emoji": True},
+            "text": {
+                "type": "plain_text",
+                "text": "현재 미체결 주문" if is_open_order_view else "당일 주문 내역",
+                "emoji": True,
+            },
         },
     ]
 
     if output1:
         for item in output1:
+            if is_open_order_view or item.get("broker_order_id") is not None:
+                side_value = str(item.get("side") or "").strip().lower()
+                side_label = "매도" if side_value in {"sell", "1", "01"} else "매수" if side_value in {"buy", "2", "02"} else side_value or "N/A"
+                blocks.append({
+                    "type": "section",
+                    "fields": [
+                        {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"*{item.get('symbol', 'N/A')}* | {side_label}\n"
+                                f"주문번호: {item.get('broker_order_id', '-')}"
+                            ),
+                        },
+                        {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"주문: {item.get('quantity', '0')}주 | "
+                                f"잔량: {item.get('remaining_quantity', '0')}주 | "
+                                f"상태: {item.get('status', 'N/A')}"
+                            ),
+                        },
+                    ],
+                })
+                continue
+
             side_code = item.get("sll_buy_dvsn_cd", "")
             side_label = "매도" if side_code == "01" else "매수" if side_code == "02" else side_code
             blocks.append({
@@ -514,16 +585,34 @@ def format_orders(orders_data: dict) -> dict:
     else:
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": "_당일 주문 내역이 없습니다._"},
+            "text": {
+                "type": "mrkdwn",
+                "text": "_현재 미체결 주문이 없습니다._" if is_open_order_view else "_당일 주문 내역이 없습니다._",
+            },
         })
 
+    metadata = orders_data.get("_snapshot_metadata", {})
     now_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    context_text = f"조회 시각: {now_str}"
+    if isinstance(metadata, dict):
+        fetched_at = metadata.get("fetched_at")
+        if fetched_at:
+            context_text += f" | snapshot: {fetched_at}"
+        context_text += " | stale: yes" if metadata.get("snapshot_stale") else " | stale: no"
+        context_text += f" | open orders: {metadata.get('open_order_count', 0)}"
+        if metadata.get("operator_action_required"):
+            context_text += " | operator action required"
+        if metadata.get("handoff_reason"):
+            context_text += f" | handoff: {metadata.get('handoff_reason')}"
     blocks.append({
         "type": "context",
-        "elements": [{"type": "mrkdwn", "text": f"조회 시각: {now_str}"}],
+        "elements": [{"type": "mrkdwn", "text": context_text}],
     })
 
-    return {"text": "당일 주문 내역", "blocks": blocks}
+    return {
+        "text": "현재 미체결 주문" if is_open_order_view else "당일 주문 내역",
+        "blocks": blocks,
+    }
 
 
 def format_sell_all_preview(positions: dict) -> dict:

@@ -30,6 +30,7 @@ class TradingState:
     positions: dict[str, Any] = field(default_factory=dict)  # symbol -> Position dict
     pending_orders: dict[str, Any] = field(default_factory=dict)  # order_id -> Order dict
     risk_controls: dict[str, Any] = field(default_factory=dict)
+    runtime_metadata: dict[str, Any] = field(default_factory=dict)
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     version: int = 4
 
@@ -44,6 +45,7 @@ class TradingState:
                 for order_id, order in self.pending_orders.items()
             },
             "risk_controls": dict(self.risk_controls),
+            "runtime_metadata": dict(self.runtime_metadata),
             "last_updated": self.last_updated.isoformat(),
             "version": 4,
         }
@@ -54,6 +56,7 @@ class TradingState:
         raw_positions = data.get("positions", {})
         raw_orders = data.get("pending_orders", {})
         raw_risk_controls = data.get("risk_controls", {})
+        raw_runtime_metadata = data.get("runtime_metadata", {})
 
         positions: dict[str, Position] = {}
         for symbol, raw in raw_positions.items():
@@ -71,6 +74,9 @@ class TradingState:
             positions=positions,
             pending_orders=pending_orders,
             risk_controls=raw_risk_controls if isinstance(raw_risk_controls, dict) else {},
+            runtime_metadata=(
+                raw_runtime_metadata if isinstance(raw_runtime_metadata, dict) else {}
+            ),
             last_updated=_parse_dt(data.get("last_updated")) or datetime.now(timezone.utc),
             version=int(data.get("version", 1)),
         )
