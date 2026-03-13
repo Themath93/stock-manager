@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal
 import re
 
@@ -8,6 +9,7 @@ from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
     cash_order,
     get_default_inquire_balance_params,
     inquire_balance,
+    inquire_psbl_rvsecncl,
     order_cancel,
 )
 from stock_manager.adapters.broker.kis.apis.oauth.oauth import approve_websocket_key
@@ -22,6 +24,7 @@ from stock_manager.adapters.broker.kis.websocket_client import (
     get_default_execution_notice_tr_id,
     get_kis_websocket_url,
 )
+from stock_manager.trading.guardrails import BrokerTruthSnapshot
 
 _ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8}$")
 _ACCOUNT_PRODUCT_CODE_PATTERN = re.compile(r"^\d{2}$")
@@ -118,6 +121,7 @@ class KISBrokerAdapter:
         json_data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         require_auth: bool = True,
+        retry_enabled: bool | None = None,
     ) -> dict[str, Any]:
         """KIS API에 HTTP 요청을 위임한다.
 
@@ -146,6 +150,7 @@ class KISBrokerAdapter:
             json_data=json_data,
             headers=headers,
             require_auth=require_auth,
+            retry_enabled=retry_enabled,
         )
 
     def inquire_current_price(self, stock_code: str) -> dict[str, Any]:
@@ -209,6 +214,7 @@ class KISBrokerAdapter:
             path=request_config["url_path"],
             json_data=request_config["params"],
             headers={"tr_id": request_config["tr_id"]},
+            retry_enabled=False,
         )
 
     def cancel_order(
@@ -246,6 +252,7 @@ class KISBrokerAdapter:
             path=request_config["url_path"],
             json_data=request_config["params"],
             headers={"tr_id": request_config["tr_id"]},
+            retry_enabled=False,
         )
 
     def inquire_balance(self, **params: str) -> dict[str, Any]:
@@ -277,6 +284,83 @@ class KISBrokerAdapter:
             path=request_config["url_path"],
             params=request_config["params"],
             headers={"tr_id": request_config["tr_id"]},
+        )
+
+    def inquire_open_orders(self, **params: str) -> dict[str, Any]:
+        """조회 가능한 정정/취소 주문 목록을 반환한다."""
+        if self.config.use_mock:
+            return {"rt_cd": "0", "output": [], "output1": []}
+
+        request_config = inquire_psbl_rvsecncl(
+            cano=self.account_number,
+            acnt_prdt_cd=self.account_product_code,
+            **params,
+        )
+        return self.make_request(
+            method="GET",
+            path=request_config["url_path"],
+            params=request_config["params"],
+            headers={"tr_id": request_config["tr_id"]},
+        )
+
+    def fetch_account_truth(self) -> BrokerTruthSnapshot:
+        """현재 계좌 잔고/포지션/미체결 주문을 한 번에 정규화해서 반환한다."""
+        balance_response = self.inquire_balance()
+        open_orders_response = self.inquire_open_orders()
+        output2 = balance_response.get("output2", [])
+        cash_summary = output2[0] if isinstance(output2, list) and output2 else {}
+        positions = balance_response.get("output1", [])
+        if not isinstance(positions, list):
+            positions = []
+
+        raw_open_orders = (
+            open_orders_response.get("output")
+            if isinstance(open_orders_response.get("output"), list)
+            else open_orders_response.get("output1", [])
+        )
+        if not isinstance(raw_open_orders, list):
+            raw_open_orders = []
+
+        normalized_open_orders: list[dict[str, Any]] = []
+        for item in raw_open_orders:
+            if not isinstance(item, dict):
+                continue
+            normalized_open_orders.append(
+                {
+                    "broker_order_id": (
+                        str(item.get("odno") or item.get("ODNO") or item.get("orgn_odno") or "")
+                    ).strip()
+                    or None,
+                    "symbol": str(item.get("pdno") or item.get("PDNO") or "").strip().upper(),
+                    "side": str(
+                        item.get("sll_buy_dvsn_cd")
+                        or item.get("sll_bk_dvsn")
+                        or item.get("side")
+                        or ""
+                    ).strip(),
+                    "quantity": item.get("ord_qty") or item.get("ORD_QTY") or item.get("qty"),
+                    "remaining_quantity": (
+                        item.get("ord_remn_qty")
+                        or item.get("rmn_qty")
+                        or item.get("remaining_qty")
+                    ),
+                    "status": str(
+                        item.get("ord_stts")
+                        or item.get("ord_sttus")
+                        or item.get("status")
+                        or ""
+                    ).strip()
+                    or None,
+                    "raw": item,
+                }
+            )
+
+        return BrokerTruthSnapshot(
+            cash=cash_summary if isinstance(cash_summary, dict) else {},
+            positions=tuple(item for item in positions if isinstance(item, dict)),
+            open_orders=tuple(normalized_open_orders),
+            fetched_at=datetime.now(timezone.utc),
+            snapshot_ok=True,
         )
 
     def get_websocket_approval_key(self) -> str:

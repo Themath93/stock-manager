@@ -47,6 +47,7 @@ def test_buy_uses_client_make_request(monkeypatch) -> None:
         path="/uapi/domestic-stock/v1/trading/order-cash",
         json_data=request_config["params"],
         headers={"tr_id": "TTTC0012U"},
+        retry_enabled=False,
     )
 
 

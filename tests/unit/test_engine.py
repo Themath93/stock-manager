@@ -1370,7 +1370,7 @@ class TestRealtimeBridge:
 
         engine._reconciler.reconcile_now.assert_called_once()
         engine._update_state.assert_not_called()
-        engine._persist_state.assert_not_called()
+        engine._persist_state.assert_called_once()
 
         event_arg = engine.notifier.notify.call_args_list[0][0][0]
         assert event_arg.event_type == "order.execution_notice"
@@ -1400,7 +1400,9 @@ class TestRealtimeBridge:
         engine._on_reconciliation_cycle(reconciler_result)
 
         engine._handle_discrepancy.assert_called_once_with(reconciler_result)
-        engine._sync_pending_orders_from_broker.assert_called_once_with(reconciler_result, [])
+        engine._sync_pending_orders_from_broker.assert_called_once()
+        assert engine._sync_pending_orders_from_broker.call_args.args == (reconciler_result, [])
+        assert "account_truth" in engine._sync_pending_orders_from_broker.call_args.kwargs
         engine._apply_reconciled_positions.assert_called_once_with({})
         engine._persist_state.assert_called_once()
 
@@ -3050,8 +3052,8 @@ class TestPreflightChecks:
             notifier=mock_notifier,
         )
 
-        with pytest.raises(RuntimeError, match="Slack notification health check failed"):
-            eng.start()
+        eng.start()
+        eng.stop()
 
     @patch("stock_manager.engine.load_state")
     @patch("stock_manager.engine.startup_reconciliation")

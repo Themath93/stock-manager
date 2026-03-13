@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import signal
 import time
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -11,6 +10,7 @@ from typing import Any, Literal
 
 import typer
 
+from stock_manager.adapters.broker.kis.broker_adapter import KISBrokerAdapter
 from stock_manager.adapters.broker.kis.apis.domestic_stock.basic import inquire_current_price
 from stock_manager.adapters.broker.kis.apis.domestic_stock.orders import (
     get_default_inquire_balance_params,
@@ -23,10 +23,11 @@ from stock_manager.config.logging_config import setup_logging
 from stock_manager.engine import TradingEngine
 from stock_manager.trading import OrderExecutor, TradingConfig
 from stock_manager.notifications import SlackConfig, SlackNotifier
+from stock_manager.persistence import load_state
 from stock_manager.trading.strategies import resolve_strategy
 
 DEFAULT_SMOKE_SYMBOL = "005930"
-PROMOTION_GATE_PATH = Path(".sisyphus/evidence/mock-promotion-gate.json")
+DEFAULT_STATE_PATH = Path.home() / ".stock_manager" / "state.json"
 _MOCK_OPSQ2000_RETRY_ATTEMPTS = 5
 _MOCK_OPSQ2000_RETRY_BASE_DELAY_SEC = 0.6
 
@@ -70,37 +71,15 @@ def _looks_like_opsq2000_error(message: str) -> bool:
     return "OPSQ2000" in upper or "INVALID_CHECK_ACNO" in upper
 
 
-def _validate_promotion_gate(path: Path = PROMOTION_GATE_PATH) -> tuple[bool, str]:
-    if not path.exists():
-        return False, f"missing artifact at {path}"
+def _validate_promotion_gate(path: Path = DEFAULT_STATE_PATH) -> tuple[bool, str]:
+    state = load_state(path)
+    if state is None:
+        return True, ""
 
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        return False, f"artifact is unreadable: {e}"
-
-    if not isinstance(payload, dict):
-        return False, "artifact must be a JSON object"
-
-    mode = str(payload.get("mode", "")).strip().lower()
-    if mode and mode != "mock":
-        return False, f"artifact mode must be mock, got {mode}"
-
-    gate_passed = payload.get("pass") is True or payload.get("passed") is True
-    if not gate_passed:
-        return False, "artifact does not indicate pass=true"
-
-    checks = payload.get("checks")
-    if isinstance(checks, list):
-        failed_critical = [
-            check
-            for check in checks
-            if isinstance(check, dict)
-            and bool(check.get("critical"))
-            and check.get("passed") is False
-        ]
-        if failed_critical:
-            return False, "artifact contains failed critical checks"
+    metadata = state.runtime_metadata if isinstance(state.runtime_metadata, dict) else {}
+    if bool(metadata.get("operator_action_required", False)):
+        reason = metadata.get("handoff_reason") or "operator action required"
+        return False, str(reason)
 
     return True, ""
 
@@ -306,6 +285,15 @@ def run_command(
             typer.echo("Engine started.")
 
             while not stop_requested:
+                get_operability = getattr(engine, "get_operability", None)
+                operability = get_operability() if callable(get_operability) else None
+                if operability is not None and not operability.should_keep_session_running:
+                    typer.echo(
+                        "Engine stopping: "
+                        f"operational_state={operability.operational_state}, "
+                        f"healthy={operability.is_healthy}"
+                    )
+                    break
                 if duration_sec > 0 and (time.monotonic() - started_at) >= duration_sec:
                     break
                 time.sleep(0.2)
@@ -314,7 +302,16 @@ def run_command(
             signal.signal(signal.SIGTERM, old_sigterm)
             if started:
                 engine.stop()
+                get_status = getattr(engine, "get_status", None)
+                status = get_status() if callable(get_status) else None
                 typer.echo("Engine stopped.")
+                if status is not None and getattr(status, "handoff_reason", None):
+                    typer.echo(
+                        "Operator handoff required: "
+                        f"{status.handoff_reason} "
+                        f"(open_orders={status.open_order_count}, "
+                        f"operator_action_required={status.operator_action_required})"
+                    )
     except Exception as e:
         typer.echo(f"Run failed: {e}")
         if runtime is not None and runtime.config.use_mock and _looks_like_opsq2000_error(str(e)):
@@ -396,6 +393,58 @@ def _execute_trade(
     raise typer.Exit(code=1)
 
 
+def _cancel_trade(
+    *,
+    broker_order_id: str,
+    execute: bool,
+    confirm_live: bool,
+) -> None:
+    normalized_order_id = broker_order_id.strip()
+    if not normalized_order_id:
+        typer.echo("BROKER_ORDER_ID cannot be empty.")
+        raise typer.Exit(code=1)
+
+    runtime: RuntimeContext | None = None
+    try:
+        runtime = _build_runtime_context()
+    except Exception as e:
+        typer.echo(f"Cancel setup failed: {e}")
+        raise typer.Exit(code=1)
+
+    if not execute:
+        typer.echo(f"DRY-RUN CANCEL: broker_order_id={normalized_order_id} (no cancel sent)")
+        return
+
+    if not runtime.config.use_mock and not confirm_live:
+        typer.echo(
+            "Live cancel is blocked. When KIS_USE_MOCK=false, --execute requires --confirm-live."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        runtime.client.authenticate()
+        adapter = KISBrokerAdapter(
+            config=runtime.config,
+            account_number=runtime.account_number,
+            account_product_code=runtime.account_product_code,
+            rest_client=runtime.client,
+        )
+        response = adapter.cancel_order(original_order_number=normalized_order_id)
+    except Exception as e:
+        typer.echo(f"Cancel execution failed: {e}")
+        raise typer.Exit(code=1)
+
+    if str(response.get("rt_cd", "0")) == "0":
+        typer.echo(
+            f"CANCEL OK: broker_order_id={normalized_order_id} "
+            f"message={response.get('msg1', 'OK')}"
+        )
+        return
+
+    typer.echo(f"CANCEL FAILED: {response.get('msg1', 'Unknown error')}")
+    raise typer.Exit(code=1)
+
+
 def smoke_command() -> None:
     setup_logging()
     runtime: RuntimeContext | None = None
@@ -446,7 +495,7 @@ def smoke_command() -> None:
 
 
 def create_trade_app() -> typer.Typer:
-    app = typer.Typer(help="Submit buy/sell orders (dry-run by default).")
+    app = typer.Typer(help="Submit buy/sell/cancel orders (dry-run by default).")
 
     @app.command("buy")
     def buy(
@@ -486,6 +535,22 @@ def create_trade_app() -> typer.Typer:
             symbol=symbol,
             qty=qty,
             price=price,
+            execute=execute,
+            confirm_live=confirm_live,
+        )
+
+    @app.command("cancel")
+    def cancel(
+        broker_order_id: str = typer.Argument(..., help="Broker order ID to cancel"),
+        execute: bool = typer.Option(False, "--execute", help="Actually submit the cancel."),
+        confirm_live: bool = typer.Option(
+            False,
+            "--confirm-live",
+            help="Required together with --execute when KIS_USE_MOCK=false.",
+        ),
+    ) -> None:
+        _cancel_trade(
+            broker_order_id=broker_order_id,
             execute=execute,
             confirm_live=confirm_live,
         )

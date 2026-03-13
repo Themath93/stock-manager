@@ -4,18 +4,22 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable
 
+from stock_manager.adapters.broker.kis.broker_adapter import KISBrokerAdapter
 from stock_manager.cli.trading_commands import (
     _build_runtime_context,
     _enforce_live_promotion_gate,
     _resolve_strategy_config,
 )
+from stock_manager.persistence import load_state
 from stock_manager.trading import TradingConfig
 from stock_manager.notifications import SlackNotifier, SlackConfig
 from stock_manager.engine import TradingEngine
 
 logger = logging.getLogger(__name__)
+_DEFAULT_STATE_PATH = Path.home() / ".stock_manager" / "state.json"
 
 
 class SessionState(str, Enum):
@@ -126,6 +130,9 @@ class SessionManager:
                 return None
         return engine.get_status()
 
+    def get_offline_status(self) -> Any | None:
+        return self._build_offline_status()
+
     def get_session_info(self) -> dict:
         """Get session info dict with state, params, start_time, uptime_sec."""
         with self._lock:
@@ -207,36 +214,58 @@ class SessionManager:
         return strategy
 
     def get_balance(self) -> dict | None:
-        """Get account balance, or None if not running."""
+        """Get fresh broker balance, even when session is not running."""
         with self._lock:
             engine = self._engine
-            if self._state != SessionState.RUNNING or engine is None:
-                return None
-        return engine.get_balance()
+            if self._state == SessionState.RUNNING and engine is not None:
+                return engine.get_balance()
+        return self._fetch_balance_snapshot()
 
     def get_daily_orders(self) -> dict | None:
-        """Get today's order history, or None if not running."""
+        """Get current broker open orders, even when session is not running."""
         with self._lock:
             engine = self._engine
-            if self._state != SessionState.RUNNING or engine is None:
-                return None
-        return engine.get_daily_orders()
+            if self._state == SessionState.RUNNING and engine is not None:
+                get_open_orders = getattr(engine, "get_open_orders", None)
+                if callable(get_open_orders):
+                    return get_open_orders()
+                return engine.get_daily_orders()
+        return self._fetch_daily_orders_snapshot()
 
     def get_positions(self) -> dict | None:
-        """Get all positions, or None if not running."""
+        """Get all positions, preferring fresh broker truth."""
         with self._lock:
             engine = self._engine
-            if self._state != SessionState.RUNNING or engine is None:
-                return None
-        return {
-            sym: {
-                "symbol": sym,
-                "quantity": pos.quantity,
-                "entry_price": pos.entry_price,
-                "status": pos.status.value,
+            if self._state == SessionState.RUNNING and engine is not None:
+                return {
+                    sym: {
+                        "symbol": sym,
+                        "quantity": pos.quantity,
+                        "entry_price": pos.entry_price,
+                        "status": pos.status.value,
+                    }
+                    for sym, pos in engine.get_positions().items()
+                }
+        balance = self._fetch_balance_snapshot()
+        if balance is None:
+            return None
+        output1 = balance.get("output1", [])
+        if not isinstance(output1, list):
+            return None
+        positions: dict[str, dict[str, Any]] = {}
+        for item in output1:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("pdno") or "").strip().upper()
+            if not symbol:
+                continue
+            positions[symbol] = {
+                "symbol": symbol,
+                "quantity": int(item.get("hldg_qty", 0) or 0),
+                "entry_price": item.get("pchs_avg_pric") or "0",
+                "status": "open_reconciled",
             }
-            for sym, pos in engine.get_positions().items()
-        }
+        return positions
 
     def liquidate_all(self) -> list[dict] | None:
         """Liquidate all positions, or None if not running."""
@@ -245,6 +274,112 @@ class SessionManager:
             if self._state != SessionState.RUNNING or engine is None:
                 return None
         return engine.liquidate_all()
+
+    def _build_offline_status(self) -> Any | None:
+        state = load_state(_DEFAULT_STATE_PATH)
+        if state is None:
+            return None
+        metadata = state.runtime_metadata if isinstance(state.runtime_metadata, dict) else {}
+        if not any(
+            (
+                metadata.get("operator_action_required"),
+                metadata.get("handoff_reason"),
+                metadata.get("last_broker_snapshot_at"),
+                state.positions,
+                state.pending_orders,
+            )
+        ):
+            return None
+        from stock_manager.engine import EngineStatus
+
+        return EngineStatus(
+            running=False,
+            position_count=len(state.positions),
+            price_monitor_running=False,
+            reconciler_running=False,
+            rate_limiter_available=0,
+            state_path=str(_DEFAULT_STATE_PATH),
+            is_paper_trading=False,
+            operational_state="blocked" if metadata.get("operator_action_required") else "normal",
+            buying_enabled=False,
+            buy_blocked_reason=metadata.get("handoff_reason"),
+            trading_enabled=False,
+            recovery_result="stopped",
+            degraded_reason=metadata.get("handoff_reason"),
+            operator_action_required=bool(metadata.get("operator_action_required", False)),
+            last_broker_snapshot_at=metadata.get("last_broker_snapshot_at"),
+            open_order_count=int(metadata.get("open_order_count", 0) or 0),
+            snapshot_stale=bool(metadata.get("snapshot_stale", False)),
+            handoff_reason=(
+                str(metadata.get("handoff_reason"))
+                if metadata.get("handoff_reason") not in (None, "")
+                else None
+            ),
+            strategy_discovery_source=None,
+            strategy_discovery_symbols=(),
+            strategy_discovery_reason=None,
+            strategy_discovery_updated_at=None,
+        )
+
+    def _fetch_balance_snapshot(self) -> dict | None:
+        try:
+            runtime = _build_runtime_context()
+            runtime.client.authenticate()
+            adapter = KISBrokerAdapter(
+                config=runtime.config,
+                account_number=runtime.account_number,
+                account_product_code=runtime.account_product_code,
+                rest_client=runtime.client,
+            )
+            snapshot = adapter.fetch_account_truth()
+            offline_status = self._build_offline_status()
+            return {
+                "output1": list(snapshot.positions),
+                "output2": [dict(snapshot.cash)],
+                "_snapshot_metadata": {
+                    "fetched_at": snapshot.fetched_at.isoformat(),
+                    "snapshot_ok": snapshot.snapshot_ok,
+                    "open_order_count": len(snapshot.open_orders),
+                    "operator_action_required": (
+                        getattr(offline_status, "operator_action_required", False)
+                    ),
+                    "snapshot_stale": False,
+                    "handoff_reason": getattr(offline_status, "handoff_reason", None),
+                },
+            }
+        except Exception:
+            logger.debug("Offline balance snapshot fetch failed", exc_info=True)
+            return None
+
+    def _fetch_daily_orders_snapshot(self) -> dict | None:
+        try:
+            runtime = _build_runtime_context()
+            runtime.client.authenticate()
+            adapter = KISBrokerAdapter(
+                config=runtime.config,
+                account_number=runtime.account_number,
+                account_product_code=runtime.account_product_code,
+                rest_client=runtime.client,
+            )
+            snapshot = adapter.fetch_account_truth()
+            offline_status = self._build_offline_status()
+            return {
+                "output1": list(snapshot.open_orders),
+                "_view": "open_orders",
+                "_snapshot_metadata": {
+                    "fetched_at": snapshot.fetched_at.isoformat(),
+                    "snapshot_ok": snapshot.snapshot_ok,
+                    "open_order_count": len(snapshot.open_orders),
+                    "operator_action_required": (
+                        getattr(offline_status, "operator_action_required", False)
+                    ),
+                    "snapshot_stale": False,
+                    "handoff_reason": getattr(offline_status, "handoff_reason", None),
+                },
+            }
+        except Exception:
+            logger.debug("Offline daily orders snapshot fetch failed", exc_info=True)
+            return None
 
     def _run_engine(self, params: SessionParams) -> None:
         """Background thread that runs the engine."""

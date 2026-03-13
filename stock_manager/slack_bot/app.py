@@ -275,6 +275,10 @@ def _handle_stop(*, respond, session_manager, format_stopped, format_error):
 def _handle_status(*, respond, session_manager, format_status):
     """Handle /sm status command."""
     status = session_manager.get_status()
+    if status is None:
+        get_offline_status = getattr(session_manager, "get_offline_status", None)
+        if callable(get_offline_status):
+            status = get_offline_status()
     session_info = session_manager.get_session_info()
     respond(response_type="ephemeral", **format_status(status, session_info))
 
@@ -315,10 +319,6 @@ def _handle_config(*, respond, session_manager, format_config):
 
 def _handle_balance(*, respond, session_manager, format_balance, format_error):
     """Handle /sm balance command."""
-    if not session_manager.is_running:
-        respond(response_type="ephemeral", **format_error("활성 트레이딩 세션이 없습니다."))
-        return
-
     balance_data = session_manager.get_balance()
     if balance_data is None:
         respond(response_type="ephemeral", **format_error("잔고 조회에 실패했습니다."))
@@ -329,10 +329,6 @@ def _handle_balance(*, respond, session_manager, format_balance, format_error):
 
 def _handle_orders(*, respond, session_manager, format_orders, format_error):
     """Handle /sm orders command."""
-    if not session_manager.is_running:
-        respond(response_type="ephemeral", **format_error("활성 트레이딩 세션이 없습니다."))
-        return
-
     orders_data = session_manager.get_daily_orders()
     if orders_data is None:
         respond(response_type="ephemeral", **format_error("주문 내역 조회에 실패했습니다."))

@@ -54,6 +54,7 @@ def startup_reconciliation(
     save_state_func: Any,  # Function to save state
     state_path: Any,  # Path to state file
     inquire_daily_orders_func: Any | None = None,  # Function to query broker daily orders
+    fetch_account_truth_func: Any | None = None,
 ) -> RecoveryReport:
     """
     MUST run on every startup before trading begins.
@@ -81,16 +82,27 @@ def startup_reconciliation(
     report = RecoveryReport()
 
     try:
-        # Step 1-2: Get broker positions
-        broker_response = inquire_balance_func(client)
-        if broker_response.get("rt_cd") != "0":
-            report.result = RecoveryResult.FAILED
-            report.errors.append(
-                f"Failed to query broker: {broker_response.get('msg1')}"
-            )
-            return report
+        broker_positions: list[dict[str, Any]]
+        open_orders: list[dict[str, Any]] = []
+        if fetch_account_truth_func is not None:
+            truth = fetch_account_truth_func()
+            if not getattr(truth, "snapshot_ok", False):
+                report.result = RecoveryResult.FAILED
+                report.errors.append("Failed to query broker truth snapshot")
+                return report
+            broker_positions = list(getattr(truth, "positions", ()))
+            open_orders = list(getattr(truth, "open_orders", ()))
+        else:
+            # Step 1-2: Get broker positions
+            broker_response = inquire_balance_func(client)
+            if broker_response.get("rt_cd") != "0":
+                report.result = RecoveryResult.FAILED
+                report.errors.append(
+                    f"Failed to query broker: {broker_response.get('msg1')}"
+                )
+                return report
+            broker_positions = broker_response.get("output1", [])
 
-        broker_positions = broker_response.get("output1", [])
         broker_symbols = {p["pdno"] for p in broker_positions}
         local_symbols = set(local_state.positions.keys())
 
@@ -131,6 +143,7 @@ def startup_reconciliation(
         _recover_pending_orders(
             pending_orders=getattr(local_state, "pending_orders", {}),
             broker_positions=broker_positions,
+            open_orders=open_orders,
             daily_orders_response=daily_orders_response,
             report=report,
         )
@@ -221,6 +234,7 @@ def _recover_pending_orders(
     *,
     pending_orders: dict[str, Any],
     broker_positions: list[dict[str, Any]],
+    open_orders: list[dict[str, Any]] | None = None,
     daily_orders_response: dict[str, Any] | None,
     report: RecoveryReport,
 ) -> None:
@@ -228,6 +242,8 @@ def _recover_pending_orders(
     daily_orders = daily_orders_response.get("output1", []) if isinstance(daily_orders_response, dict) else []
     if not isinstance(daily_orders, list):
         daily_orders = []
+    if open_orders is None:
+        open_orders = []
 
     for order_id, raw_order in list(pending_orders.items()):
         order = raw_order if isinstance(raw_order, Order) else None
@@ -241,6 +257,7 @@ def _recover_pending_orders(
         broker_position = broker_lookup.get(order.symbol)
         broker_qty = _get_broker_qty(broker_positions, order.symbol)
         daily_order, daily_reason = _find_daily_order(daily_orders, order)
+        open_order = _find_open_order(open_orders, order)
 
         if order.side == "buy" and daily_order is not None:
             daily_filled_qty = _extract_daily_filled_qty(daily_order)
@@ -265,11 +282,12 @@ def _recover_pending_orders(
                     or daily_order.get("avg_price")
                 )
                 order.filled_at = datetime.now(timezone.utc)
-                if recovery_decision.status == "filled":
+                if recovery_decision.status == "filled" and open_order is None:
                     order.unresolved_reason = None
                     continue
+                order.status = OrderStatus.PARTIAL_FILL
                 order.last_reconciled_at = datetime.now(timezone.utc)
-                order.unresolved_reason = "buy_not_filled_yet"
+                order.unresolved_reason = _open_order_reason(open_order) or "buy_not_filled_yet"
                 report.pending_orders.append(order_id)
                 continue
 
@@ -290,14 +308,14 @@ def _recover_pending_orders(
                 )
                 order.resolution_source = "balance"
                 order.filled_at = datetime.now(timezone.utc)
-                if order.filled_quantity >= order.quantity:
+                if order.filled_quantity >= order.quantity and open_order is None:
                     order.status = OrderStatus.FILLED
                     order.unresolved_reason = None
                     continue
                 order.status = OrderStatus.PARTIAL_FILL
 
             order.last_reconciled_at = datetime.now(timezone.utc)
-            order.unresolved_reason = (
+            order.unresolved_reason = _open_order_reason(open_order) or (
                 fill_decision.unresolved_reason or "pending_order_recovery_unresolved"
             )
             report.pending_orders.append(order_id)
@@ -325,17 +343,73 @@ def _recover_pending_orders(
                     order.resolution_source = "daily_order"
                     order.filled_quantity = recovery_decision.target_filled_quantity
                     order.filled_at = datetime.now(timezone.utc)
-                    if recovery_decision.status == "filled":
+                    if recovery_decision.status == "filled" and open_order is None:
                         order.unresolved_reason = None
                         continue
+                    order.status = OrderStatus.PARTIAL_FILL
                     order.last_reconciled_at = datetime.now(timezone.utc)
-                    order.unresolved_reason = "sell_not_filled_yet"
+                    order.unresolved_reason = _open_order_reason(open_order) or "sell_not_filled_yet"
                     report.pending_orders.append(order_id)
                     continue
+
+        if open_order is not None:
+            order.last_reconciled_at = datetime.now(timezone.utc)
+            order.status = OrderStatus.PARTIAL_FILL if order.filled_quantity > 0 else OrderStatus.SUBMITTED
+            order.unresolved_reason = _open_order_reason(open_order)
+            report.pending_orders.append(order_id)
+            continue
 
         order.last_reconciled_at = datetime.now(timezone.utc)
         order.unresolved_reason = daily_reason or "pending_order_recovery_unresolved"
         report.pending_orders.append(order_id)
+
+
+def _normalize_open_order_side(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"buy", "b", "2", "02"}:
+        return "buy"
+    if normalized in {"sell", "s", "1", "01"}:
+        return "sell"
+    return None
+
+
+def _find_open_order(
+    open_orders: list[dict[str, Any]],
+    order: Order,
+) -> dict[str, Any] | None:
+    for item in open_orders:
+        if not isinstance(item, dict):
+            continue
+        broker_order_id = item.get("broker_order_id")
+        if order.broker_order_id and broker_order_id not in (None, ""):
+            if str(broker_order_id) == order.broker_order_id:
+                return item
+
+    candidates: list[dict[str, Any]] = []
+    for item in open_orders:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("symbol") or "").strip().upper() != order.symbol:
+            continue
+        if _normalize_open_order_side(item.get("side")) != order.side:
+            continue
+        candidates.append(item)
+
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _open_order_reason(item: dict[str, Any] | None) -> str | None:
+    if item is None:
+        return None
+    status = str(item.get("status") or "").strip()
+    remaining = item.get("remaining_quantity")
+    if status:
+        return f"open_order:{status}"
+    if remaining not in (None, ""):
+        return f"open_order_remaining:{remaining}"
+    return "open_order_active"
 
 
 def _find_daily_order(

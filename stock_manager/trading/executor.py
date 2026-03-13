@@ -144,6 +144,7 @@ class OrderExecutor:
                 path=request_config["url_path"],
                 json_data=request_config["params"],
                 headers={"tr_id": request_config["tr_id"]},
+                retry_enabled=False,
             )
 
             # Parse response
