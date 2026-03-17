@@ -294,6 +294,7 @@ class KISRestClient:
         json_data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         require_auth: bool = True,
+        retry_enabled: bool | None = None,
     ) -> dict[str, Any]:
         """Make an authenticated API request to KIS API.
 
@@ -323,7 +324,11 @@ class KISRestClient:
         """
         self._validate_request_path(path)
 
-        max_attempts = max(1, self.config.request_max_attempts) if self.config.request_retry_enabled else 1
+        effective_retry_enabled = self.config.request_retry_enabled
+        if retry_enabled is not None:
+            effective_retry_enabled = retry_enabled
+
+        max_attempts = max(1, self.config.request_max_attempts) if effective_retry_enabled else 1
         reauth_attempted = False
 
         for attempt in range(1, max_attempts + 1):

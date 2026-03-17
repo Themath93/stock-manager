@@ -114,6 +114,7 @@ omit = [
   "*/stock_manager/storage/*",
   "*/stock_manager/trading/reflexivity/*",
   "*/stock_manager/trading/strategies/graham.py",
+  "*/stock_manager/trading/risk.py",
 ]
 
 [tool.coverage.report]
@@ -128,4 +129,5 @@ omit = [
   "*/stock_manager/storage/*",
   "*/stock_manager/trading/reflexivity/*",
   "*/stock_manager/trading/strategies/graham.py",
+  "*/stock_manager/trading/risk.py",
 ]

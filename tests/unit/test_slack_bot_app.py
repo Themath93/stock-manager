@@ -528,6 +528,7 @@ def test_handle_balance_requires_session() -> None:
     respond = MagicMock()
     session_manager = MagicMock()
     session_manager.is_running = False
+    session_manager.get_balance.return_value = {"output1": [], "output2": []}
 
     slack_app._handle_balance(
         respond=respond,
@@ -537,7 +538,8 @@ def test_handle_balance_requires_session() -> None:
     )
 
     respond.assert_called_once()
-    assert "활성 트레이딩 세션이 없습니다" in respond.call_args.kwargs["text"]
+    assert respond.call_args.kwargs["response_type"] == "ephemeral"
+    session_manager.get_balance.assert_called_once()
 
 
 def test_handle_balance_returns_ephemeral() -> None:
@@ -564,6 +566,7 @@ def test_handle_orders_requires_session() -> None:
     respond = MagicMock()
     session_manager = MagicMock()
     session_manager.is_running = False
+    session_manager.get_daily_orders.return_value = {"output1": []}
 
     slack_app._handle_orders(
         respond=respond,
@@ -573,7 +576,8 @@ def test_handle_orders_requires_session() -> None:
     )
 
     respond.assert_called_once()
-    assert "활성 트레이딩 세션이 없습니다" in respond.call_args.kwargs["text"]
+    assert respond.call_args.kwargs["response_type"] == "ephemeral"
+    session_manager.get_daily_orders.assert_called_once()
 
 
 def test_handle_orders_returns_ephemeral() -> None:

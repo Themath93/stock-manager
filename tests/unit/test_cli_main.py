@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from typing import Any
-import json
 
 import pytest
 from typer.testing import CliRunner
@@ -174,6 +173,11 @@ def test_trade_execute_blocks_live_without_promotion_gate_even_with_confirm_live
         account_product_code="01",
     )
     monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        trading_commands,
+        "_validate_promotion_gate",
+        lambda *_args, **_kwargs: (False, "operator action required"),
+    )
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
@@ -205,10 +209,11 @@ def test_trade_execute_live_with_valid_promotion_gate(monkeypatch, tmp_path) -> 
         account_product_code="01",
     )
     monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
-
-    gate_path = tmp_path / ".sisyphus" / "evidence" / "mock-promotion-gate.json"
-    gate_path.parent.mkdir(parents=True, exist_ok=True)
-    gate_path.write_text(json.dumps({"mode": "mock", "pass": True}), encoding="utf-8")
+    monkeypatch.setattr(
+        trading_commands,
+        "_validate_promotion_gate",
+        lambda *_args, **_kwargs: (True, ""),
+    )
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
@@ -669,6 +674,11 @@ def test_run_blocks_live_without_promotion_gate(monkeypatch, tmp_path) -> None:
         account_product_code="01",
     )
     monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        trading_commands,
+        "_validate_promotion_gate",
+        lambda *_args, **_kwargs: (False, "operator action required"),
+    )
     monkeypatch.chdir(tmp_path)
 
     class ForbiddenEngine:
@@ -692,10 +702,11 @@ def test_run_live_with_valid_promotion_gate(monkeypatch, tmp_path) -> None:
         account_product_code="01",
     )
     monkeypatch.setattr(trading_commands, "_build_runtime_context", lambda: runtime)
-
-    gate_path = tmp_path / ".sisyphus" / "evidence" / "mock-promotion-gate.json"
-    gate_path.parent.mkdir(parents=True, exist_ok=True)
-    gate_path.write_text(json.dumps({"mode": "mock", "pass": True}), encoding="utf-8")
+    monkeypatch.setattr(
+        trading_commands,
+        "_validate_promotion_gate",
+        lambda *_args, **_kwargs: (True, ""),
+    )
     monkeypatch.chdir(tmp_path)
 
     started = {"value": False}
