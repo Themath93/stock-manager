@@ -70,6 +70,9 @@ _FINANCE_REQUIRED_PARAMS = ("fid_input_iscd",)
 _FINANCE_DEFAULT_PARAMS: dict[str, Any] = {
     # Source: KIS OpenAPI finance endpoint requirement (domestic stock market code).
     "fid_cond_mrkt_div_code": "J",
+    # 0=연결(consolidated), 1=별도(separate). Required by all finance APIs;
+    # omitting it triggers OPSQ2001. Default to consolidated.
+    "fid_div_cls_code": "0",
 }
 
 
