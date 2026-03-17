@@ -452,6 +452,10 @@ def inquire_balance(
         tr_id = "VTTC8434R" if is_paper_trading else "TTTC8434R"
 
     query_params = get_default_inquire_balance_params()
+    # VTTC8434R (paper trading) only accepts INQR_DVSN="02" (종목별).
+    # "01" (대출일별) is real-trading only and triggers APBK1227.
+    if is_paper_trading and "INQR_DVSN" not in kwargs:
+        query_params["INQR_DVSN"] = "02"
     query_params.update(kwargs)
 
     params = {
