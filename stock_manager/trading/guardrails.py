@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -38,19 +37,6 @@ _DEGRADED_REDUCE_ONLY_REASONS = {
 class AutoExitOrderDecision:
     order_type: Literal["market", "limit"]
     price: int | None
-
-
-@dataclass(frozen=True)
-class BrokerTruthSnapshot:
-    cash: dict[str, Any]
-    positions: tuple[dict[str, Any], ...]
-    open_orders: tuple[dict[str, Any], ...]
-    fetched_at: datetime
-    snapshot_ok: bool
-
-    @property
-    def open_order_count(self) -> int:
-        return len(self.open_orders)
 
 
 @dataclass(frozen=True)

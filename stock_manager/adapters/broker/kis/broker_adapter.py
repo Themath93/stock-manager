@@ -24,7 +24,7 @@ from stock_manager.adapters.broker.kis.websocket_client import (
     get_default_execution_notice_tr_id,
     get_kis_websocket_url,
 )
-from stock_manager.trading.guardrails import BrokerTruthSnapshot
+from stock_manager.types import BrokerTruthSnapshot
 
 _ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8}$")
 _ACCOUNT_PRODUCT_CODE_PATTERN = re.compile(r"^\d{2}$")

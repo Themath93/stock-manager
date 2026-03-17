@@ -31,8 +31,8 @@ from stock_manager.trading import (
     RiskLimits,
     RateLimiter,
 )
+from stock_manager.types import BrokerTruthSnapshot
 from stock_manager.trading.guardrails import (
-    BrokerTruthSnapshot,
     EngineOperabilityDecision,
     OperationalState,
     RuntimeFaultDecision,
