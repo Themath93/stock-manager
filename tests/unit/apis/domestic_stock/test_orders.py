@@ -344,7 +344,7 @@ class TestInquireBalance:
         )
         assert result["tr_id"] == "TTTC8434R"
         assert result["params"]["AFHR_FLPR_YN"] == "N"
-        assert result["params"]["INQR_DVSN"] == "01"
+        assert result["params"]["INQR_DVSN"] == "02"
         assert result["params"]["UNPR_DVSN"] == "01"
 
     def test_inquire_balance_paper_trading(self):

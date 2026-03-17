@@ -2386,7 +2386,7 @@ class TestInternalHelpers:
         assert "tr_id" in call_args.kwargs["headers"]
         params = call_args.kwargs["params"]
         assert params["AFHR_FLPR_YN"] == "N"
-        assert params["INQR_DVSN"] == "01"
+        assert params["INQR_DVSN"] == "02"
         assert params["UNPR_DVSN"] == "01"
         assert params["FUND_STTL_ICLD_YN"] == "N"
         assert params["FNCG_AMT_AUTO_RDPT_YN"] == "N"

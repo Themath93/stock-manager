@@ -283,7 +283,7 @@ def test_smoke_runs_auth_price_balance_only(monkeypatch) -> None:
         assert acnt_prdt_cd == "01"
         assert is_paper_trading is True
         assert kwargs["AFHR_FLPR_YN"] == "N"
-        assert kwargs["INQR_DVSN"] == "01"
+        assert kwargs["INQR_DVSN"] == "02"
         assert kwargs["UNPR_DVSN"] == "01"
         assert kwargs["FUND_STTL_ICLD_YN"] == "N"
         assert kwargs["FNCG_AMT_AUTO_RDPT_YN"] == "N"
