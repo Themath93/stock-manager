@@ -306,3 +306,9 @@ class TestRateLimiter:
 
         # Available should still be 0 (not negative)
         assert limiter.available == 0
+
+    def test_acquire_with_zero_max_requests(self):
+        """acquire() with zero max_requests hits the empty-window fallback."""
+        limiter = RateLimiter(max_requests=0, window_seconds=1.0)
+        result = limiter.acquire(timeout=0.05)
+        assert result is False
