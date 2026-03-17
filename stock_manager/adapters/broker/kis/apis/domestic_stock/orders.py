@@ -348,10 +348,21 @@ def inquire_psbl_rvsecncl(
     if tr_id is None:
         tr_id = "TTTC0084R"
 
+    # INQR_DVSN_1/2 are required by TTTC0084R; omitting them triggers APBK1227.
+    defaults: Dict[str, str] = {
+        "INQR_DVSN_1": "0",   # 전체 (매도+매수)
+        "INQR_DVSN_2": "0",   # 일반주문
+        "CTX_AREA_FK100": "",
+        "CTX_AREA_NK100": "",
+        "UNPR_DVSN": "01",
+        "ORD_STSC": "",
+    }
+    defaults.update(kwargs)
+
     params = {
         "CANO": cano,
         "ACNT_PRDT_CD": acnt_prdt_cd,
-        **kwargs,
+        **defaults,
     }
 
     return {
