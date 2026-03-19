@@ -304,7 +304,10 @@ class TestSessionManagerWithMockEngine:
             if manager._thread:
                 manager._thread.join(timeout=3.0)
 
-    def test_run_engine_selective_llm_replaces_single_dalio_persona(self):
+    def test_run_engine_selective_llm_wraps_all_personas(self):
+        from stock_manager.trading.personas.hybrid import HybridPersonaWrapper
+        from stock_manager.trading.personas.graham_persona import GrahamPersona
+
         manager = SessionManager()
         params = SessionParams(
             is_mock=True,
@@ -315,19 +318,13 @@ class TestSessionManagerWithMockEngine:
         mock_runtime = _make_mock_runtime(use_mock=True)
         mock_engine = MagicMock()
         mock_engine.is_healthy.return_value = True
-        dalio_hybrid = object()
         consensus_strategy = ConsensusStrategy(
-            evaluator=SimpleNamespace(personas=[DalioPersona()])
+            evaluator=SimpleNamespace(personas=[DalioPersona(), GrahamPersona()])
         )
 
         with patch(_PATCH_BUILD_RUNTIME, return_value=mock_runtime), \
              patch(_PATCH_PROMOTION_GATE), \
              patch(_PATCH_RESOLVE_STRATEGY, return_value=(consensus_strategy, ())), \
-             patch.object(
-                 SessionManager,
-                 "_build_dalio_hybrid_persona",
-                 return_value=dalio_hybrid,
-             ) as mock_build_hybrid, \
              patch(_PATCH_TRADING_ENGINE, return_value=mock_engine) as mock_trading_engine, \
              patch(_PATCH_SLACK_NOTIFIER):
 
@@ -336,9 +333,9 @@ class TestSessionManagerWithMockEngine:
                 f"Expected RUNNING, got {manager.state}"
             )
 
-            mock_build_hybrid.assert_called_once()
             configured_strategy = mock_trading_engine.call_args.kwargs["config"].strategy
-            assert configured_strategy.evaluator.personas[0] is dalio_hybrid
+            for persona in configured_strategy.evaluator.personas:
+                assert isinstance(persona, HybridPersonaWrapper)
 
             manager.stop_session()
             if manager._thread:

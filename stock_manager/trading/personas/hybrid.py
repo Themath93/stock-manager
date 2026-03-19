@@ -295,3 +295,31 @@ class HybridPersona(InvestorPersona):
             criteria_met=rule_vote.criteria_met,
             category=self.category,
         )
+
+
+class HybridPersonaWrapper(HybridPersona):
+    """Generic wrapper that upgrades any InvestorPersona with LLM augmentation."""
+
+    def __init__(
+        self,
+        *,
+        base_persona: InvestorPersona,
+        circuit_breaker: CircuitBreaker,
+        llm_config: LLMConfig | None = None,
+        invocation_counter: InvocationCounter | None = None,
+        pipeline_logger: "PipelineJsonLogger | None" = None,
+    ) -> None:
+        super().__init__(circuit_breaker, llm_config, invocation_counter, pipeline_logger)
+        self._base = base_persona
+        self.name = base_persona.name
+        self.category = base_persona.category
+
+    @property
+    def llm_trigger_rate(self) -> float:
+        return self._base.llm_trigger_rate
+
+    def should_trigger_llm(self, vote: PersonaVote) -> bool:
+        return self._base.should_trigger_llm(vote)
+
+    def screen_rule(self, snapshot: MarketSnapshot) -> PersonaVote:
+        return self._base.screen_rule(snapshot)
