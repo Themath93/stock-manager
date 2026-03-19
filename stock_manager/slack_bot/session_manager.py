@@ -189,27 +189,44 @@ class SessionManager:
         )
 
     @staticmethod
+    def _build_hybrid_shared_resources():
+        """Build shared LLM resources (config, circuit breaker, counter) from env."""
+        from stock_manager.trading.llm.circuit_breaker import CircuitBreaker
+        from stock_manager.trading.llm.config import InvocationCounter, LLMConfig
+
+        llm_config = LLMConfig.from_env()
+        circuit_breaker = CircuitBreaker(
+            failure_threshold=llm_config.cb_failure_threshold,
+            cooldown_sec=llm_config.cb_cooldown_sec,
+            sliding_window_sec=llm_config.cb_sliding_window_sec,
+        )
+        return llm_config, circuit_breaker, InvocationCounter()
+
+    @staticmethod
     def _apply_selective_llm_overlay(strategy: Any) -> Any:
-        """Enable hybrid LLM only for Dalio persona in consensus strategy."""
+        """Enable hybrid LLM for all personas in consensus strategy."""
         from stock_manager.trading.strategies.consensus import ConsensusStrategy
+        from stock_manager.trading.personas.hybrid import HybridPersonaWrapper
 
         if not isinstance(strategy, ConsensusStrategy):
             raise ValueError("--llm-mode selective requires --strategy consensus.")
 
+        llm_config, circuit_breaker, invocation_counter = (
+            SessionManager._build_hybrid_shared_resources()
+        )
+
         personas = strategy.evaluator.personas
-        dalio_indexes = [
-            idx for idx, persona in enumerate(personas) if getattr(persona, "name", "") == "Dalio"
-        ]
-        if len(dalio_indexes) != 1:
-            raise RuntimeError(
-                "Selective LLM overlay requires exactly one Dalio persona "
-                f"(found {len(dalio_indexes)})."
+        for idx, persona in enumerate(personas):
+            personas[idx] = HybridPersonaWrapper(
+                base_persona=persona,
+                circuit_breaker=circuit_breaker,
+                llm_config=llm_config,
+                invocation_counter=invocation_counter,
             )
 
-        dalio_idx = dalio_indexes[0]
-        personas[dalio_idx] = SessionManager._build_dalio_hybrid_persona(personas[dalio_idx])
         logger.info(
-            "Applied strategy overlay: llm_mode=selective, dalio_hybrid_enabled=true"
+            "Applied strategy overlay: llm_mode=selective, hybrid_enabled_count=%d",
+            len(personas),
         )
         return strategy
 
