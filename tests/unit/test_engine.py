@@ -915,7 +915,7 @@ class TestStrategyOrchestration:
                     {"mksc_shrn_iscd": "000660"},
                 ],
             },
-        ):
+        ), patch.object(engine, "_is_market_open", return_value=True):
             engine.start()
 
         assert strategy.screened_symbols == ["005930", "000660"]

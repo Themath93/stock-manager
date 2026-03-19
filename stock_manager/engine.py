@@ -3534,6 +3534,10 @@ class TradingEngine:
         if self._running and not self._buying_enabled:
             return
 
+        if self._running and self._should_enforce_market_hours() and not self._is_market_open():
+            logger.debug("Strategy cycle skipped: outside market hours (real-trading mode)")
+            return
+
         symbols = self._normalize_symbol_entries(getattr(self.config, "strategy_symbols", ()))
         auto_discover = bool(getattr(self.config, "strategy_auto_discover", False))
         notify_discovery = False
