@@ -168,7 +168,10 @@ class GrahamScreener(Strategy):
                 return None
 
             price_output = price_resp.get("output", {})
-            ratio_output = ratio_resp.get("output", {})
+            # Finance APIs return output as a list (one entry per period).
+            # Take the first (most recent) entry; fall back to empty dict.
+            _ratio_raw = ratio_resp.get("output", {})
+            ratio_output = _ratio_raw[0] if isinstance(_ratio_raw, list) else _ratio_raw
 
             # Extract values
             market_cap = Decimal(str(price_output.get("hts_avls", "0")))
