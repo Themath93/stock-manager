@@ -17,13 +17,13 @@
       ]
     },
     "kis-code-assistant-mcp": {
-      "command": "npx",
+      "command": "/Users/byungwoyoon/.local/bin/uv",
       "args": [
-        "-y",
-        "mcp-remote@latest",
-        "https://server.smithery.ai/@KISOpenAPI/kis-code-assistant-mcp/mcp",
-        "--transport",
-        "http-first"
+        "--directory",
+        "/Users/byungwoyoon/open-trading-api/MCP/KIS Code Assistant MCP",
+        "run",
+        "server.py",
+        "--stdio"
       ]
     }
   },

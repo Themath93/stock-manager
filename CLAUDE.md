@@ -36,6 +36,11 @@
 - Coverage is enforced (`--cov-fail-under=85`) and HTML reports are generated in `htmlcov/`.
 - Use markers (`integration`, `unit`, `slow`, `red/green/refactor`) consistently.
 
+## Git Workflow
+- 변경사항 push 전에 반드시 `pytest --cov --cov-fail-under=85 -q`를 실행하여 커버리지 85% 이상 확인 후 push할 것. CI에서 커버리지 실패가 발견되면, 즉시 로컬에서 커버리지 갭을 수정하고 모든 CI 게이트(lint, test, coverage)를 한 번에 통과시킬 것.
+- merge 시 branch protection이 블로킹하면 `--admin` 플래그로 우회. 사용자에게 묻지 말고 바로 적용할 것.
+- ship 워크플로우: test+coverage 통과 → commit(conventional) → push → PR 생성 → merge. 이 전체 플로우를 `/ship` 스킬로 일괄 실행 가능.
+
 ## Commit & Pull Request Guidelines
 - Follow existing commit style: `feat:`, `fix:`, `docs:`, `chore:` (optionally scoped, e.g. `docs(sync): ...`).
 - Avoid vague subjects (for example `commit`); state intent and affected area.
@@ -50,3 +55,10 @@
 - Prefer paper trading (`KIS_USE_MOCK=true`) during development.
 - Engine-managed market-hours policy by mode is documented in [docs/runtime-trading-guardrails.md](docs/runtime-trading-guardrails.md).
 - Treat local token/cache/runtime files as local state, not source-controlled assets.
+
+## CI/CD Policy
+- CI 실패 시 1차 오류만 보지 말고, 커버리지 게이트(`--cov-fail-under=85`)도 함께 확인한다.
+- push 전에 반드시 로컬에서 테스트와 커버리지를 통과시킨다:
+  `uv run pytest tests/unit tests/fixtures --cov=stock_manager --cov-fail-under=85 -q`
+- ruff check도 push 전 통과 필수: `uv run ruff check`
+- 코드 변경 시 관련 테스트를 추가하거나 갱신한다 (새 기능 → 테스트 추가, 버그 수정 → 재현 테스트).
