@@ -125,10 +125,12 @@ class TechnicalDataFetcher:
         self,
         client: Any,
         *,
+        real_client: Any | None = None,
         rate_limiter: RateLimiter | None = None,
         rate_limit_per_sec: int = _DEFAULT_FETCHER_RATE_LIMIT_PER_SEC,
     ) -> None:
         self.client = client
+        self._real_client = real_client
         self._rate_limiter = rate_limiter or RateLimiter(max_requests=max(1, rate_limit_per_sec))
         self._mock_skip_log_once: set[str] = set()
 
@@ -153,6 +155,15 @@ class TechnicalDataFetcher:
         **kwargs: Any,
     ) -> dict[str, Any]:
         if skip_in_mock and self._is_mock_mode():
+            if self._real_client is not None:
+                self._rate_limiter.acquire()
+                try:
+                    return fn(self._real_client, *args, **kwargs)
+                except Exception:
+                    logger.warning(
+                        "Real-server fallback for %s failed; returning empty data", api_name
+                    )
+                    return {}
             if api_name not in self._mock_skip_log_once:
                 logger.info("Skipping real-only API %s in mock mode", api_name)
                 self._mock_skip_log_once.add(api_name)

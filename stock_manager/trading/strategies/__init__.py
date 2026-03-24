@@ -56,10 +56,18 @@ def _build_consensus_strategy(client: Any) -> ConsensusStrategy:
         LivermorePersona(),
         SimonsPersona(),
     ]
+    from stock_manager.adapters.broker.kis.client import build_real_data_client
+    from stock_manager.adapters.broker.kis.config import KISConfig
+
+    _kis_config = getattr(client, "config", None)
+    _real_client = None
+    if isinstance(_kis_config, KISConfig) and _kis_config.use_mock:
+        _real_client = build_real_data_client(_kis_config)
+
     evaluator = ConsensusEvaluator(
         personas=personas,
         advisory=WoodAdvisory(),
-        fetcher=TechnicalDataFetcher(client),
+        fetcher=TechnicalDataFetcher(client, real_client=_real_client),
         aggregator=VoteAggregator(),
     )
     return ConsensusStrategy(evaluator=evaluator)

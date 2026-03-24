@@ -668,3 +668,34 @@ class KISRestClient:
             Current KISAccessToken or None if not authenticated
         """
         return self.state.access_token
+
+
+def build_real_data_client(config: "KISConfig") -> "KISRestClient | None":
+    """Create a real-server client for financial data APIs in mock mode.
+
+    VTS (mock) server does not support financial data APIs. This function
+    builds a separate KISRestClient targeting the real server with real-account
+    credentials for read-only financial data queries.
+
+    Returns None silently if real credentials (KIS_APP_KEY/SECRET) are absent.
+    """
+    if not config.has_real_credentials:
+        return None
+
+    from pydantic import SecretStr
+
+    real_config = KISConfig(
+        use_mock=False,
+        app_key=SecretStr(config._real_app_key_raw),
+        app_secret=SecretStr(config._real_app_secret_raw),
+        account_number=None,
+        mock_app_key=None,
+        mock_secret=None,
+        mock_account_number=None,
+        token_cache_enabled=config.token_cache_enabled,
+        request_rate_limit_per_sec=config.request_rate_limit_per_sec,
+        request_retry_enabled=config.request_retry_enabled,
+        request_max_attempts=config.request_max_attempts,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    return KISRestClient(config=real_config, timeout=30.0)

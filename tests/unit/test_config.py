@@ -219,6 +219,30 @@ class TestKISConfig:
 
             assert config is not None
 
+    def test_has_real_credentials_true_when_app_key_and_secret_set(
+        self, mock_env_vars: dict
+    ) -> None:
+        with patch.dict(os.environ, mock_env_vars, clear=True):
+            config = KISConfig(_env_file=None)
+        assert config.has_real_credentials is True
+
+    def test_has_real_credentials_false_when_key_missing(self, mock_env_vars: dict) -> None:
+        env = mock_env_vars.copy()
+        env["KIS_APP_KEY"] = ""
+        env["KIS_APP_SECRET"] = ""
+        with patch.dict(os.environ, env, clear=True):
+            config = KISConfig(_env_file=None)
+        assert config.has_real_credentials is False
+
+    def test_real_app_key_raw_preserved_after_mock_overwrite(self, mock_env_vars: dict) -> None:
+        """_real_app_key_raw retains the raw real key even after app_key is overwritten in mock mode."""
+        with patch.dict(os.environ, mock_env_vars, clear=True):
+            config = KISConfig(_env_file=None)
+        # In mock mode, app_key is overwritten with mock key
+        assert config.app_key.get_secret_value() == "test_mock_app_key_12345"
+        # But _real_app_key_raw still holds the original real key
+        assert config._real_app_key_raw == "test_app_key_12345"
+
 
 class TestKISAccessToken:
     """Tests for KISAccessToken."""
