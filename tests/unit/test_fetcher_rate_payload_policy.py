@@ -80,3 +80,50 @@ class TestTechnicalDataFetcherGuardrails:
 
         assert result == {}
         assert "Rate limit exceeded while calling get_stability_ratio" in caplog.text
+
+
+class TestMockModeRealClientFallback:
+    def test_mock_with_real_client_uses_real_client(self) -> None:
+        """mock 모드 + real_client → real_client로 API 함수 호출."""
+        mock_client = _build_client(use_mock=True)
+        real_client = MagicMock()
+        fetcher = TechnicalDataFetcher(client=mock_client, real_client=real_client)
+
+        with patch("stock_manager.trading.indicators.fetcher.get_growth_ratio") as mock_fn:
+            mock_fn.return_value = {"rt_cd": "0", "output": {}}
+            fetcher._fetch_growth_ratio("000660")
+
+        assert mock_fn.call_args[0][0] is real_client
+
+    def test_mock_without_real_client_returns_empty(self) -> None:
+        """mock 모드 + real_client 없음 → {} (기존 동작)."""
+        fetcher = TechnicalDataFetcher(client=_build_client(use_mock=True))
+
+        with patch("stock_manager.trading.indicators.fetcher.get_growth_ratio") as mock_fn:
+            result = fetcher._fetch_growth_ratio("000660")
+
+        assert result == {}
+        mock_fn.assert_not_called()
+
+    def test_mock_real_client_exception_returns_empty(self) -> None:
+        """real_client 예외 → {} 반환."""
+        real_client = MagicMock()
+        fetcher = TechnicalDataFetcher(client=_build_client(use_mock=True), real_client=real_client)
+
+        with patch("stock_manager.trading.indicators.fetcher.get_growth_ratio") as mock_fn:
+            mock_fn.side_effect = Exception("connection error")
+            result = fetcher._fetch_growth_ratio("000660")
+
+        assert result == {}
+
+    def test_real_mode_ignores_real_client(self) -> None:
+        """실서버 모드에서는 real_client 무시, 기본 client 사용."""
+        main_client = _build_client(use_mock=False)
+        real_client = MagicMock()
+        fetcher = TechnicalDataFetcher(client=main_client, real_client=real_client)
+
+        with patch("stock_manager.trading.indicators.fetcher.get_growth_ratio") as mock_fn:
+            mock_fn.return_value = {"rt_cd": "0", "output": {}}
+            fetcher._fetch_growth_ratio("000660")
+
+        assert mock_fn.call_args[0][0] is main_client

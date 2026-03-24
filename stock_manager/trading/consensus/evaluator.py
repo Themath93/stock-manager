@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
 
 from stock_manager.trading.consensus.aggregator import VoteAggregator
-from stock_manager.trading.indicators.fetcher import TechnicalDataFetcher
 from stock_manager.trading.personas.base import InvestorPersona
+
+if TYPE_CHECKING:
+    from stock_manager.trading.indicators.fetcher import TechnicalDataFetcher
 from stock_manager.trading.personas.models import (
     AdvisoryVote,
     ConsensusResult,

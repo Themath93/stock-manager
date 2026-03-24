@@ -14,8 +14,8 @@ from unittest.mock import patch
 import pytest
 import httpx
 
-from stock_manager.adapters.broker.kis.client import KISRestClient
-from stock_manager.adapters.broker.kis.config import KISAccessToken, KISConfig
+from stock_manager.adapters.broker.kis.client import KISRestClient, build_real_data_client
+from stock_manager.adapters.broker.kis.config import KISAccessToken, KISConfig, KIS_API_BASE_URL_REAL
 from stock_manager.adapters.broker.kis.exceptions import (
     KISAPIError,
     KISAuthenticationError,
@@ -76,6 +76,31 @@ class TestKISRestClientInit:
         assert headers["Content-Type"] == "application/json; charset=utf-8"
         assert headers["Accept"] == "application/json"
         assert "User-Agent" in headers
+
+
+class TestBuildRealDataClient:
+    """Tests for build_real_data_client factory function."""
+
+    def test_returns_none_when_no_real_credentials(self, mock_env_vars: dict) -> None:
+        env = mock_env_vars.copy()
+        env["KIS_APP_KEY"] = ""
+        env["KIS_APP_SECRET"] = ""
+        with patch.dict(os.environ, env, clear=True):
+            config = KISConfig(_env_file=None)
+
+        result = build_real_data_client(config)
+        assert result is None
+
+    def test_returns_client_with_real_url_when_credentials_present(
+        self, mock_env_vars: dict
+    ) -> None:
+        with patch.dict(os.environ, mock_env_vars, clear=True):
+            config = KISConfig(_env_file=None)
+
+        result = build_real_data_client(config)
+        assert result is not None
+        assert isinstance(result, KISRestClient)
+        assert result.config.api_base_url == KIS_API_BASE_URL_REAL
 
 
 class TestKISRestClientAuthenticate:

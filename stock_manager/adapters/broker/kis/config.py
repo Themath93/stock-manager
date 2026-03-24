@@ -88,6 +88,8 @@ class KISConfig(BaseSettings):
     _credential_source: Literal["real", "mock", "real_fallback"] = PrivateAttr(default="real")
     _account_source: Literal["real", "mock", "real_fallback", "none"] = PrivateAttr(default="none")
     _fallback_warnings: list[str] = PrivateAttr(default_factory=list)
+    _real_app_key_raw: str = PrivateAttr(default="")
+    _real_app_secret_raw: str = PrivateAttr(default="")
 
     def get_token_cache_path(self) -> Path:
         """Return the access token cache file path.
@@ -177,6 +179,11 @@ class KISConfig(BaseSettings):
             return None
         return f"{self.account_number}-{self.account_product_code}"
 
+    @property
+    def has_real_credentials(self) -> bool:
+        """True if real-account credentials (KIS_APP_KEY/SECRET) are configured."""
+        return bool(self._real_app_key_raw and self._real_app_secret_raw)
+
     def model_post_init(self, __context: object) -> None:
         """Validate configuration after initialization.
 
@@ -189,6 +196,9 @@ class KISConfig(BaseSettings):
         mock_secret = self._secret_value(self.mock_secret)
         real_account = self._normalized_or_none(self.account_number)
         mock_account = self._normalized_or_none(self.mock_account_number)
+
+        self._real_app_key_raw = real_key
+        self._real_app_secret_raw = real_secret
 
         self._fallback_warnings.clear()
 
